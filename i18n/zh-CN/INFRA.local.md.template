@@ -1,0 +1,95 @@
+# 凭据库（INFRA.md）— 本地模式
+
+> ⚠️ 明文密钥。此文件已被 gitignore。不要提交。
+> 推荐：复制到密码管理器（1Password、Bitwarden）做备份。
+>
+> 🔁 复用：开新项目时直接从这里拷连接串。基础设施无需重装。
+
+生成时间：bootstrap 时
+模式：`local`（仅 Compose 数据服务 —— 无公网域名、无 GitOps）
+
+升级到 `full` 模式（Cloudflare Tunnel + k3s + ArgoCD + Tekton）：
+
+1. 在 `.env` 里把 `OUTPOST_MODE` 改成 `full`
+2. 填 `ROOT_DOMAIN`、`CF_TUNNEL_TOKEN`、`GIT_USER`、`GIT_TOKEN`、`MANIFEST_REPO_URL`
+3. 重新执行 `bash bootstrap.sh`
+
+---
+
+## 0. 快速参考
+
+| 服务          | 本地地址           | 端口  | 用户                | 密码 / Key                 |
+|---------------|--------------------|-------|---------------------|----------------------------|
+| PostgreSQL    | `localhost`        | 5432  | `${POSTGRES_USER}`  | `${POSTGRES_PASSWORD}`     |
+| Redis         | `localhost`        | 6379  | (无)                | `${REDIS_PASSWORD}`        |
+| RabbitMQ AMQP | `localhost`        | 5672  | `${RABBITMQ_USER}`  | `${RABBITMQ_PASSWORD}`     |
+| RabbitMQ UI   | `http://localhost` | 15672 | `${RABBITMQ_USER}`  | `${RABBITMQ_PASSWORD}`     |
+| Meilisearch   | `http://localhost` | 7700  | (Bearer)            | `${MEILI_MASTER_KEY}`      |
+
+---
+
+## 1. PostgreSQL（含 pgvector）
+
+- 地址：`localhost:5432`
+- 用户：`${POSTGRES_USER}`
+- 密码：`${POSTGRES_PASSWORD}`
+- 默认数据库：`${POSTGRES_DB}`
+- 启用扩展：`vector`、`uuid-ossp`、`pg_trgm`
+
+```
+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}
+```
+
+DBeaver / DataGrip 接入参考 `i18n/zh-CN/docs/04-client-access.md`。
+
+## 2. Redis 7
+
+- 地址：`localhost:6379`
+- 密码：`${REDIS_PASSWORD}`
+
+```
+redis://default:${REDIS_PASSWORD}@localhost:6379/0
+```
+
+## 3. RabbitMQ 3.13
+
+- AMQP：`localhost:5672`
+- 管理界面：`http://localhost:15672`
+- 用户：`${RABBITMQ_USER}`
+- 密码：`${RABBITMQ_PASSWORD}`
+
+```
+amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@localhost:5672/
+```
+
+## 4. Meilisearch v1.10
+
+- 地址：`http://localhost:7700`
+- Master key：`${MEILI_MASTER_KEY}`
+- 模式：`${MEILI_ENV}`（需要 Authorization 头）
+
+```bash
+curl -H "Authorization: Bearer ${MEILI_MASTER_KEY}" http://localhost:7700/health
+```
+
+## 5. 主机 / 操作系统
+
+- outpost 目录：`${SK_INFRA_DIR:-~/outpost}`
+
+### 常用命令
+
+```bash
+./status.sh         # 快照
+./verify.sh         # 详细健康检查（AI 用 --json）
+./upgrade.sh        # 拉镜像 + 重启 Compose
+```
+
+---
+
+## 6. 本地模式注意事项
+
+- 服务绑定 `0.0.0.0:<port>`。只想 loopback 的话，编辑
+  `core/compose/docker-compose.yml`，把 `0.0.0.0:<port>` 改成
+  `127.0.0.1:<port>`。
+- 无公网入口。要把服务挂到域名上请切换到 `full` 模式。
+- 无 CI/CD。应用部署到哪儿、怎么部署，由你自己决定，不在这一层管。

@@ -20,7 +20,8 @@
         "pass": {"type": "integer", "minimum": 0},
         "warn": {"type": "integer", "minimum": 0},
         "fail": {"type": "integer", "minimum": 0},
-        "os":   {"type": "string", "enum": ["macos", "linux", "wsl2", "unknown"]}
+        "os":   {"type": "string", "enum": ["macos", "linux", "wsl2", "unknown"]},
+        "mode": {"type": "string", "enum": ["local", "full", "unknown"], "description": "OUTPOST_MODE the stack was bootstrapped under. Optional for backward compatibility with v0.1 consumers."}
       }
     },
     "checks": {

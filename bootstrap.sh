@@ -4,15 +4,28 @@
 # -----------------------------------------------------------------------------
 # Cross-platform one-command installer (macOS / Linux / WSL2).
 #
+# Two modes (set via OUTPOST_MODE in .env):
+#
+#   local : Compose data services only (PG / Redis / RabbitMQ / Meilisearch
+#           on localhost). No CF Tunnel, no k3s, no GitOps. Zero required
+#           input — every value either has a sensible default or gets
+#           auto-generated. Phase 1 → 4 → 9.
+#
+#   full  : Everything in local + Cloudflare Tunnel + k3s + ArgoCD + Tekton
+#           CI/CD. Requires ROOT_DOMAIN, CF_TUNNEL_TOKEN, GIT_USER, GIT_TOKEN
+#           and MANIFEST_REPO_URL. Phase 1 → 9.
+#
 # Phases:
 #   1. Preflight: tools, OS detection, docker daemon
 #   2. Config: prompt or load .env, generate secrets
 #   3. Render: INFRA.md, INFRA.zh-CN.md from .env
-#   4. Compose: bring up data services + cloudflared + caddy
+#   4. Compose: bring up data services (+ cloudflared + caddy in full mode)
+#   ──── full mode only below ────
 #   5. k3s: install via platform/<os>.sh
 #   6. K8s base: namespaces, traefik NodePort, sealed-secrets
 #   7. Plugins: registry plugin + git-provider plugin
 #   8. ArgoCD + Tekton + bridges
+#   ────────────────────────────────
 #   9. Health checks + summary
 # =============================================================================
 set -euo pipefail
@@ -65,7 +78,15 @@ else
   cp .env.example .env
 fi
 
-# Required interactive values (skipped if already in .env)
+# Mode selection (default: local — lowest-friction onboarding).
+OUTPOST_MODE="${OUTPOST_MODE:-local}"
+case "$OUTPOST_MODE" in
+  local|full) ;;
+  *) err "OUTPOST_MODE must be 'local' or 'full' (got '$OUTPOST_MODE')"; exit 1 ;;
+esac
+ok "Mode: $OUTPOST_MODE"
+
+# Required interactive values (skipped if already in .env, skipped entirely in local mode)
 prompt_required() {
   local var="$1" desc="$2" val=""
   while [[ -z "${!var:-}" ]]; do
@@ -76,13 +97,22 @@ prompt_required() {
   export "${var?}"
 }
 
-prompt_required ROOT_DOMAIN     "Root domain (e.g. example.com)"
-prompt_required CF_TUNNEL_TOKEN "Cloudflare Tunnel Token"
-prompt_required GIT_USER        "Git username (Gitee/GitHub/GitLab)"
-prompt_required GIT_TOKEN       "Git personal access token"
-prompt_required MANIFEST_REPO_URL "Manifest repo HTTPS URL (ends with .git)"
+if [[ "$OUTPOST_MODE" == "full" ]]; then
+  prompt_required ROOT_DOMAIN       "Root domain (e.g. example.com)"
+  prompt_required CF_TUNNEL_TOKEN   "Cloudflare Tunnel Token"
+  prompt_required GIT_USER          "Git username (Gitee/GitHub/GitLab)"
+  prompt_required GIT_TOKEN         "Git personal access token"
+  prompt_required MANIFEST_REPO_URL "Manifest repo HTTPS URL (ends with .git)"
+else
+  # Local mode: every value gets a usable default. Zero prompts.
+  ROOT_DOMAIN="${ROOT_DOMAIN:-outpost.local}"
+  CF_TUNNEL_TOKEN="${CF_TUNNEL_TOKEN:-}"
+  GIT_USER="${GIT_USER:-}"
+  GIT_TOKEN="${GIT_TOKEN:-}"
+  MANIFEST_REPO_URL="${MANIFEST_REPO_URL:-}"
+fi
 
-# Defaults
+# Defaults shared by both modes
 REGISTRY_PLUGIN="${REGISTRY_PLUGIN:-self-hosted}"
 GIT_PROVIDER_PLUGIN="${GIT_PROVIDER_PLUGIN:-gitee}"
 MANIFEST_REPO_BRANCH="${MANIFEST_REPO_BRANCH:-main}"
@@ -91,34 +121,36 @@ POSTGRES_DB="${POSTGRES_DB:-postgres}"
 RABBITMQ_USER="${RABBITMQ_USER:-admin}"
 MEILI_ENV="${MEILI_ENV:-production}"
 
-# Auto-generate any blank passwords
+# Auto-generate any blank passwords (both modes)
 [[ -z "${POSTGRES_PASSWORD:-}" ]]    && POSTGRES_PASSWORD=$(gen_password)
 [[ -z "${REDIS_PASSWORD:-}" ]]       && REDIS_PASSWORD=$(gen_password)
 [[ -z "${RABBITMQ_PASSWORD:-}" ]]    && RABBITMQ_PASSWORD=$(gen_password)
 [[ -z "${MEILI_MASTER_KEY:-}" ]]     && MEILI_MASTER_KEY=$(gen_password)
 [[ -z "${GIT_WEBHOOK_SECRET:-}" ]]   && GIT_WEBHOOK_SECRET=$(gen_password)
 
-# Validate plugin selection
-if [[ ! -d "plugins/registry/${REGISTRY_PLUGIN}" ]]; then
-  err "Unknown REGISTRY_PLUGIN: ${REGISTRY_PLUGIN}"
-  err "Available: $(ls plugins/registry)"
-  exit 1
-fi
-if [[ ! -d "plugins/git-provider/${GIT_PROVIDER_PLUGIN}" ]]; then
-  err "Unknown GIT_PROVIDER_PLUGIN: ${GIT_PROVIDER_PLUGIN}"
-  err "Available: $(ls plugins/git-provider)"
-  exit 1
-fi
-ok "Plugins selected: registry=${REGISTRY_PLUGIN}  git-provider=${GIT_PROVIDER_PLUGIN}"
+# Plugin selection only matters in full mode
+if [[ "$OUTPOST_MODE" == "full" ]]; then
+  if [[ ! -d "plugins/registry/${REGISTRY_PLUGIN}" ]]; then
+    err "Unknown REGISTRY_PLUGIN: ${REGISTRY_PLUGIN}"
+    err "Available: $(ls plugins/registry)"
+    exit 1
+  fi
+  if [[ ! -d "plugins/git-provider/${GIT_PROVIDER_PLUGIN}" ]]; then
+    err "Unknown GIT_PROVIDER_PLUGIN: ${GIT_PROVIDER_PLUGIN}"
+    err "Available: $(ls plugins/git-provider)"
+    exit 1
+  fi
+  ok "Plugins selected: registry=${REGISTRY_PLUGIN}  git-provider=${GIT_PROVIDER_PLUGIN}"
 
-# Run plugin preflights with current env
-log "Running plugin preflight checks..."
-( set -a; source .env; set +a; bash "plugins/registry/${REGISTRY_PLUGIN}/preflight.sh" )
-( set -a; source .env; set +a; bash "plugins/git-provider/${GIT_PROVIDER_PLUGIN}/preflight.sh" )
-ok "Plugin preflights passed"
+  log "Running plugin preflight checks..."
+  ( set -a; source .env; set +a; bash "plugins/registry/${REGISTRY_PLUGIN}/preflight.sh" )
+  ( set -a; source .env; set +a; bash "plugins/git-provider/${GIT_PROVIDER_PLUGIN}/preflight.sh" )
+  ok "Plugin preflights passed"
+fi
 
 # Persist .env (canonical form)
 {
+  echo "OUTPOST_MODE=${OUTPOST_MODE}"
   echo "ROOT_DOMAIN=${ROOT_DOMAIN}"
   echo "CF_TUNNEL_TOKEN=${CF_TUNNEL_TOKEN}"
   echo "REGISTRY_PLUGIN=${REGISTRY_PLUGIN}"
@@ -154,10 +186,17 @@ ok ".env written (perm 600)"
 # =============================================================================
 phase "Phase 3 / 9  Render credential vault"
 
-for tmpl in i18n/en/INFRA.md.template i18n/zh-CN/INFRA.md.template; do
+# Local mode uses a slimmer template (no public hosts, no GitOps section).
+if [[ "$OUTPOST_MODE" == "local" ]]; then
+  TMPL_BASENAME="INFRA.local.md.template"
+else
+  TMPL_BASENAME="INFRA.md.template"
+fi
+
+for tmpl in "i18n/en/${TMPL_BASENAME}" "i18n/zh-CN/${TMPL_BASENAME}"; do
   [[ -f "$tmpl" ]] || continue
   out_lang="${tmpl#i18n/}"
-  out_lang="${out_lang%/INFRA.md.template}"
+  out_lang="${out_lang%%/*}"
   if [[ "$out_lang" == "en" ]]; then
     render_template "$tmpl" "INFRA.md"
   else
@@ -174,12 +213,20 @@ ok "Credential vault(s) rendered"
 phase "Phase 4 / 9  Compose data services"
 
 cd core/compose
+
+# Tunnel-profile services (cloudflared, caddy) only start in full mode.
+COMPOSE_PROFILE_ARGS=()
+HEALTH_SERVICES=("postgres" "redis" "rabbitmq" "meilisearch")
+if [[ "$OUTPOST_MODE" == "full" ]]; then
+  COMPOSE_PROFILE_ARGS=(--profile tunnel)
+fi
+
 log "Pulling images..."
-docker compose pull
+docker compose "${COMPOSE_PROFILE_ARGS[@]}" pull
 log "Bringing up services..."
-docker compose up -d
+docker compose "${COMPOSE_PROFILE_ARGS[@]}" up -d
 log "Waiting for health..."
-for svc in postgres redis rabbitmq meilisearch; do
+for svc in "${HEALTH_SERVICES[@]}"; do
   for _ in {1..30}; do
     state=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$svc" 2>/dev/null || echo "starting")
     [[ "$state" == "healthy" || "$state" == "none" ]] && { ok "$svc healthy"; break; }
@@ -187,6 +234,37 @@ for svc in postgres redis rabbitmq meilisearch; do
   done
 done
 cd "$INFRA_ROOT"
+
+# =============================================================================
+# Local mode short-circuit
+# -----------------------------------------------------------------------------
+# Phases 5–8 require k3s + GitOps. In local mode we skip directly to summary.
+# =============================================================================
+if [[ "$OUTPOST_MODE" == "local" ]]; then
+  phase "Phase 9 / 9  Summary (local mode)"
+
+  echo ""
+  echo "Compose:"
+  docker compose -f core/compose/docker-compose.yml ps
+  echo ""
+  echo "═══════════════════════════════════════════════════════════════"
+  echo "  Outpost bootstrap complete (local mode)"
+  echo "═══════════════════════════════════════════════════════════════"
+  echo ""
+  echo "  PostgreSQL : postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}"
+  echo "  Redis      : redis://default:${REDIS_PASSWORD}@localhost:6379/0"
+  echo "  RabbitMQ   : amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@localhost:5672/  (UI: http://localhost:15672)"
+  echo "  Meilisearch: http://localhost:7700  (Bearer ${MEILI_MASTER_KEY})"
+  echo ""
+  echo "  Read INFRA.md for full credential vault."
+  echo "  Run ./verify.sh anytime to check stack health."
+  echo "  To upgrade to full mode (CF Tunnel + k3s + GitOps):"
+  echo "    1. set OUTPOST_MODE=full in .env"
+  echo "    2. fill ROOT_DOMAIN, CF_TUNNEL_TOKEN, GIT_USER, GIT_TOKEN, MANIFEST_REPO_URL"
+  echo "    3. re-run bash bootstrap.sh"
+  echo ""
+  exit 0
+fi
 
 # =============================================================================
 # Phase 5 — k3s
@@ -328,7 +406,7 @@ sk_print_post_install_notes
 
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
-echo "  Outpost bootstrap complete"
+echo "  Outpost bootstrap complete (full mode)"
 echo "═══════════════════════════════════════════════════════════════"
 echo ""
 echo "  ArgoCD UI:    https://argocd.${ROOT_DOMAIN}"

@@ -5,6 +5,16 @@ a future contributor to pick it up cold.
 
 ---
 
+## ✅ Done in v0.2 — local/full mode split
+
+`OUTPOST_MODE={local|full}` toggles Compose-only vs full GitOps. New users
+get a zero-prompt `local` install; `full` mode preserves the v0.1 stack
+unchanged. Compose `tunnel` profile gates cloudflared+caddy. Verify and
+status scripts skip k8s sections in `local`. New `INFRA.local.md.template`
+in en + zh-CN. JSON `summary.mode` field added (schema-additive).
+
+---
+
 ## Tunnel plugin abstraction (frp / tailscale / ngrok)
 
 **What:** Add a `plugins/tunnel/` kind, with `cloudflare/`, `frp/`,

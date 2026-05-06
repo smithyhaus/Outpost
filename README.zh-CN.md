@@ -37,12 +37,36 @@
 - **一个 Cloudflare Tunnel** 把所有东西暴露在你自己域名的子域上。
   不需要路由器配置、不需要公网 IP，双层 NAT 也能用。
 
-## 快速开始
+## 两种模式
+
+Outpost 提供两种模式，按当前需求挑一个。
+
+| 模式 | 跑什么 | 必填项 | 适用场景 |
+|------|--------|--------|----------|
+| **`local`** *(默认)* | Compose 数据服务跑在 `localhost`：PG、Redis、RabbitMQ、Meilisearch | 无 —— 全部默认值或自动生成 | 本机当个人开发后端，不需要公网，不需要 CI/CD |
+| **`full`** | `local` 的全部 + Cloudflare Tunnel + k3s + ArgoCD + Tekton | `ROOT_DOMAIN`、`CF_TUNNEL_TOKEN`、`GIT_USER`、`GIT_TOKEN`、`MANIFEST_REPO_URL` | 需要把服务挂到自己域名上 + push 即部署的 GitOps |
+
+通过修改 `.env` 里的 `OUTPOST_MODE` 切换。重跑 `bash bootstrap.sh` 是幂等的；`.env` 里已有的密码会被复用。
+
+## 快速开始（local 模式）
 
 ```bash
 git clone https://github.com/smithyhaus/outpost.git ~/outpost
 cd ~/outpost
-cp .env.example .env       # 至少填 ROOT_DOMAIN 与 CF_TUNNEL_TOKEN
+bash bootstrap.sh          # ~2 分钟，无需改 .env
+```
+
+完成后：
+
+- `INFRA.zh-CN.md` 列出所有连接串和密码（自动生成）
+- 应用直连：`postgresql://postgres:<pw>@localhost:5432/postgres` 等等
+
+## 快速开始（full 模式）
+
+```bash
+git clone https://github.com/smithyhaus/outpost.git ~/outpost
+cd ~/outpost
+cp .env.example .env       # 把 OUTPOST_MODE 改 full，填 ROOT_DOMAIN + CF_TUNNEL_TOKEN
 bash bootstrap.sh          # ~5 分钟
 ```
 

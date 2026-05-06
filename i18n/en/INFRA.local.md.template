@@ -1,0 +1,96 @@
+# Credential vault (INFRA.md) — local mode
+
+> ⚠️ Plaintext secrets. This file is gitignored. Do not commit it.
+> Recommended: copy into a password manager (1Password, Bitwarden) for backup.
+>
+> 🔁 Reuse: when starting a new project, copy connection strings from this
+> file directly. The infrastructure does not need re-installation.
+
+Generated: at bootstrap time
+Mode: `local` (Compose data services only — no public hosts, no GitOps)
+
+To upgrade to `full` mode (Cloudflare Tunnel + k3s + ArgoCD + Tekton):
+
+1. set `OUTPOST_MODE=full` in `.env`
+2. fill `ROOT_DOMAIN`, `CF_TUNNEL_TOKEN`, `GIT_USER`, `GIT_TOKEN`, `MANIFEST_REPO_URL`
+3. re-run `bash bootstrap.sh`
+
+---
+
+## 0. Quick reference
+
+| Service       | Local host         | Port  | User                | Password / Key             |
+|---------------|--------------------|-------|---------------------|----------------------------|
+| PostgreSQL    | `localhost`        | 5432  | `${POSTGRES_USER}`  | `${POSTGRES_PASSWORD}`     |
+| Redis         | `localhost`        | 6379  | (none)              | `${REDIS_PASSWORD}`        |
+| RabbitMQ AMQP | `localhost`        | 5672  | `${RABBITMQ_USER}`  | `${RABBITMQ_PASSWORD}`     |
+| RabbitMQ UI   | `http://localhost` | 15672 | `${RABBITMQ_USER}`  | `${RABBITMQ_PASSWORD}`     |
+| Meilisearch   | `http://localhost` | 7700  | (Bearer)            | `${MEILI_MASTER_KEY}`      |
+
+---
+
+## 1. PostgreSQL (with pgvector)
+
+- Host: `localhost:5432`
+- User: `${POSTGRES_USER}`
+- Password: `${POSTGRES_PASSWORD}`
+- Default DB: `${POSTGRES_DB}`
+- Enabled extensions: `vector`, `uuid-ossp`, `pg_trgm`
+
+```
+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}
+```
+
+DBeaver / DataGrip — see `i18n/en/docs/04-client-access.md`.
+
+## 2. Redis 7
+
+- Host: `localhost:6379`
+- Password: `${REDIS_PASSWORD}`
+
+```
+redis://default:${REDIS_PASSWORD}@localhost:6379/0
+```
+
+## 3. RabbitMQ 3.13
+
+- AMQP: `localhost:5672`
+- Management UI: `http://localhost:15672`
+- User: `${RABBITMQ_USER}`
+- Password: `${RABBITMQ_PASSWORD}`
+
+```
+amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@localhost:5672/
+```
+
+## 4. Meilisearch v1.10
+
+- Host: `http://localhost:7700`
+- Master key: `${MEILI_MASTER_KEY}`
+- Mode: `${MEILI_ENV}` (Authorization header required)
+
+```bash
+curl -H "Authorization: Bearer ${MEILI_MASTER_KEY}" http://localhost:7700/health
+```
+
+## 5. Host / OS
+
+- outpost dir: `${SK_INFRA_DIR:-~/outpost}`
+
+### Common commands
+
+```bash
+./status.sh         # snapshot
+./verify.sh         # detailed health check (use --json for AI agents)
+./upgrade.sh        # pull latest images, restart Compose
+```
+
+---
+
+## 6. Local mode caveats
+
+- Services bind to `0.0.0.0` on the host. If you only want loopback, edit
+  `core/compose/docker-compose.yml` and change `0.0.0.0:<port>` to
+  `127.0.0.1:<port>`.
+- No public ingress. To expose services on a domain, switch to `full` mode.
+- No CI/CD. Apps run wherever you choose to run them — outside this stack.

@@ -31,6 +31,10 @@ services:
   # See i18n/en/docs/01-cloudflare-setup.md for the full mapping.
   # =========================================================================
   cloudflared:
+    # Profile-gated: only starts in `full` mode (when bootstrap passes
+    # --profile tunnel). In `local` mode the data services are reached
+    # directly on localhost and no tunnel egress is needed.
+    profiles: ["tunnel"]
     image: cloudflare/cloudflared:latest
     container_name: cloudflared
     restart: unless-stopped
@@ -47,6 +51,7 @@ services:
   # Caddy internal reverse proxy (HTTP only; TLS terminated at CF edge)
   # =========================================================================
   caddy:
+    profiles: ["tunnel"]
     image: caddy:2-alpine
     container_name: caddy
     restart: unless-stopped

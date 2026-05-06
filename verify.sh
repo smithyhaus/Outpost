@@ -15,6 +15,11 @@
 #   1  any FAIL
 #   2  any WARN (no FAIL)
 #
+# Mode awareness:
+#   In OUTPOST_MODE=local the script only checks the Compose data layer
+#   (postgres / redis / rabbitmq / meilisearch). k3s, ArgoCD, Tekton and
+#   public-edge sections are skipped entirely.
+#
 # JSON schema is locked at tests/schema/verify-output.schema.json — AI tools
 # can rely on the field shape across versions.
 # =============================================================================
@@ -37,6 +42,11 @@ if [[ -f .env ]]; then
   set -a; source .env; set +a
 fi
 ROOT_DOMAIN="${ROOT_DOMAIN:-example.com}"
+OUTPOST_MODE="${OUTPOST_MODE:-local}"
+case "$OUTPOST_MODE" in
+  local|full) ;;
+  *) OUTPOST_MODE="unknown" ;;
+esac
 
 # Detect OS quietly
 detect_os 2>/dev/null || SK_OS="unknown"
@@ -74,22 +84,38 @@ kubectl_ok() { kubectl version --request-timeout=3s >/dev/null 2>&1; }
 
 # ---- 1. Tooling -------------------------------------------------------------
 section "1. Tooling"
-for cmd in docker kubectl helm openssl envsubst curl git; do
+# Local mode doesn't need kubectl/helm. Full mode needs them all.
+if [[ "$OUTPOST_MODE" == "local" ]]; then
+  REQUIRED_TOOLS=(docker openssl envsubst curl)
+else
+  REQUIRED_TOOLS=(docker kubectl helm openssl envsubst curl git)
+fi
+for cmd in "${REQUIRED_TOOLS[@]}"; do
   if has_cmd "$cmd"; then
     record PASS "tool.$cmd" "found at $(command -v "$cmd")"
   else
     record FAIL "tool.$cmd" "not installed"
   fi
 done
-docker_ok   && record PASS "docker.daemon"   "running"   || record FAIL "docker.daemon"   "not running"
-kubectl_ok  && record PASS "kubectl.cluster" "reachable" || record FAIL "kubectl.cluster" "not reachable"
+docker_ok && record PASS "docker.daemon" "running" || record FAIL "docker.daemon" "not running"
+if [[ "$OUTPOST_MODE" == "full" ]]; then
+  kubectl_ok && record PASS "kubectl.cluster" "reachable" || record FAIL "kubectl.cluster" "not reachable"
+fi
 record PASS "platform.os" "$SK_OS"
+record PASS "platform.mode" "OUTPOST_MODE=$OUTPOST_MODE"
 
 # ---- 2. Compose layer -------------------------------------------------------
 section "2. Compose data services"
 if docker_ok; then
-  for svc in cloudflared caddy postgres redis rabbitmq meilisearch; do
-    state=$(docker inspect --format '{{.State.Status}}' "$svc" 2>/dev/null || echo "missing")
+  # Tunnel-profile services only run in full mode.
+  if [[ "$OUTPOST_MODE" == "full" ]]; then
+    COMPOSE_SVCS=(cloudflared caddy postgres redis rabbitmq meilisearch)
+  else
+    COMPOSE_SVCS=(postgres redis rabbitmq meilisearch)
+  fi
+  for svc in "${COMPOSE_SVCS[@]}"; do
+    state=$(docker inspect --format '{{.State.Status}}' "$svc" 2>/dev/null) || state=""
+    state="${state:-missing}"
     case "$state" in
       running)
         health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$svc" 2>/dev/null || echo "none")
@@ -105,14 +131,19 @@ if docker_ok; then
       *)       record FAIL "compose.$svc" "state=$state" ;;
     esac
   done
-  if docker logs cloudflared --tail 100 2>&1 | grep -q "Registered tunnel connection"; then
-    record PASS "cloudflared.tunnel" "registered to Cloudflare edge"
-  else
-    record FAIL "cloudflared.tunnel" "not registered"
+  if [[ "$OUTPOST_MODE" == "full" ]]; then
+    if docker logs cloudflared --tail 100 2>&1 | grep -q "Registered tunnel connection"; then
+      record PASS "cloudflared.tunnel" "registered to Cloudflare edge"
+    else
+      record FAIL "cloudflared.tunnel" "not registered"
+    fi
   fi
 else
   record FAIL "compose.skipped" "docker not running"
 fi
+
+# Sections 3–7 are full-mode only. Skip them in local mode.
+if [[ "$OUTPOST_MODE" == "full" ]]; then
 
 # ---- 3. K8s ----------------------------------------------------------------
 section "3. K8s cluster"
@@ -236,6 +267,8 @@ else
   record WARN "edge.skipped" "ROOT_DOMAIN unset"
 fi
 
+fi  # end full-mode-only sections
+
 # ---- 8. Credentials hygiene -------------------------------------------------
 section "8. Credentials hygiene"
 if [[ -f .env ]]; then
@@ -251,22 +284,22 @@ fi
 
 # ---- Output -----------------------------------------------------------------
 if [[ "$MODE" == "json" ]]; then
-  printf '{"schema_version":"1","summary":{"pass":%d,"warn":%d,"fail":%d,"os":"%s"},"checks":[' \
-    "$PASS_CNT" "$WARN_CNT" "$FAIL_CNT" "${SK_OS:-unknown}"
+  printf '{"schema_version":"1","summary":{"pass":%d,"warn":%d,"fail":%d,"os":"%s","mode":"%s"},"checks":[' \
+    "$PASS_CNT" "$WARN_CNT" "$FAIL_CNT" "${SK_OS:-unknown}" "$OUTPOST_MODE"
   first=1
   for r in "${RESULTS[@]}"; do
     [[ $first -eq 0 ]] && printf ','
     first=0
     status="${r%%|*}"; rest="${r#*|}"
     id="${rest%%|*}"; detail="${rest#*|}"
-    detail_esc=$(echo "$detail" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    detail_esc=$(printf '%s' "$detail" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\n\r\t' '   ')
     printf '{"status":"%s","id":"%s","detail":"%s"}' "$status" "$id" "$detail_esc"
   done
   printf ']}\n'
 else
   echo ""
   echo -e "${SK_C_BOLD}═══ Summary ═══${SK_C_RESET}"
-  echo -e "${SK_C_GREEN}PASS${SK_C_RESET}: $PASS_CNT  ${SK_C_YELLOW}WARN${SK_C_RESET}: $WARN_CNT  ${SK_C_RED}FAIL${SK_C_RESET}: $FAIL_CNT  (OS: $SK_OS)"
+  echo -e "${SK_C_GREEN}PASS${SK_C_RESET}: $PASS_CNT  ${SK_C_YELLOW}WARN${SK_C_RESET}: $WARN_CNT  ${SK_C_RED}FAIL${SK_C_RESET}: $FAIL_CNT  (OS: $SK_OS, mode: $OUTPOST_MODE)"
 fi
 
 [[ $FAIL_CNT -gt 0 ]] && exit 1

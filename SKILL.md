@@ -21,6 +21,12 @@ when_to_use: |
 - **Plugin model:** directory-based, one plugin per kind, swap via `.env`.
 - **Platforms:** macOS, Linux, Windows 11 + WSL2. OS-specific bits live in
   `platform/<os>.sh`; everything else is portable.
+- **Two modes** (`OUTPOST_MODE` in `.env`):
+  - `local` *(default)* — Compose data services on `localhost` only. No CF
+    Tunnel, no k3s, no GitOps. Zero required input.
+  - `full` — `local` + Cloudflare Tunnel + k3s + ArgoCD + Tekton.
+    Requires `ROOT_DOMAIN`, `CF_TUNNEL_TOKEN`, `GIT_USER`, `GIT_TOKEN`,
+    `MANIFEST_REPO_URL`.
 
 ## 2. Architecture
 
@@ -61,7 +67,8 @@ in production, change only the ExternalName — application code stays unchanged
 |-------------|------|
 | Static architecture doc | `ARCHITECTURE.md` |
 | Credentials (rendered) | `INFRA.md` / `INFRA.zh-CN.md` (gitignored) |
-| Credential template | `i18n/en/INFRA.md.template`, `i18n/zh-CN/INFRA.md.template` |
+| Credential template (full mode) | `i18n/en/INFRA.md.template`, `i18n/zh-CN/INFRA.md.template` |
+| Credential template (local mode) | `i18n/en/INFRA.local.md.template`, `i18n/zh-CN/INFRA.local.md.template` |
 | Compose stack | `core/compose/docker-compose.yml` |
 | Caddy routes | `core/compose/Caddyfile` |
 | Cloudflared ingress reference | `core/compose/cloudflared/config.template.yml` |
@@ -109,6 +116,10 @@ in production, change only the ExternalName — application code stays unchanged
     unresolved `${VAR}` placeholders and abort.** This is the central
     anti-silent-failure guardrail. Bypassing it (e.g. with raw envsubst)
     risks deploying manifests with empty hostnames or missing secrets.
+11. **`OUTPOST_MODE` gates k3s phases.** When `local`, bootstrap.sh exits
+    after Phase 4 (Compose); verify.sh skips k8s/ArgoCD/Tekton/edge
+    sections and emits `summary.mode="local"`. Don't `kubectl apply` from
+    bootstrap or expect bridge services in local mode.
 
 ## 5. Operating principles
 

@@ -38,12 +38,36 @@
 - **One Cloudflare Tunnel** exposes everything on subdomains of your own
   domain. No router config, no public IP, works behind double NAT.
 
-## Quick start
+## Two modes
+
+Outpost ships in two modes; pick the one that matches what you need today.
+
+| Mode | What runs | Required input | Use when |
+|------|-----------|----------------|----------|
+| **`local`** *(default)* | Compose data services on `localhost`: PG, Redis, RabbitMQ, Meilisearch | nothing — every value defaults or auto-generates | You want a personal dev backend on this box, no public hosting, no CI/CD |
+| **`full`** | Everything in `local` + Cloudflare Tunnel + k3s + ArgoCD + Tekton | `ROOT_DOMAIN`, `CF_TUNNEL_TOKEN`, `GIT_USER`, `GIT_TOKEN`, `MANIFEST_REPO_URL` | You want public access on your domain + push-to-deploy GitOps |
+
+Switch by editing `OUTPOST_MODE` in `.env`. Re-running `bash bootstrap.sh` is idempotent; passwords already in `.env` are reused.
+
+## Quick start (local mode)
 
 ```bash
 git clone https://github.com/smithyhaus/outpost.git ~/outpost
 cd ~/outpost
-cp .env.example .env       # edit ROOT_DOMAIN + CF_TUNNEL_TOKEN at minimum
+bash bootstrap.sh          # ~2 minutes — no .env edit needed
+```
+
+After it finishes:
+
+- `INFRA.md` lists every connection string + password (auto-generated)
+- Connect from your apps: `postgresql://postgres:<pw>@localhost:5432/postgres` etc.
+
+## Quick start (full mode)
+
+```bash
+git clone https://github.com/smithyhaus/outpost.git ~/outpost
+cd ~/outpost
+cp .env.example .env       # set OUTPOST_MODE=full + ROOT_DOMAIN + CF_TUNNEL_TOKEN
 bash bootstrap.sh          # ~5 minutes
 ```
 
