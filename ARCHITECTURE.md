@@ -117,7 +117,7 @@ Three implications worth understanding:
 
 ## Plugin model
 
-Two pluggable seams in v1.0:
+Two pluggable seams in v0.1:
 
 ```
 plugins/

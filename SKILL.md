@@ -253,10 +253,10 @@ docker compose -f core/compose/docker-compose.yml restart cloudflared
 ## 8. Out of scope (don't propose)
 
 - Production HA / multi-node / backup-restore (intentionally not the goal)
-- GPU pass-through (out of scope for v1.0)
+- GPU pass-through (out of scope for v0.1)
 - cert-manager / ACME (TLS lives at Cloudflare edge)
 - In-cluster stateful services (Postgres etc. stay in Compose)
-- New top-level languages beyond `en` and `zh-CN` for v1.0 (deferred to v0.2 — see TODOS)
+- New top-level languages beyond `en` and `zh-CN` for v0.1 (deferred to v0.2 — see TODOS)
 - Modifying k3s control plane args (e.g. `--disable=traefik`) without
   explicit user approval
 

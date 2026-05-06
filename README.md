@@ -107,9 +107,10 @@ Drop Outpost into a Claude Code session and ask "is the stack healthy?" — it w
 
 ## Status
 
-Outpost is **v1.0** — feature-complete for the milestones listed in
-[`TODOS.md`](TODOS.md). Roadmap items (tunnel plugins, Cursor/Copilot AI
-adapters, Helm packaging) live there.
+Outpost is **v0.1.0** — initial public release. The v0.1 scope is feature-
+complete; real-world end-to-end verification on macOS / Linux / WSL2 is
+pending. Roadmap items (validated MVP → tunnel plugins, AI ecosystem,
+Helm packaging) live in [`TODOS.md`](TODOS.md).
 
 ## Contributing
 

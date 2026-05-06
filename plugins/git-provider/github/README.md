@@ -32,7 +32,7 @@ signatures never reach the pipeline.
 | `revision`     | `body.after`                    |
 | `pusher`       | `body.pusher.name`              |
 
-## Limitations (v1.0)
+## Limitations (v0.1)
 
 - Only `push` events. PR / issue / release events are out of scope.
 - Only public + private GitHub.com. GitHub Enterprise Server is untested.

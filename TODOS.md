@@ -1,6 +1,6 @@
 # TODOS
 
-Items deliberately deferred from v1.0. Each entry has enough context for
+Items deliberately deferred from v0.1. Each entry has enough context for
 a future contributor to pick it up cold.
 
 ---
@@ -11,7 +11,7 @@ a future contributor to pick it up cold.
 `tailscale/`, `ngrok/` etc. as plugins. `bootstrap.sh` selects one per
 `.env`.
 
-**Why:** v1.0 hard-codes Cloudflare Tunnel. Users without a Cloudflare
+**Why:** v0.1 hard-codes Cloudflare Tunnel. Users without a Cloudflare
 account, or who don't want to send traffic through Cloudflare, are
 excluded.
 
@@ -32,7 +32,7 @@ excluded.
 `plugins/registry/aliyun-acr/` as the closest analog (external service +
 credentials secret).
 
-**Depends on:** v1.0 plugin architecture (already done).
+**Depends on:** v0.1 plugin architecture (already done).
 
 **Milestone:** v0.2
 
@@ -48,7 +48,7 @@ credentials secret).
 Generate them from `SKILL.md` rather than maintain three independent
 sources.
 
-**Why:** v1.0 chose "SKILL.md + llms.txt only", which trades away ~80% of
+**Why:** v0.1 chose "SKILL.md + llms.txt only", which trades away ~80% of
 the AI-tool ecosystem. Adding the two formats above is cheap (≤30 min
 CC time) once we have a generator.
 
@@ -93,7 +93,7 @@ the standard packaging.
 values expansion is similar but uses Go templates. Most manifests will
 need a small refactor to switch.
 
-**Depends on:** stable plugin contract (v1.0 done).
+**Depends on:** stable plugin contract (v0.1 done).
 
 **Milestone:** v0.3
 
@@ -151,7 +151,7 @@ silently rot).
 **What:** Add a Windows runner with WSL2 to the GitHub Actions test
 matrix so PRs that risk a WSL2-only regression are caught automatically.
 
-**Why:** v1.0 ships ubuntu + macos in CI; WSL2 is verified manually
+**Why:** v0.1 ships ubuntu + macos in CI; WSL2 is verified manually
 before each release.
 
 **Pros:** catches regressions earlier.

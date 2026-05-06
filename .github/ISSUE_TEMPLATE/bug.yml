@@ -20,7 +20,7 @@ body:
     attributes:
       label: Outpost version
       description: Output of `git -C <outpost dir> describe --tags --always`
-      placeholder: "v1.0.0 / commit abc1234"
+      placeholder: "v0.1.0 / commit abc1234"
     validations:
       required: true
   - type: dropdown

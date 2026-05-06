@@ -107,8 +107,9 @@ Plugin 协议与编写指南见 [`plugins/README.md`](plugins/README.md)。
 
 ## 项目状态
 
-Outpost 当前为 **v1.0** —— 已交付 [`TODOS.md`](TODOS.md) 中列的全部里程碑。
-路线图（tunnel plugin、Cursor/Copilot AI 适配、Helm 打包）见 TODOS。
+Outpost 当前为 **v0.1.0** —— 首次公开发布。v0.1 范围功能完整，但 macOS /
+Linux / WSL2 上的真机端到端验证仍在进行中。路线图（验证后的 MVP → tunnel
+plugin、AI 生态、Helm 打包）见 [`TODOS.md`](TODOS.md)。
 
 ## 贡献
 
