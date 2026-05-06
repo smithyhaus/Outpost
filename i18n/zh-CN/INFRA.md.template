@@ -1,0 +1,185 @@
+# 基础设施凭据库（INFRA.md）
+
+> ⚠️ **明文密码**。已 .gitignore，不要提交到任何仓库。
+> 备份建议：复制到密码管理器（1Password / Bitwarden）。
+>
+> 🔁 **复用**：下次新项目要用 PG / Redis / RabbitMQ / Meilisearch，
+>    直接从这里复制连接串，无需重装基础设施。
+
+生成时间：bootstrap 时
+根域名：`${ROOT_DOMAIN}`
+Registry plugin：`${REGISTRY_PLUGIN}`
+Git provider plugin：`${GIT_PROVIDER_PLUGIN}`
+
+---
+
+## 0. 速查表
+
+| 服务           | 公网域名                       | 端口 | 用户              | 密码                       |
+|----------------|--------------------------------|-----|-------------------|----------------------------|
+| PostgreSQL     | `pg.${ROOT_DOMAIN}`            | 5432 | `${POSTGRES_USER}` | `${POSTGRES_PASSWORD}`     |
+| Redis          | `redis.${ROOT_DOMAIN}`         | 6379 | （无）            | `${REDIS_PASSWORD}`        |
+| RabbitMQ AMQP  | `rabbitmq.${ROOT_DOMAIN}`      | 5672 | `${RABBITMQ_USER}` | `${RABBITMQ_PASSWORD}`     |
+| RabbitMQ UI    | `https://mq.${ROOT_DOMAIN}`    | —   | `${RABBITMQ_USER}` | `${RABBITMQ_PASSWORD}`     |
+| Meilisearch    | `https://search.${ROOT_DOMAIN}` | —  | (Bearer)          | `${MEILI_MASTER_KEY}`      |
+| ArgoCD         | `https://argocd.${ROOT_DOMAIN}` | —  | `admin`           | （见 §6）                  |
+| Registry       | `https://registry.${ROOT_DOMAIN}` | —| (匿名)            | —                          |
+
+---
+
+## 1. Cloudflare
+
+- 根域名：`${ROOT_DOMAIN}`
+- DNS 托管：Cloudflare
+- Tunnel Token：`${CF_TUNNEL_TOKEN}`
+- Tunnel 客户端：Compose 中的 `cloudflared` 容器
+- Public Hostname 配置见 `i18n/zh-CN/docs/01-cloudflare-setup.md`
+
+## 2. PostgreSQL（含 pgvector）
+
+- 公网（仅经 cloudflared access）：`pg.${ROOT_DOMAIN}:5432`
+- 本机直连（WSL/Linux/macOS）：`localhost:5432`
+- K8s pod 内：`postgres.infra-bridges.svc.cluster.local:5432`
+- 用户：`${POSTGRES_USER}`
+- 密码：`${POSTGRES_PASSWORD}`
+- 默认库：`${POSTGRES_DB}`
+- 已启用扩展：`vector`、`uuid-ossp`、`pg_trgm`
+
+### 连接串
+
+```
+# 应用（K8s 内）
+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres.infra-bridges.svc.cluster.local:5432/${POSTGRES_DB}
+
+# 本机
+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}
+
+# 远端开发机（先 cloudflared access tcp）
+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}
+```
+
+DBeaver / DataGrip 客户端配置见 `i18n/zh-CN/docs/04-client-access.md`。
+
+## 3. Redis 7
+
+- 公网：`redis.${ROOT_DOMAIN}:6379`
+- 本机：`localhost:6379`
+- K8s 内：`redis.infra-bridges.svc.cluster.local:6379`
+- 密码：`${REDIS_PASSWORD}`
+
+```
+redis://default:${REDIS_PASSWORD}@redis.infra-bridges.svc.cluster.local:6379/0
+redis://default:${REDIS_PASSWORD}@localhost:6379/0
+```
+
+## 4. RabbitMQ 3.13
+
+- AMQP 公网：`rabbitmq.${ROOT_DOMAIN}:5672`
+- AMQP 本机：`localhost:5672`
+- AMQP K8s 内：`rabbitmq.infra-bridges.svc.cluster.local:5672`
+- 管理 UI：`https://mq.${ROOT_DOMAIN}`
+- 用户：`${RABBITMQ_USER}`
+- 密码：`${RABBITMQ_PASSWORD}`
+
+```
+amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq.infra-bridges.svc.cluster.local:5672/
+amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@localhost:5672/
+```
+
+## 5. Meilisearch v1.10
+
+- 公网：`https://search.${ROOT_DOMAIN}`
+- K8s 内：`http://meilisearch.infra-bridges.svc.cluster.local:7700`
+- Master Key：`${MEILI_MASTER_KEY}`
+- 模式：`${MEILI_ENV}`（必带 Authorization header）
+
+```bash
+curl -H "Authorization: Bearer ${MEILI_MASTER_KEY}" https://search.${ROOT_DOMAIN}/health
+```
+
+## 6. ArgoCD
+
+- Web UI：`https://argocd.${ROOT_DOMAIN}`
+- 用户：`admin`
+- 初始密码（也写入 .env 的 `ARGOCD_ADMIN_PASSWORD`）：
+  ```bash
+  kubectl -n argocd get secret argocd-initial-admin-secret \
+    -o jsonpath='{.data.password}' | base64 -d
+  ```
+- 首次登录后建议改密码：`argocd account update-password`
+- 监听的 manifest 仓库：`${MANIFEST_REPO_URL}` (branch: `${MANIFEST_REPO_BRANCH}`)
+
+## 7. Tekton CI（webhook + pipeline）
+
+- Webhook URL：`https://hooks.${ROOT_DOMAIN}`
+- Webhook Secret：`${GIT_WEBHOOK_SECRET}`
+- 当前 git-provider plugin：`${GIT_PROVIDER_PLUGIN}`
+- 在每个应用仓库的 webhook 设置中配上面的 URL 与 secret，仅勾选 Push 事件。
+
+Pipeline 行为：
+
+```
+1. push        → EventListener → 创建 PipelineRun
+2. git-clone     拉取应用代码
+3. kaniko-build  构建 Docker image
+4. push-image    推到 <REGISTRY_HOST>/<repo>:<short-sha>
+5. update-manifest 改 manifest 仓库 image tag → commit → push
+6. ArgoCD sync   → kubectl apply → 滚动发布
+```
+
+查看：
+
+```bash
+kubectl get pipelinerun -n tekton-pipelines
+kubectl logs -n tekton-pipelines -l tekton.dev/pipelineRun=<run> \
+  --all-containers --tail=200
+```
+
+## 8. Docker Registry
+
+- 当前 plugin：`${REGISTRY_PLUGIN}`
+- 公网：`https://registry.${ROOT_DOMAIN}`
+- 集群内（containerd 已配置走明文）：`registry.${ROOT_DOMAIN}/<image>:<tag>`
+
+## 9. Git 提供商
+
+- 用户：`${GIT_USER}`
+- Personal Access Token：`${GIT_TOKEN}`
+- Manifest 仓库：`${MANIFEST_REPO_URL}` (branch `${MANIFEST_REPO_BRANCH}`)
+- Token 用途：ArgoCD HTTPS 拉、Tekton clone 应用代码、update-manifest push
+
+## 10. 主机 / 系统
+
+- outpost 目录：`${SK_INFRA_DIR:-~/outpost}`
+- kubeconfig：`~/.kube/config`
+- k3s 数据：`/var/lib/rancher/k3s/`（Linux/WSL2）
+- sealed-secrets 公钥备份：`secrets-backup/sealed-secrets-pub.pem`
+
+### 常用命令
+
+```bash
+./status.sh         # 全栈状态快照
+./verify.sh         # 详细健康检查（AI 用 --json）
+./upgrade.sh        # 拉最新镜像 + 重启 Compose
+```
+
+---
+
+## 11. 安全加固清单（建议但不强制）
+
+- [ ] 给 `argocd.${ROOT_DOMAIN}` / `mq.${ROOT_DOMAIN}` 加 Cloudflare Access
+- [ ] 给 `registry.${ROOT_DOMAIN}` 加 Basic Auth 或 Cloudflare Access
+- [ ] ArgoCD admin 改密
+- [ ] sealed-secrets 公钥备份至密码管理器
+
+## 12. 复用清单（新项目接入流程）
+
+详见 `i18n/zh-CN/docs/05-onboard-project.md`。简略：
+
+1. 在 Gitee/GitHub/GitLab 建仓库，根目录加 `Dockerfile`
+2. manifest 仓库加 `apps/<name>/{deployment,service,ingress}.yaml`
+3. manifest 仓库加 `argocd-apps/<name>.yaml`
+4. 应用仓库 webhook → `https://hooks.${ROOT_DOMAIN}`，secret `${GIT_WEBHOOK_SECRET}`
+5. `git push origin main`，看 ArgoCD 同步上线
+
+应用代码里要用的连接串直接从本文件 §0 速查表复制。

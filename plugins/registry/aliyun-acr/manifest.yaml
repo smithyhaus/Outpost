@@ -1,0 +1,37 @@
+# =============================================================================
+# Plugin: registry / aliyun-acr
+# -----------------------------------------------------------------------------
+# External managed registry — Alibaba Cloud Container Registry (ACR).
+# This plugin contributes ONLY a Secret holding pull/push credentials.
+# k3s containerd is configured (by bootstrap.sh) to inject this Secret as
+# an image pull credential.
+# =============================================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: aliyun-acr-credentials
+  namespace: tekton-pipelines
+  annotations:
+    tekton.dev/docker-0: ${ALIYUN_ACR_REGISTRY}
+type: kubernetes.io/basic-auth
+stringData:
+  username: ${ALIYUN_ACR_USER}
+  password: ${ALIYUN_ACR_PASSWORD}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: aliyun-acr-pull
+  namespace: apps
+type: kubernetes.io/dockerconfigjson
+stringData:
+  .dockerconfigjson: |
+    {
+      "auths": {
+        "${ALIYUN_ACR_REGISTRY}": {
+          "username": "${ALIYUN_ACR_USER}",
+          "password": "${ALIYUN_ACR_PASSWORD}",
+          "auth": ""
+        }
+      }
+    }

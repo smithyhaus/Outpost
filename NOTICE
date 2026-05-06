@@ -1,0 +1,26 @@
+Outpost
+Copyright 2026 The Outpost Authors (a smithyhaus project)
+
+This product includes software developed by The Outpost Authors and
+contributors. See LICENSE for terms.
+
+Project home: https://github.com/smithyhaus/outpost
+Organization:  https://github.com/smithyhaus
+
+Bundled / referenced components (each under its own license):
+  - Docker / Docker Compose          (Apache-2.0)
+  - k3s                              (Apache-2.0)
+  - Traefik                          (MIT)
+  - Caddy                            (Apache-2.0)
+  - PostgreSQL                       (PostgreSQL License)
+  - pgvector                         (PostgreSQL License)
+  - Redis                            (BSD-3 / RSAL — see Redis license)
+  - RabbitMQ                         (MPL-2.0 / Apache-2.0)
+  - Meilisearch                      (MIT)
+  - Argo CD                          (Apache-2.0)
+  - Tekton Pipelines / Triggers      (Apache-2.0)
+  - Sealed Secrets                   (Apache-2.0)
+  - Cloudflared                      (Apache-2.0)
+  - Kaniko                           (Apache-2.0)
+
+This NOTICE file is informational; it does not relicense any bundled component.

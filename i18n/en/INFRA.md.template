@@ -1,0 +1,186 @@
+# Credential vault (INFRA.md)
+
+> ⚠️ Plaintext secrets. This file is gitignored. Do not commit it.
+> Recommended: copy into a password manager (1Password, Bitwarden) for backup.
+>
+> 🔁 Reuse: when starting a new project, copy connection strings from this
+> file directly. The infrastructure does not need re-installation.
+
+Generated: at bootstrap time
+Root domain: `${ROOT_DOMAIN}`
+Registry plugin: `${REGISTRY_PLUGIN}`
+Git provider plugin: `${GIT_PROVIDER_PLUGIN}`
+
+---
+
+## 0. Quick reference
+
+| Service        | Public host                  | Port  | User              | Password                   |
+|----------------|------------------------------|-------|-------------------|----------------------------|
+| PostgreSQL     | `pg.${ROOT_DOMAIN}`          | 5432  | `${POSTGRES_USER}` | `${POSTGRES_PASSWORD}`     |
+| Redis          | `redis.${ROOT_DOMAIN}`       | 6379  | (none)            | `${REDIS_PASSWORD}`        |
+| RabbitMQ AMQP  | `rabbitmq.${ROOT_DOMAIN}`    | 5672  | `${RABBITMQ_USER}` | `${RABBITMQ_PASSWORD}`     |
+| RabbitMQ UI    | `https://mq.${ROOT_DOMAIN}`  | —     | `${RABBITMQ_USER}` | `${RABBITMQ_PASSWORD}`     |
+| Meilisearch    | `https://search.${ROOT_DOMAIN}` | — | (Bearer)          | `${MEILI_MASTER_KEY}`      |
+| ArgoCD         | `https://argocd.${ROOT_DOMAIN}` | — | `admin`           | (see §6)                   |
+| Registry       | `https://registry.${ROOT_DOMAIN}` | — | (anonymous)       | —                          |
+
+---
+
+## 1. Cloudflare
+
+- Root domain: `${ROOT_DOMAIN}`
+- DNS hosted on: Cloudflare
+- Tunnel token: `${CF_TUNNEL_TOKEN}`
+- Tunnel client: `cloudflared` container in Compose
+- Public Hostname configuration: see `i18n/en/docs/01-cloudflare-setup.md`
+
+## 2. PostgreSQL (with pgvector)
+
+- Public (via cloudflared access tcp): `pg.${ROOT_DOMAIN}:5432`
+- Local on the WSL/Linux/macOS host: `localhost:5432`
+- From inside k8s: `postgres.infra-bridges.svc.cluster.local:5432`
+- User: `${POSTGRES_USER}`
+- Password: `${POSTGRES_PASSWORD}`
+- Default DB: `${POSTGRES_DB}`
+- Enabled extensions: `vector`, `uuid-ossp`, `pg_trgm`
+
+### Connection strings
+
+```
+# From a k8s app
+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres.infra-bridges.svc.cluster.local:5432/${POSTGRES_DB}
+
+# From the host (WSL/Linux/macOS) directly
+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}
+
+# From a remote dev workstation, after `cloudflared access tcp ...`:
+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}
+```
+
+DBeaver / DataGrip — see `i18n/en/docs/04-client-access.md`.
+
+## 3. Redis 7
+
+- Public: `redis.${ROOT_DOMAIN}:6379`
+- Local: `localhost:6379`
+- From k8s: `redis.infra-bridges.svc.cluster.local:6379`
+- Password: `${REDIS_PASSWORD}`
+
+```
+redis://default:${REDIS_PASSWORD}@redis.infra-bridges.svc.cluster.local:6379/0
+redis://default:${REDIS_PASSWORD}@localhost:6379/0
+```
+
+## 4. RabbitMQ 3.13
+
+- AMQP public: `rabbitmq.${ROOT_DOMAIN}:5672`
+- AMQP local: `localhost:5672`
+- AMQP from k8s: `rabbitmq.infra-bridges.svc.cluster.local:5672`
+- Management UI: `https://mq.${ROOT_DOMAIN}`
+- User: `${RABBITMQ_USER}`
+- Password: `${RABBITMQ_PASSWORD}`
+
+```
+amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq.infra-bridges.svc.cluster.local:5672/
+amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@localhost:5672/
+```
+
+## 5. Meilisearch v1.10
+
+- Public: `https://search.${ROOT_DOMAIN}`
+- From k8s: `http://meilisearch.infra-bridges.svc.cluster.local:7700`
+- Master key: `${MEILI_MASTER_KEY}`
+- Mode: `${MEILI_ENV}` (Authorization header required)
+
+```bash
+curl -H "Authorization: Bearer ${MEILI_MASTER_KEY}" https://search.${ROOT_DOMAIN}/health
+```
+
+## 6. ArgoCD
+
+- Web UI: `https://argocd.${ROOT_DOMAIN}`
+- User: `admin`
+- Initial password (or fetch via the command below):
+  ```bash
+  kubectl -n argocd get secret argocd-initial-admin-secret \
+    -o jsonpath='{.data.password}' | base64 -d
+  ```
+  Also written to `.env` as `ARGOCD_ADMIN_PASSWORD`.
+- Recommended: change the password after first login (`argocd account update-password`).
+- Manifest repo: `${MANIFEST_REPO_URL}` (branch `${MANIFEST_REPO_BRANCH}`)
+
+## 7. Tekton CI (webhook + pipeline)
+
+- Webhook URL: `https://hooks.${ROOT_DOMAIN}`
+- Webhook secret: `${GIT_WEBHOOK_SECRET}`
+- Active git provider plugin: `${GIT_PROVIDER_PLUGIN}`
+- Configure your repos to send Push events to the URL above with the secret.
+
+Pipeline behaviour:
+
+```
+1. push   →  EventListener  →  PipelineRun
+2. git-clone        clone the app repo at the pushed commit
+3. kaniko-build     build a Docker image
+4. push-image       push to <REGISTRY_HOST>/<repo>:<short-sha>
+5. update-manifest  patch image tag in the manifest repo, commit, push
+6. ArgoCD sync      → kubectl apply → rolling deploy
+```
+
+Inspect runs:
+
+```bash
+kubectl get pipelinerun -n tekton-pipelines
+kubectl logs -n tekton-pipelines -l tekton.dev/pipelineRun=<run-name> \
+  --all-containers --tail=200
+```
+
+## 8. Docker Registry
+
+- Active plugin: `${REGISTRY_PLUGIN}`
+- Public host: `https://registry.${ROOT_DOMAIN}`
+- In-cluster (containerd-trusted): `registry.${ROOT_DOMAIN}/<image>:<tag>`
+
+## 9. Git provider
+
+- User: `${GIT_USER}`
+- Personal access token: `${GIT_TOKEN}`
+- Manifest repo: `${MANIFEST_REPO_URL}` (branch `${MANIFEST_REPO_BRANCH}`)
+- Token use: ArgoCD HTTPS pull, Tekton clone, update-manifest push
+
+## 10. Host / OS
+
+- outpost dir: `${SK_INFRA_DIR:-~/outpost}`
+- Kubeconfig: `~/.kube/config`
+- k3s data: `/var/lib/rancher/k3s/` (Linux/WSL2)
+- sealed-secrets public key backup: `secrets-backup/sealed-secrets-pub.pem`
+
+### Common commands
+
+```bash
+./status.sh         # snapshot of every layer
+./verify.sh         # detailed health check (use --json for AI agents)
+./upgrade.sh        # pull latest images, restart Compose
+```
+
+---
+
+## 11. Hardening checklist (recommended, not enforced)
+
+- [ ] Add Cloudflare Access (email OTP) in front of `argocd.${ROOT_DOMAIN}` and `mq.${ROOT_DOMAIN}`
+- [ ] Add basic auth or Cloudflare Access in front of `registry.${ROOT_DOMAIN}` if exposing publicly
+- [ ] Change ArgoCD admin password
+- [ ] Backup `secrets-backup/sealed-secrets-pub.pem` to a password manager
+
+## 12. Reuse checklist (when onboarding a new project)
+
+See `i18n/en/docs/05-onboard-project.md`. In short:
+
+1. Create a Gitee/GitHub/GitLab repo with a `Dockerfile`
+2. Add `apps/<name>/{deployment,service,ingress}.yaml` to the manifest repo
+3. Add `argocd-apps/<name>.yaml` to the manifest repo
+4. In the application repo, configure a webhook → `https://hooks.${ROOT_DOMAIN}` with secret `${GIT_WEBHOOK_SECRET}`
+5. `git push origin main` and watch ArgoCD synchronise
+
+Connection strings come from §0 of this file.

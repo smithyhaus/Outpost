@@ -1,0 +1,47 @@
+name: plugin-smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'plugins/**'
+      - 'platform/**'
+      - 'bootstrap.sh'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install gettext + envsubst
+        run: sudo apt-get update && sudo apt-get install -y gettext-base
+
+      - name: Render every plugin manifest with sample env
+        run: |
+          set -euo pipefail
+          source platform/lib/portable.sh
+          export ROOT_DOMAIN=smoke.example.test
+          export GIT_USER=smoke
+          export GIT_TOKEN=smoketoken
+          export GIT_WEBHOOK_SECRET=smokesecret
+          export ALIYUN_ACR_REGISTRY=registry.cn-test.aliyuncs.com
+          export ALIYUN_ACR_NAMESPACE=smoke
+          export ALIYUN_ACR_USER=smoke
+          export ALIYUN_ACR_PASSWORD=smokepass
+
+          mkdir -p /tmp/smoke
+          for d in plugins/*/*/; do
+            mf="$d/manifest.yaml"
+            [ -f "$mf" ] || continue
+            out="/tmp/smoke/$(echo "$d" | tr / _)manifest.yaml"
+            echo "rendering $mf -> $out"
+            render_template "$mf" "$out"
+          done
+
+      - name: Validate rendered YAML with kubeconform
+        uses: instrumenta/kubeconform-action@v1.0.0
+        with:
+          files: /tmp/smoke/
+        continue-on-error: true # interim — some Tekton CRDs not in default schemas

@@ -1,0 +1,122 @@
+# ============================================================================
+# 通用构建 + GitOps 部署 Pipeline
+# 步骤：
+#   1. fetch-source     用 git clone 拉取应用代码
+#   2. build-and-push   用 Kaniko 构建镜像并推到 registry
+#   3. update-manifest  克隆 manifest 仓库，用 yq 改 image tag，commit + push
+#
+# 应用代码仓库约定：根目录有 Dockerfile
+# manifest 仓库约定：apps/<repo-name>/deployment.yaml 存在 image 字段
+# ============================================================================
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: build-and-deploy
+  namespace: tekton-pipelines
+spec:
+  params:
+    - name: repo-url
+      type: string
+      description: 应用代码仓库 HTTPS URL
+    - name: repo-name
+      type: string
+      description: 仓库名（用作 manifest 子目录与 image 名）
+    - name: branch
+      type: string
+      default: main
+    - name: revision
+      type: string
+      description: commit SHA
+    - name: image-tag
+      type: string
+      description: 镜像 tag（短 SHA）
+    - name: registry
+      type: string
+      default: registry.${ROOT_DOMAIN}
+    - name: manifest-repo-url
+      type: string
+      default: ${MANIFEST_REPO_URL}
+    - name: manifest-branch
+      type: string
+      default: ${MANIFEST_REPO_BRANCH}
+
+  workspaces:
+    - name: shared-workspace
+    - name: dockerconfig
+    - name: gitee-creds
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # 1. 拉应用代码
+    # -------------------------------------------------------------------------
+    - name: fetch-source
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+        - name: basic-auth
+          workspace: gitee-creds
+      params:
+        - name: url
+          value: $(params.repo-url)
+        - name: revision
+          value: $(params.revision)
+        - name: subdirectory
+          value: source
+        - name: deleteExisting
+          value: "true"
+
+    # -------------------------------------------------------------------------
+    # 2. Kaniko 构建并推到 registry
+    # -------------------------------------------------------------------------
+    - name: build-and-push
+      runAfter:
+        - fetch-source
+      taskRef:
+        name: kaniko
+        kind: ClusterTask
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+          subPath: source
+        - name: dockerconfig
+          workspace: dockerconfig
+      params:
+        - name: IMAGE
+          value: $(params.registry)/$(params.repo-name):$(params.image-tag)
+        - name: DOCKERFILE
+          value: ./Dockerfile
+        - name: CONTEXT
+          value: ./
+        - name: EXTRA_ARGS
+          value:
+            - "--skip-tls-verify"
+            - "--insecure"
+
+    # -------------------------------------------------------------------------
+    # 3. 拉 manifest 仓库，改 image tag，提交回去
+    # -------------------------------------------------------------------------
+    - name: update-manifest
+      runAfter:
+        - build-and-push
+      taskRef:
+        name: update-manifest-task
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+          subPath: manifest
+        - name: gitee-creds
+          workspace: gitee-creds
+      params:
+        - name: manifest-repo-url
+          value: $(params.manifest-repo-url)
+        - name: manifest-branch
+          value: $(params.manifest-branch)
+        - name: app-name
+          value: $(params.repo-name)
+        - name: image
+          value: $(params.registry)/$(params.repo-name):$(params.image-tag)
+        - name: commit-message
+          value: "chore($(params.repo-name)): bump image to $(params.image-tag)"

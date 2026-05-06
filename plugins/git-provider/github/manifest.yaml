@@ -1,0 +1,67 @@
+# =============================================================================
+# Plugin: git-provider / github
+# -----------------------------------------------------------------------------
+# GitHub Push event:
+#   - body.ref                = "refs/heads/main"
+#   - body.after              = commit SHA
+#   - body.repository.clone_url
+#   - body.repository.name
+#   - body.pusher.name
+#   - X-GitHub-Event: push
+#   - X-Hub-Signature-256: sha256=<HMAC>
+# Tekton's built-in `github` interceptor verifies HMAC for us.
+# =============================================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: github-webhook-secret
+  namespace: tekton-pipelines
+type: Opaque
+stringData:
+  secretToken: ${GIT_WEBHOOK_SECRET}
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerBinding
+metadata:
+  name: github-push-binding
+  namespace: tekton-pipelines
+spec:
+  params:
+    - name: repo-url
+      value: $(body.repository.clone_url)
+    - name: repo-name
+      value: $(body.repository.name)
+    - name: branch
+      value: $(body.ref)
+    - name: revision
+      value: $(body.after)
+    - name: short-revision
+      value: $(body.after)
+    - name: pusher
+      value: $(body.pusher.name)
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: github-trigger-fragment
+  namespace: tekton-pipelines
+data:
+  trigger.yaml: |
+    name: github-push
+    interceptors:
+      - ref: { name: github }
+        params:
+          - name: secretRef
+            value:
+              secretName: github-webhook-secret
+              secretKey: secretToken
+          - name: eventTypes
+            value: ["push"]
+      - ref: { name: cel }
+        params:
+          - name: filter
+            value: "body.ref.startsWith('refs/heads/') && body.after != '0000000000000000000000000000000000000000'"
+    bindings:
+      - ref: github-push-binding
+    template:
+      ref: build-template

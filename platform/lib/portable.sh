@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Outpost / platform/lib/portable.sh
+# -----------------------------------------------------------------------------
+# Cross-platform helpers used by bootstrap.sh, verify.sh and platform/<os>.sh.
+# Source-only — never executed directly.
+#
+# Responsibilities:
+#   - detect_os                  → exports SK_OS in {macos, linux, wsl2}
+#   - render_template            → envsubst with strict ${VAR} residue check
+#   - portable_sed_i             → in-place sed across BSD (macOS) and GNU
+#   - portable_stat_perm         → file mode ("644") across BSD and GNU
+#   - require_cmd                → fail fast with helpful message
+#   - log / ok / warn / err / phase   → consistent UX
+# =============================================================================
+
+# ---- ANSI colour helpers (NO_COLOR-aware) -----------------------------------
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+  SK_C_RESET='\033[0m'; SK_C_BOLD='\033[1m'
+  SK_C_BLUE='\033[34m'; SK_C_GREEN='\033[32m'
+  SK_C_YELLOW='\033[33m'; SK_C_RED='\033[31m'; SK_C_DIM='\033[2m'
+else
+  SK_C_RESET=''; SK_C_BOLD=''
+  SK_C_BLUE=''; SK_C_GREEN=''
+  SK_C_YELLOW=''; SK_C_RED=''; SK_C_DIM=''
+fi
+
+log()   { echo -e "${SK_C_BLUE}${SK_C_BOLD}[INFO]${SK_C_RESET} $*"; }
+ok()    { echo -e "${SK_C_GREEN}${SK_C_BOLD}[ OK ]${SK_C_RESET} $*"; }
+warn()  { echo -e "${SK_C_YELLOW}${SK_C_BOLD}[WARN]${SK_C_RESET} $*"; }
+err()   { echo -e "${SK_C_RED}${SK_C_BOLD}[ERR ]${SK_C_RESET} $*" >&2; }
+phase() { echo -e "\n${SK_C_BOLD}═══════ $* ═══════${SK_C_RESET}\n"; }
+
+# ---- OS detection -----------------------------------------------------------
+# Sets SK_OS to one of: macos | linux | wsl2
+# WSL2 is a Linux kernel running under Windows; we detect it from /proc/version.
+detect_os() {
+  local uname_s
+  uname_s=$(uname -s 2>/dev/null || echo "unknown")
+  case "$uname_s" in
+    Darwin)
+      SK_OS="macos"
+      ;;
+    Linux)
+      if [[ -r /proc/version ]] && grep -qiE '(microsoft|wsl)' /proc/version 2>/dev/null; then
+        SK_OS="wsl2"
+      else
+        SK_OS="linux"
+      fi
+      ;;
+    *)
+      err "Unsupported OS: $uname_s"
+      err "Outpost supports macOS, Linux, and WSL2 (Win11+)"
+      return 1
+      ;;
+  esac
+  export SK_OS
+}
+
+# ---- Portable sed -i --------------------------------------------------------
+# BSD sed (macOS) requires `-i ''`; GNU sed accepts `-i` with no arg.
+# Usage: portable_sed_i 's#A#B#g' file
+portable_sed_i() {
+  local expr="$1"; shift
+  if [[ "${SK_OS:-}" == "macos" ]]; then
+    sed -i '' "$expr" "$@"
+  else
+    sed -i "$expr" "$@"
+  fi
+}
+
+# ---- Portable stat (file permissions) ---------------------------------------
+# Returns the octal mode (e.g. "644"). Empty string on failure.
+portable_stat_perm() {
+  local f="$1"
+  if [[ "${SK_OS:-}" == "macos" ]]; then
+    stat -f '%Lp' "$f" 2>/dev/null || echo ""
+  else
+    stat -c '%a' "$f" 2>/dev/null || echo ""
+  fi
+}
+
+# ---- Portable readlink -f ---------------------------------------------------
+# BSD readlink does not support -f; fall back to a python/perl one-liner.
+portable_realpath() {
+  local target="$1"
+  if command -v realpath >/dev/null 2>&1; then
+    realpath "$target"
+  elif [[ "${SK_OS:-}" == "macos" ]]; then
+    perl -MCwd -e 'print Cwd::abs_path(shift)' "$target"
+  else
+    readlink -f "$target"
+  fi
+}
+
+# ---- Required-command helper ------------------------------------------------
+require_cmd() {
+  local missing=0 c
+  for c in "$@"; do
+    if ! command -v "$c" >/dev/null 2>&1; then
+      err "Missing required command: $c"
+      missing=1
+    fi
+  done
+  [[ "$missing" -eq 0 ]] || return 1
+}
+
+# ---- render_template (CRITICAL — anti-silent-failure) -----------------------
+# Strict template renderer with ${VAR} residue detection.
+#
+# WHY this matters:
+#   envsubst silently emits empty strings for unset variables. Manifests then
+#   pass `kubectl apply` validation but reference empty hostnames/secrets,
+#   causing puzzling runtime breakage.
+#
+# Contract:
+#   render_template <input> <output>
+#     - Renders <input> via envsubst into <output>.
+#     - If any ${...} placeholder remains in <output>, deletes it and exits 1.
+#     - Returns 0 on success.
+#
+# Notes:
+#   - Use $$VAR in templates if you need a literal "$VAR" in output (envsubst
+#     does NOT interpret double-dollar escaping; instead, list the substitutable
+#     vars explicitly with the second-arg form below).
+render_template() {
+  local src="$1" dst="$2"
+  if [[ ! -r "$src" ]]; then
+    err "render_template: source not readable: $src"
+    return 1
+  fi
+
+  if ! command -v envsubst >/dev/null 2>&1; then
+    err "render_template: envsubst not found (install gettext/gettext-base)"
+    return 1
+  fi
+
+  # Substitute only declared variables (envsubst with no args substitutes
+  # every \${X} in scope, which is fine here; see anti-silent-failure check
+  # below).
+  envsubst < "$src" > "$dst"
+
+  # Anti-silent-failure: any unsubstituted placeholder is a fatal config error.
+  # Match ${SOMETHING}; ignore $$ literal escapes that user may have written.
+  if grep -qE '\$\{[A-Za-z_][A-Za-z0-9_]*\}' "$dst"; then
+    local residues
+    residues=$(grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*\}' "$dst" | sort -u | tr '\n' ' ')
+    err "render_template: unresolved placeholders in $dst: $residues"
+    err "Hint: ensure these variables are exported in the current shell."
+    rm -f "$dst"
+    return 1
+  fi
+  return 0
+}
+
+# ---- render_apply -----------------------------------------------------------
+# render a template + kubectl apply. Used by bootstrap.sh in many places to
+# replace the historical multi-sed-pipe pattern.
+render_apply() {
+  local src="$1"
+  local tmp
+  tmp=$(mktemp)
+  trap "rm -f '$tmp'" RETURN
+  if ! render_template "$src" "$tmp"; then
+    return 1
+  fi
+  kubectl apply -f "$tmp"
+}
+
+# ---- Confirmation helper ----------------------------------------------------
+confirm() {
+  local prompt="${1:-Continue?}"
+  local ans=""
+  read -r -p "$prompt [y/N] " ans
+  [[ "$ans" =~ ^[Yy]$ ]]
+}
+
+# ---- Random password generator ----------------------------------------------
+gen_password() {
+  # 32 chars, URL-safe alphanumeric subset
+  openssl rand -base64 48 | tr -d '=+/\n' | cut -c1-32
+}

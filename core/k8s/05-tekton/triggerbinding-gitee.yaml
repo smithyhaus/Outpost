@@ -1,0 +1,31 @@
+# ============================================================================
+# TriggerBinding — 从 Gitee Webhook payload 提取字段
+# Gitee Push Hook payload 关键字段（与 GitHub 不同）：
+#   - body.ref                = "refs/heads/main"
+#   - body.after              = commit SHA
+#   - body.repository.name    = 仓库名
+#   - body.repository.git_url = git@gitee.com:user/repo.git
+#   - body.repository.url     = https://gitee.com/user/repo
+# Header:
+#   - X-Git-Oschina-Event: Push Hook
+#   - X-Gitee-Token: <secret>  （由 Gitee webhook 配置中的 Secret 字段填）
+# ============================================================================
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerBinding
+metadata:
+  name: gitee-push-binding
+  namespace: tekton-pipelines
+spec:
+  params:
+    - name: repo-url
+      value: $(body.repository.git_http_url)
+    - name: repo-name
+      value: $(body.repository.name)
+    - name: branch
+      value: $(body.ref)
+    - name: revision
+      value: $(body.after)
+    - name: short-revision
+      value: $(body.after)
+    - name: pusher
+      value: $(body.user_name)

@@ -1,0 +1,18 @@
+kind: registry
+name: aliyun-acr
+description: |
+  Aliyun Container Registry (ACR). External managed registry — no in-cluster
+  pod runs. Requires an ACR namespace, a registry user, and a password.
+required_env:
+  - ALIYUN_ACR_REGISTRY
+  - ALIYUN_ACR_NAMESPACE
+  - ALIYUN_ACR_USER
+  - ALIYUN_ACR_PASSWORD
+optional_env: []
+provides:
+  - registry-host: ${ALIYUN_ACR_REGISTRY}/${ALIYUN_ACR_NAMESPACE}
+  - in-cluster: same (egress to public Aliyun endpoint)
+caveats:
+  - Requires an Alibaba Cloud account with ACR enabled.
+  - Free Personal edition has rate limits; Enterprise is paid.
+  - Image push from Tekton uses ALIYUN_ACR_USER / ALIYUN_ACR_PASSWORD.

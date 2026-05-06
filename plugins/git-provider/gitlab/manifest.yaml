@@ -1,0 +1,57 @@
+# =============================================================================
+# Plugin: git-provider / gitlab
+# -----------------------------------------------------------------------------
+# GitLab Push Hook event:
+#   - body.ref                 = "refs/heads/main"
+#   - body.after               = commit SHA
+#   - body.repository.git_http_url
+#   - body.repository.name
+#   - body.user_username
+#   - X-Gitlab-Event: Push Hook
+#   - X-Gitlab-Token: <plain shared secret>
+# =============================================================================
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerBinding
+metadata:
+  name: gitlab-push-binding
+  namespace: tekton-pipelines
+spec:
+  params:
+    - name: repo-url
+      value: $(body.repository.git_http_url)
+    - name: repo-name
+      value: $(body.repository.name)
+    - name: branch
+      value: $(body.ref)
+    - name: revision
+      value: $(body.after)
+    - name: short-revision
+      value: $(body.after)
+    - name: pusher
+      value: $(body.user_username)
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gitlab-trigger-fragment
+  namespace: tekton-pipelines
+data:
+  trigger.yaml: |
+    name: gitlab-push
+    interceptors:
+      - ref: { name: cel }
+        params:
+          - name: filter
+            value: "header.match('X-Gitlab-Event', 'Push Hook')"
+      - ref: { name: cel }
+        params:
+          - name: filter
+            value: "header['X-Gitlab-Token'][0] == '${GIT_WEBHOOK_SECRET}'"
+      - ref: { name: cel }
+        params:
+          - name: filter
+            value: "body.ref.startsWith('refs/heads/') && body.after != '0000000000000000000000000000000000000000'"
+    bindings:
+      - ref: gitlab-push-binding
+    template:
+      ref: build-template

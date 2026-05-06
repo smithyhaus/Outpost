@@ -1,0 +1,31 @@
+# ============================================================================
+# k3s 内置 Traefik 改用 NodePort，让 Compose 的 cloudflared 通过
+# host.docker.internal:30080 访问到 k3s 集群
+#
+# 放置路径（k3s 自动加载）:
+#   /var/lib/rancher/k3s/server/manifests/traefik-config.yaml
+#
+# bootstrap.sh 会负责复制此文件到目标位置
+# ============================================================================
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    service:
+      type: NodePort
+    ports:
+      web:
+        nodePort: 30080
+        # 关闭 80→443 自动跳转（TLS 在 CF 边缘已处理）
+        redirectTo: ""
+      websecure:
+        nodePort: 30443
+        tls:
+          enabled: false
+    additionalArguments:
+      # 允许 Traefik 信任 cloudflared 转发来的真实 IP
+      - "--entryPoints.web.forwardedHeaders.trustedIPs=127.0.0.1/32,172.16.0.0/12,10.0.0.0/8"
+      - "--entryPoints.web.proxyProtocol.trustedIPs=127.0.0.1/32,172.16.0.0/12,10.0.0.0/8"

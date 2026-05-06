@@ -1,0 +1,22 @@
+# ============================================================================
+# ArgoCD Web UI 公网入口
+# CF 边缘 → cloudflared → Traefik(30080) → argocd-server
+#
+# argocd-server 默认 8080 (HTTP) / 443 (HTTPS, self-signed)。我们用 HTTP
+# 接入（TLS 在 CF 已终止），所以需要禁用 ArgoCD server 自带的 TLS：
+# 见 bootstrap.sh 中 `argocd-cmd-params-cm` 的 `server.insecure: "true"` 配置
+# ============================================================================
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: argocd-server
+  namespace: argocd
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`argocd.${ROOT_DOMAIN}`)
+      kind: Rule
+      services:
+        - name: argocd-server
+          port: 80

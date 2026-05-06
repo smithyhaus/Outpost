@@ -1,0 +1,32 @@
+# =============================================================================
+# Caddy — internal HTTP reverse proxy
+# -----------------------------------------------------------------------------
+# - cloudflared forwards HTTP traffic for data UI subdomains here
+# - Caddy routes by Host header
+# - TLS is terminated at the Cloudflare edge — internal traffic is plain HTTP
+# - {$ROOT_DOMAIN} is substituted from the container env var (set in compose)
+# =============================================================================
+
+{
+    auto_https off
+    admin off
+    servers {
+        trusted_proxies static private_ranges
+    }
+}
+
+:80 {
+    @search host search.{$ROOT_DOMAIN}
+    handle @search {
+        reverse_proxy meilisearch:7700
+    }
+
+    @mq host mq.{$ROOT_DOMAIN}
+    handle @mq {
+        reverse_proxy rabbitmq:15672
+    }
+
+    handle {
+        respond "Unknown host: {host}" 404
+    }
+}

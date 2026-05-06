@@ -1,0 +1,59 @@
+# =============================================================================
+# Plugin: git-provider / gitee
+# -----------------------------------------------------------------------------
+# Tekton TriggerBinding + EventListener Trigger for Gitee Push Hook.
+# Gitee fields:
+#   - body.ref                 = "refs/heads/main"
+#   - body.after               = commit SHA
+#   - body.repository.git_http_url
+#   - body.repository.name
+#   - body.user_name
+#   - X-Git-Oschina-Event: Push Hook
+#   - X-Gitee-Token: <plain shared secret>
+# =============================================================================
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerBinding
+metadata:
+  name: gitee-push-binding
+  namespace: tekton-pipelines
+spec:
+  params:
+    - name: repo-url
+      value: $(body.repository.git_http_url)
+    - name: repo-name
+      value: $(body.repository.name)
+    - name: branch
+      value: $(body.ref)
+    - name: revision
+      value: $(body.after)
+    - name: short-revision
+      value: $(body.after)
+    - name: pusher
+      value: $(body.user_name)
+---
+# Trigger fragment — merged into the EventListener by bootstrap.sh
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gitee-trigger-fragment
+  namespace: tekton-pipelines
+data:
+  trigger.yaml: |
+    name: gitee-push
+    interceptors:
+      - ref: { name: cel }
+        params:
+          - name: filter
+            value: "header.match('X-Git-Oschina-Event', 'Push Hook')"
+      - ref: { name: cel }
+        params:
+          - name: filter
+            value: "header['X-Gitee-Token'][0] == '${GIT_WEBHOOK_SECRET}'"
+      - ref: { name: cel }
+        params:
+          - name: filter
+            value: "body.ref.startsWith('refs/heads/') && body.after != '0000000000000000000000000000000000000000'"
+    bindings:
+      - ref: gitee-push-binding
+    template:
+      ref: build-template

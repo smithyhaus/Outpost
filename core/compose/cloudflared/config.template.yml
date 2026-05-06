@@ -1,0 +1,44 @@
+# ============================================================================
+# Cloudflare Tunnel — 推荐用 Dashboard 配置 Public Hostname（更简单）
+# 此文件仅作参考，列出所有需要在 Dashboard 添加的 hostname → service 映射。
+#
+# 如选择 Dashboard 模式：忽略此文件，docker-compose.yml 已用 token 模式。
+# 如选择本地配置文件模式：去掉 docker-compose.yml 中的 --token，
+# 改为挂载此文件并用 tunnel run <NAME>。
+#
+# Dashboard 操作步骤见 docs/01-cloudflare-setup.md
+# ============================================================================
+
+tunnel: <YOUR_TUNNEL_ID>
+credentials-file: /etc/cloudflared/<TUNNEL_ID>.json
+
+ingress:
+  # ---- HTTP（经 caddy 内部路由）----
+  - hostname: search.example.com
+    service: http://caddy:80
+  - hostname: mq.example.com
+    service: http://caddy:80
+
+  # ---- HTTP（经 k3s Traefik，NodePort 30080）----
+  - hostname: argocd.example.com
+    service: http://host.docker.internal:30080
+  - hostname: hooks.example.com
+    service: http://host.docker.internal:30080
+  - hostname: registry.example.com
+    service: http://host.docker.internal:30080
+    originRequest:
+      httpHostHeader: registry.example.com
+  # 应用通配符
+  - hostname: "*.apps.example.com"
+    service: http://host.docker.internal:30080
+
+  # ---- TCP ----
+  - hostname: pg.example.com
+    service: tcp://postgres:5432
+  - hostname: redis.example.com
+    service: tcp://redis:6379
+  - hostname: rabbitmq.example.com
+    service: tcp://rabbitmq:5672
+
+  # ---- 兜底 ----
+  - service: http_status:404

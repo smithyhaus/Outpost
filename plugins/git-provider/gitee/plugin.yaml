@@ -1,0 +1,14 @@
+kind: git-provider
+name: gitee
+description: |
+  Gitee webhook -> Tekton EventListener trigger.
+  Validates X-Gitee-Token header against GIT_WEBHOOK_SECRET (plain compare).
+required_env:
+  - GIT_USER
+  - GIT_TOKEN
+  - GIT_WEBHOOK_SECRET
+provides:
+  - webhook-url: https://hooks.${ROOT_DOMAIN}
+  - signature-mode: plain-token (X-Gitee-Token header equality)
+caveats:
+  - Plain-token signature is weaker than HMAC; rotate GIT_WEBHOOK_SECRET if leaked.

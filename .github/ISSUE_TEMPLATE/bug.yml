@@ -1,0 +1,66 @@
+name: Bug report
+description: Something is broken or behaves unexpectedly
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Before filing, please run `bash verify.sh --json`
+        and paste the relevant subset of the output below.
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      description: e.g. macOS 14.5 / Ubuntu 24.04 / Win11 + WSL2 Ubuntu 22.04
+      placeholder: "macOS 14.5 (arm64)"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Outpost version
+      description: Output of `git -C <outpost dir> describe --tags --always`
+      placeholder: "v1.0.0 / commit abc1234"
+    validations:
+      required: true
+  - type: dropdown
+    id: registry
+    attributes:
+      label: Registry plugin
+      options: [self-hosted, aliyun-acr, other]
+    validations:
+      required: true
+  - type: dropdown
+    id: gitprovider
+    attributes:
+      label: Git provider plugin
+      options: [gitee, github, gitlab, other]
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+      description: What you expected to happen
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+      description: What actually happened (paste error output verbatim)
+    validations:
+      required: true
+  - type: textarea
+    id: verify
+    attributes:
+      label: verify.sh --json output
+      description: Paste the relevant FAIL / WARN entries (redact secrets!)
+      render: json
+    validations:
+      required: false
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Anything else worth mentioning (recent changes, environment quirks)

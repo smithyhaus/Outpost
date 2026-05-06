@@ -1,0 +1,26 @@
+# ============================================================================
+# 此文件应当放在 manifest 仓库的 argocd-apps/demo-app.yaml
+# App-of-Apps 模式下，root Application 会自动创建本 Application
+# ============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: demo-app
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://gitee.com/<your-user>/infras-manifests.git
+    targetRevision: main
+    path: apps/demo-app
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: apps
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

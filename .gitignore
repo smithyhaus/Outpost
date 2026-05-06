@@ -1,0 +1,32 @@
+# Secrets — must never be committed
+.env
+.env.local
+*.local
+INFRA.md
+INFRA.zh-CN.md
+sealed-secrets-key.pem
+*.pem
+*.key
+secrets-backup/
+
+# Local state
+volumes/
+.kubeconfig
+kubeconfig
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.vscode/
+.idea/
+
+# Logs
+*.log
+infra-autostart.log
+
+# Test artifacts
+tests/.coverage
+tests/output/
+.bats-tmp/

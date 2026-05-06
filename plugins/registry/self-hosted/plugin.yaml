@@ -1,0 +1,14 @@
+kind: registry
+name: self-hosted
+description: |
+  In-cluster Docker Registry v2. No external dependency, anonymous access.
+  Recommended default for personal / dev environments.
+required_env: []
+optional_env:
+  - REGISTRY_STORAGE_GB
+provides:
+  - registry-host: registry.${ROOT_DOMAIN}
+  - in-cluster: docker-registry.registry.svc.cluster.local:5000
+caveats:
+  - Anonymous (no auth). Not suitable for multi-tenant / public exposure.
+  - 50Gi PVC by default; tune REGISTRY_STORAGE_GB to override.

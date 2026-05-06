@@ -1,0 +1,15 @@
+# 应用域名: demo-app.apps.<ROOT_DOMAIN>
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: demo-app
+  namespace: apps
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`demo-app.apps.example.com`)
+      kind: Rule
+      services:
+        - name: demo-app
+          port: 80

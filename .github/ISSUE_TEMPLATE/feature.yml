@@ -1,0 +1,44 @@
+name: Feature request
+description: Suggest an improvement, plugin, or new capability
+labels: ["enhancement", "triage"]
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind of request
+      options:
+        - New plugin (registry / git-provider / tunnel / other)
+        - Platform support (new OS / distro)
+        - i18n (new language pack)
+        - Documentation
+        - Tooling / CI
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What pain are you trying to solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Concrete shape of the change you'd like
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What else did you weigh and why didn't they work?
+    validations:
+      required: false
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Are you willing to contribute?
+      options:
+        - label: I'd be happy to send a PR if the design is approved

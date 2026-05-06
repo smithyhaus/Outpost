@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/smithyhaus/outpost/blob/main/tests/schema/verify-output.schema.json",
+  "title": "Outpost verify.sh output",
+  "description": "Schema for the JSON output of verify.sh --json. Stable across patch and minor versions; bumps schema_version on breaking changes.",
+  "type": "object",
+  "required": ["schema_version", "summary", "checks"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": ["1"],
+      "description": "Schema major version. Bumps on breaking change."
+    },
+    "summary": {
+      "type": "object",
+      "required": ["pass", "warn", "fail", "os"],
+      "additionalProperties": false,
+      "properties": {
+        "pass": {"type": "integer", "minimum": 0},
+        "warn": {"type": "integer", "minimum": 0},
+        "fail": {"type": "integer", "minimum": 0},
+        "os":   {"type": "string", "enum": ["macos", "linux", "wsl2", "unknown"]}
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["status", "id", "detail"],
+        "additionalProperties": false,
+        "properties": {
+          "status": {"type": "string", "enum": ["PASS", "WARN", "FAIL"]},
+          "id":     {"type": "string", "pattern": "^[a-z][a-z0-9_.-]*$"},
+          "detail": {"type": "string"}
+        }
+      }
+    }
+  }
+}

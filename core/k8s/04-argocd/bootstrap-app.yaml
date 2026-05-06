@@ -1,0 +1,31 @@
+# ============================================================================
+# App-of-Apps 模式 root Application
+# ArgoCD 监听 manifest 仓库的 argocd-apps/ 目录，自动创建/同步所有子 Application
+#
+# bootstrap.sh 会先将 ${MANIFEST_REPO_URL} / ${MANIFEST_REPO_BRANCH} 替换为
+# .env 中的真实值再 apply
+# ============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: ${MANIFEST_REPO_URL}
+    targetRevision: ${MANIFEST_REPO_BRANCH}
+    path: argocd-apps
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

@@ -1,0 +1,74 @@
+# ============================================================================
+# 自定义 Task: 更新 manifest 仓库的 image tag
+# 步骤：
+#   1. git clone manifest 仓库
+#   2. yq 修改 apps/<app>/deployment.yaml 的 image 字段
+#   3. git commit + push
+# ============================================================================
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: update-manifest-task
+  namespace: tekton-pipelines
+spec:
+  params:
+    - name: manifest-repo-url
+      type: string
+    - name: manifest-branch
+      type: string
+      default: main
+    - name: app-name
+      type: string
+    - name: image
+      type: string
+    - name: commit-message
+      type: string
+
+  workspaces:
+    - name: source
+    - name: gitee-creds
+      description: 包含 .git-credentials（HTTPS 用户名/token）
+
+  steps:
+    - name: clone-update-push
+      image: alpine/git:2.43.0
+      script: |
+        #!/bin/sh
+        set -eu
+
+        # 安装 yq（轻量、无依赖）
+        apk add --no-cache curl ca-certificates
+        curl -sSL https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 \
+          -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq
+
+        # 配置 Git credential
+        cp $(workspaces.gitee-creds.path)/.git-credentials ~/.git-credentials
+        git config --global credential.helper "store"
+        git config --global user.email "tekton-ci@local"
+        git config --global user.name "Tekton CI"
+
+        # 克隆 manifest 仓库
+        cd $(workspaces.source.path)
+        git clone --depth 1 --branch $(params.manifest-branch) \
+          $(params.manifest-repo-url) repo
+        cd repo
+
+        # 修改 deployment 的 image 字段
+        DEPLOY_FILE="apps/$(params.app-name)/deployment.yaml"
+        if [ ! -f "$DEPLOY_FILE" ]; then
+          echo "ERROR: $DEPLOY_FILE not found in manifest repo"
+          echo "请先在 manifest 仓库添加 apps/$(params.app-name)/ 目录与 deployment.yaml"
+          exit 1
+        fi
+
+        yq -i '.spec.template.spec.containers[0].image = "$(params.image)"' "$DEPLOY_FILE"
+
+        # 仅当有变更时提交
+        if git diff --quiet; then
+          echo "No changes in manifest. Skipping commit."
+          exit 0
+        fi
+
+        git add "$DEPLOY_FILE"
+        git commit -m "$(params.commit-message)"
+        git push origin $(params.manifest-branch)

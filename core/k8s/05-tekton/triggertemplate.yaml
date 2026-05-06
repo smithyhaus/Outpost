@@ -1,0 +1,60 @@
+# ============================================================================
+# TriggerTemplate — 接收 binding 提取的参数，创建 PipelineRun
+# ============================================================================
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: build-template
+  namespace: tekton-pipelines
+spec:
+  params:
+    - name: repo-url
+      description: Gitee 仓库 HTTPS URL
+    - name: repo-name
+      description: 仓库名（用于 image tag、manifest 路径）
+    - name: branch
+      description: 触发的分支
+    - name: revision
+      description: commit SHA
+    - name: short-revision
+      description: 短 SHA（用作 image tag）
+    - name: pusher
+      description: 推送人
+
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1beta1
+      kind: PipelineRun
+      metadata:
+        generateName: build-$(tt.params.repo-name)-
+        namespace: tekton-pipelines
+      spec:
+        serviceAccountName: tekton-triggers-sa
+        pipelineRef:
+          name: build-and-deploy
+        params:
+          - name: repo-url
+            value: $(tt.params.repo-url)
+          - name: repo-name
+            value: $(tt.params.repo-name)
+          - name: branch
+            value: $(tt.params.branch)
+          - name: revision
+            value: $(tt.params.revision)
+          - name: image-tag
+            value: $(tt.params.short-revision)
+        workspaces:
+          - name: shared-workspace
+            volumeClaimTemplate:
+              spec:
+                accessModes:
+                  - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 5Gi
+                storageClassName: local-path
+          - name: dockerconfig
+            secret:
+              secretName: registry-credentials
+          - name: gitee-creds
+            secret:
+              secretName: gitee-credentials

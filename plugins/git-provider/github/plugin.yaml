@@ -1,0 +1,15 @@
+kind: git-provider
+name: github
+description: |
+  GitHub webhook -> Tekton EventListener trigger.
+  Validates X-Hub-Signature-256 (HMAC-SHA256) using GIT_WEBHOOK_SECRET.
+required_env:
+  - GIT_USER
+  - GIT_TOKEN
+  - GIT_WEBHOOK_SECRET
+provides:
+  - webhook-url: https://hooks.${ROOT_DOMAIN}
+  - signature-mode: HMAC-SHA256 (X-Hub-Signature-256)
+caveats:
+  - Uses Tekton's GitHub interceptor (built-in) for signature verification.
+  - Only push events are routed; PR events are out of scope (TODO v0.2).

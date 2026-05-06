@@ -1,0 +1,56 @@
+# Outpost
+
+> Cross-platform self-hosted dev backend — Postgres / Redis / RabbitMQ /
+> Meilisearch + Tekton + ArgoCD GitOps, exposed via Cloudflare Tunnel.
+> Two layers (Docker Compose + k3s), plugin-driven, AI-verifiable.
+
+Outpost gives a single developer (or a small team) the same backend
+substrate every project needs — managed databases, message broker, search,
+container registry, CI runner, GitOps controller — running on their own
+machine and exposed on their own domain. It targets macOS, Linux, and
+Windows (WSL2). One `bash bootstrap.sh` brings it all up.
+
+## Project map
+
+- [README](README.md): top-level introduction, quick start, why-use-it
+- [README.zh-CN](README.zh-CN.md): Chinese version of the README
+- [ARCHITECTURE](ARCHITECTURE.md): static system diagram, layer split, bridge model
+- [SKILL](SKILL.md): operating skill for AI agents (Claude format), with invariants and task playbooks
+- [TODOS](TODOS.md): explicit roadmap (v0.2/v0.3 deferred items)
+- [CONTRIBUTING](CONTRIBUTING.md): how to add plugins, translate docs, run tests
+- [CODE_OF_CONDUCT](CODE_OF_CONDUCT.md)
+- [SECURITY](SECURITY.md): vulnerability disclosure policy
+- [LICENSE](LICENSE): Apache 2.0
+
+## How it works (concrete)
+
+- [core/compose/](core/compose/): docker-compose.yml + Caddyfile + cloudflared
+- [core/k8s/](core/k8s/): k3s manifests (namespaces, traefik config, ArgoCD,
+  Tekton, ExternalName bridge services)
+- [platform/](platform/): per-OS bootstrap hooks (macos.sh, linux.sh, wsl2.sh)
+- [platform/lib/portable.sh](platform/lib/portable.sh): cross-platform shell
+  helpers including `render_template` (envsubst with anti-silent-failure
+  ${VAR} residue check)
+- [plugins/registry/](plugins/registry/): pluggable Docker registry backend
+  (built-in: self-hosted, aliyun-acr)
+- [plugins/git-provider/](plugins/git-provider/): pluggable Git webhook
+  source (built-in: gitee, github, gitlab)
+- [bootstrap.sh](bootstrap.sh): single-command installer that detects OS,
+  selects plugins, generates secrets, brings up both layers
+- [verify.sh](verify.sh): structured health check (`--json` for AI agents)
+
+## AI-agent tools
+
+- [verify.sh](verify.sh) `--json`: parseable health output
+- [tests/schema/verify-output.schema.json](tests/schema/verify-output.schema.json): JSON schema for verify output (locked across versions)
+- [i18n/en/docs/07-ai-verification.md](i18n/en/docs/07-ai-verification.md): step-by-step verification playbook
+- [SKILL.md](SKILL.md): full operating skill with file pointer map and common-task playbook
+
+## Examples
+
+- [examples/demo-app/](examples/demo-app/): minimal app + manifest layout for the GitOps pipeline
+
+## Optional
+
+- [i18n/en/docs/](i18n/en/docs/): English operations docs (Cloudflare setup, WSL config, troubleshooting, etc.)
+- [i18n/zh-CN/docs/](i18n/zh-CN/docs/): Chinese operations docs

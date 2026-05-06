@@ -1,0 +1,15 @@
+kind: git-provider
+name: gitlab
+description: |
+  GitLab webhook -> Tekton EventListener trigger.
+  Validates X-Gitlab-Token header against GIT_WEBHOOK_SECRET (plain compare).
+required_env:
+  - GIT_USER
+  - GIT_TOKEN
+  - GIT_WEBHOOK_SECRET
+provides:
+  - webhook-url: https://hooks.${ROOT_DOMAIN}
+  - signature-mode: plain-token (X-Gitlab-Token header equality)
+caveats:
+  - GitLab does not offer HMAC for webhooks — plain shared secret is the only mode.
+  - Both gitlab.com and self-hosted CE/EE are supported.
