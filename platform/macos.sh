@@ -52,7 +52,20 @@ sk_install_k3s() {
 sk_setup_autostart() {
   local agent="$HOME/Library/LaunchAgents/io.smithyhaus.outpost.compose.plist"
   local infra_dir="${SK_INFRA_DIR:-$HOME/outpost}"
+  # In full mode the cloudflared+caddy services are gated behind --profile tunnel.
+  # In local mode they don't exist; including --profile is a harmless no-op.
+  local profile_flag="--profile tunnel"
+  if [[ "${OUTPOST_MODE:-}" == "local" ]]; then
+    profile_flag=""
+  fi
+
   mkdir -p "$(dirname "$agent")"
+  # CRITICAL: LaunchAgents do NOT inherit the user's shell environment.
+  # Without --env-file pointing at the canonical .env (which lives at the
+  # infra root, not next to the compose file), every ${VAR} in
+  # docker-compose.yml expands to "" and containers get recreated with
+  # blank env vars (postgres unhealthy, redis "wrong number of arguments",
+  # meilisearch "--env required", etc.).
   cat > "$agent" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>
@@ -61,7 +74,7 @@ sk_setup_autostart() {
   <array>
     <string>/bin/bash</string>
     <string>-lc</string>
-    <string>cd ${infra_dir}/core/compose && /usr/local/bin/docker compose up -d</string>
+    <string>/usr/local/bin/docker compose --env-file ${infra_dir}/.env -f ${infra_dir}/core/compose/docker-compose.yml ${profile_flag} up -d</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>StandardOutPath</key><string>/tmp/outpost.log</string>

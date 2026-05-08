@@ -15,7 +15,10 @@ metadata:
   namespace: tekton-pipelines
 rules:
   - apiGroups: ["triggers.tekton.dev"]
-    resources: ["eventlisteners", "triggerbindings", "triggertemplates", "triggers"]
+    # `interceptors` (namespace-scoped) added in Tekton Triggers v0.34+ —
+    # without it the EventListener pod crashloops with:
+    #   "interceptors.triggers.tekton.dev is forbidden ... cannot list ..."
+    resources: ["eventlisteners", "triggerbindings", "triggertemplates", "triggers", "interceptors"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["configmaps", "secrets"]

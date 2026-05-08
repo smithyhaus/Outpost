@@ -14,7 +14,11 @@ read -r -p "Type 'YES_DESTROY_EVERYTHING' to confirm: " ans
 [[ "$ans" != "YES_DESTROY_EVERYTHING" ]] && { echo "Cancelled."; exit 0; }
 
 echo "Stopping Compose..."
-(cd core/compose && docker compose down -v) || true
+# .env lives at infra root; pass --env-file explicitly so the tunnel-profile
+# services (cloudflared, caddy) and their named volumes are also torn down.
+ENV_FLAG=""
+[[ -f .env ]] && ENV_FLAG="--env-file=.env"
+docker compose $ENV_FLAG -f core/compose/docker-compose.yml --profile tunnel down -v || true
 
 echo "Uninstalling k3s..."
 if [[ -x /usr/local/bin/k3s-uninstall.sh ]]; then

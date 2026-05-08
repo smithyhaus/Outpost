@@ -15,7 +15,9 @@ fi
 echo "═══ Mode: $OUTPOST_MODE ═══"
 echo ""
 echo "═══ Compose ═══"
-docker compose -f core/compose/docker-compose.yml ps 2>/dev/null || echo "(compose not running)"
+# Use --env-file so we don't emit "variable not set" warnings; the .env
+# lives at the infra root, not next to docker-compose.yml.
+docker compose --env-file .env -f core/compose/docker-compose.yml ps 2>/dev/null || echo "(compose not running)"
 
 if [[ "$OUTPOST_MODE" != "full" ]]; then
   exit 0
