@@ -5,6 +5,32 @@ a future contributor to pick it up cold.
 
 ---
 
+## Replace deprecated kaniko catalog Task
+
+**What:** `core/k8s/05-tekton/pipeline-build.yaml` references the
+upstream Tekton catalog `kaniko` Task (currently version 0.7). That
+Task is marked `tekton.dev/deprecated: "true"` upstream. The pinned
+executor image (`gcr.io/kaniko-project/executor:v1.5.1`) is multi-arch
+(linux/amd64 + linux/arm64 + linux/ppc64le, verified via
+`docker manifest inspect`), so it still works on Apple Silicon k3d for
+v0.1, but it won't get security/CI updates from upstream.
+
+**Concrete TODO:** either
+- Switch to a maintained build Task (Buildah, BuildKit, `image-build` from
+  Tekton's newer catalogs); requires deciding whether to allow privileged
+  containers in the cluster, or
+- Bake our own minimal Task wrapping a recent `gcr.io/kaniko-project/executor`
+  image (v1.20+ pulls security fixes).
+
+**Today's user-visible workaround:** none required — the deprecated
+Task functions correctly. Just be aware upstream may eventually delete it.
+
+**Depends on:** none.
+
+**Milestone:** v0.2
+
+---
+
 ## Multi-provider EventListener wiring (Gitee-only today)
 
 **What:** The git-provider plugins (`plugins/git-provider/{gitee,github,gitlab}`)

@@ -21,7 +21,8 @@ rules:
     resources: ["configmaps", "secrets"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["tekton.dev"]
-    resources: ["pipelineruns", "pipelineresources", "taskruns"]
+    # Note: PipelineResource was removed in Tekton v0.55+. Drop it from RBAC.
+    resources: ["pipelineruns", "taskruns"]
     verbs: ["create", "get", "list", "watch"]
   - apiGroups: [""]
     resources: ["serviceaccounts"]

@@ -342,10 +342,25 @@ kubectl wait --for=condition=Available --timeout=180s deployment -l name=sealed-
 
 if ! command -v kubeseal >/dev/null 2>&1; then
   log "Downloading kubeseal CLI..."
-  KS_VER="0.27.1"
+  # Pin kubeseal to a known-good version. Bump as new releases are validated.
+  # https://github.com/bitnami-labs/sealed-secrets/releases
+  KS_VER="0.28.0"
   case "$SK_OS" in
-    macos) ARCH="darwin-amd64" ;;
-    *)     ARCH="linux-amd64"  ;;
+    macos)
+      # Apple Silicon (M-series) needs darwin-arm64; Intel Macs darwin-amd64.
+      if [[ "$(uname -m)" == "arm64" ]]; then
+        ARCH="darwin-arm64"
+      else
+        ARCH="darwin-amd64"
+      fi
+      ;;
+    *)
+      if [[ "$(uname -m)" == "aarch64" || "$(uname -m)" == "arm64" ]]; then
+        ARCH="linux-arm64"
+      else
+        ARCH="linux-amd64"
+      fi
+      ;;
   esac
   curl -sSL "https://github.com/bitnami-labs/sealed-secrets/releases/download/v${KS_VER}/kubeseal-${KS_VER}-${ARCH}.tar.gz" \
     | tar -xz kubeseal
@@ -407,10 +422,17 @@ ok "Git-provider plugin applied"
 # Catalog tasks (git-clone, kaniko) — applied as namespace-scoped Tasks in
 # tekton-pipelines. ClusterTask was removed from tekton.dev/v1 in Tekton
 # v0.50; pipeline-build.yaml references these via `kind: Task`.
+#
+# Versions chosen for Tekton tekton.dev/v1 API compatibility:
+#   git-clone 0.10 — current v1 API, supersedes 0.9 (v1beta1)
+#   kaniko    0.7  — current v1 API. NOTE: marked deprecated upstream;
+#                    pinned executor v1.5.1 is a multi-arch manifest list
+#                    (incl. linux/arm64), so Apple Silicon k3d works.
+#                    See TODOS.md for replacement plan (buildah/kaniko v1.20+).
 kubectl apply -n tekton-pipelines \
-  -f https://raw.githubusercontent.com/tektoncd/catalog/main/task/git-clone/0.9/git-clone.yaml
+  -f https://raw.githubusercontent.com/tektoncd/catalog/main/task/git-clone/0.10/git-clone.yaml
 kubectl apply -n tekton-pipelines \
-  -f https://raw.githubusercontent.com/tektoncd/catalog/main/task/kaniko/0.6/kaniko.yaml
+  -f https://raw.githubusercontent.com/tektoncd/catalog/main/task/kaniko/0.7/kaniko.yaml
 
 # Tekton RBAC + secrets + pipeline + binding/template
 kubectl apply -f core/k8s/05-tekton/rbac.yaml
