@@ -404,11 +404,13 @@ log "Applying git-provider plugin: ${GIT_PROVIDER_PLUGIN}"
 render_apply "plugins/git-provider/${GIT_PROVIDER_PLUGIN}/manifest.yaml"
 ok "Git-provider plugin applied"
 
-# Catalog tasks (git-clone, kaniko)
-kubectl apply -f https://raw.githubusercontent.com/tektoncd/catalog/main/task/git-clone/0.9/git-clone.yaml
-kubectl apply -f https://raw.githubusercontent.com/tektoncd/catalog/main/task/kaniko/0.6/kaniko.yaml
-kubectl get task git-clone -o yaml | sed 's/kind: Task/kind: ClusterTask/' | kubectl apply -f -
-kubectl get task kaniko    -o yaml | sed 's/kind: Task/kind: ClusterTask/' | kubectl apply -f -
+# Catalog tasks (git-clone, kaniko) — applied as namespace-scoped Tasks in
+# tekton-pipelines. ClusterTask was removed from tekton.dev/v1 in Tekton
+# v0.50; pipeline-build.yaml references these via `kind: Task`.
+kubectl apply -n tekton-pipelines \
+  -f https://raw.githubusercontent.com/tektoncd/catalog/main/task/git-clone/0.9/git-clone.yaml
+kubectl apply -n tekton-pipelines \
+  -f https://raw.githubusercontent.com/tektoncd/catalog/main/task/kaniko/0.6/kaniko.yaml
 
 # Tekton RBAC + secrets + pipeline + binding/template
 kubectl apply -f core/k8s/05-tekton/rbac.yaml
