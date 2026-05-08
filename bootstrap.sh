@@ -374,7 +374,11 @@ ok "Registry plugin applied"
 phase "Phase 8 / 9  ArgoCD, Tekton, bridges"
 
 # ArgoCD
-kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+# Server-side apply: ArgoCD's applicationsets CRD has annotations that
+# exceed the 256KB client-side-apply limit. --force-conflicts also lets
+# us own fields previously client-side-applied (re-runs).
+kubectl apply --server-side=true --force-conflicts -n argocd \
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 kubectl apply -f core/k8s/04-argocd/cmd-params-cm.yaml
 kubectl rollout restart deployment/argocd-server -n argocd
 
@@ -382,10 +386,15 @@ render_apply "core/k8s/04-argocd/ingress.yaml"
 render_apply "core/k8s/04-argocd/repo-secret.template.yaml"
 render_apply "core/k8s/04-argocd/bootstrap-app.yaml"
 
-# Tekton — install pipelines + triggers CRDs and controllers
-kubectl apply -f https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
-kubectl apply -f https://storage.googleapis.com/tekton-releases/triggers/latest/release.yaml
-kubectl apply -f https://storage.googleapis.com/tekton-releases/triggers/latest/interceptors.yaml
+# Tekton — install pipelines + triggers CRDs and controllers.
+# Same server-side-apply rationale as ArgoCD: Tekton's CRDs carry large
+# OpenAPI schemas that can exceed the client-side-apply 256KB limit.
+kubectl apply --server-side=true --force-conflicts \
+  -f https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
+kubectl apply --server-side=true --force-conflicts \
+  -f https://storage.googleapis.com/tekton-releases/triggers/latest/release.yaml
+kubectl apply --server-side=true --force-conflicts \
+  -f https://storage.googleapis.com/tekton-releases/triggers/latest/interceptors.yaml
 sleep 10
 kubectl wait --for=condition=Available --timeout=300s deployment --all -n tekton-pipelines || warn "some tekton deploys still rolling"
 
