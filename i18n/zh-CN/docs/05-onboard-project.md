@@ -46,9 +46,9 @@ spec:
 
 **ingress.yaml** 用 `<app>.apps.<root>` 域名（已被 cloudflared 通配符路由覆盖，无需改 CF 配置）。
 
-**密钥(连接串、token 等)**:用 SealedSecret 加密后入库,见
-[08-seal-secret.md](./08-seal-secret.md)。流程标准化为
-`scripts/seal-secret.sh -i secret.yaml -o sealed-secret.yaml`。
+**密钥(连接串、token 等)**:用 SealedSecret 加密后入库。原理与故障
+排查见 [08-seal-secret.md](./08-seal-secret.md);具体怎么生成由各应用
+自己写脚本,因为每个应用的 secret 字段都不一样。
 
 ### 3. manifest 仓库 — 加 `argocd-apps/<app>.yaml`
 
