@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-java
+  namespace: apps
+  labels:
+    app: hello-java
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hello-java
+  template:
+    metadata:
+      labels:
+        app: hello-java
+    spec:
+      containers:
+        - name: app
+          image: registry.example.com/hello-java:latest
+          ports:
+            - containerPort: 8080
+          # Spring Boot startup is ~5-10s; give it room.
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          resources:
+            requests: { cpu: 200m, memory: 256Mi }
+            limits:   { cpu: 1000m, memory: 768Mi }

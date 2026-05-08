@@ -2,6 +2,11 @@
 
 把一个新仓库纳入 CICD 体系，全程 ~ 5 分钟。
 
+> **想先试通流水线再接自己的项目?** 直接用 `examples/hello-world/<lang>/`
+> 里的现成 Hello-World 当应用仓库(支持 React / Vue / C# / Python / Java
+> / Go),~2 分钟跑通端到端,所有 manifest 和 Dockerfile 都已就绪。
+> 见 `../../../examples/hello-world/README.md`。
+
 ## 前提
 
 - 基础设施 bootstrap 已完成

@@ -50,7 +50,8 @@ Windows (WSL2). One `bash bootstrap.sh` brings it all up.
 
 ## Examples
 
-- [examples/demo-app/](examples/demo-app/): minimal app + manifest layout for the GitOps pipeline
+- [examples/demo-app/](examples/demo-app/): manifest-only template for onboarding a new application
+- [examples/hello-world/](examples/hello-world/): minimal Hello-World application repos in 6 languages (React, Vue, C#, Python, Java, Go) — used to smoke-test the CI/CD pipeline end-to-end
 
 ## Optional
 

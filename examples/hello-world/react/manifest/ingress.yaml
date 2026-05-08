@@ -1,0 +1,16 @@
+# Replace example.com with your real ROOT_DOMAIN.
+# The *.apps.<ROOT_DOMAIN> wildcard is already configured in your Cloudflare Tunnel.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: hello-react
+  namespace: apps
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`hello-react.apps.example.com`)
+      kind: Rule
+      services:
+        - name: hello-react
+          port: 80

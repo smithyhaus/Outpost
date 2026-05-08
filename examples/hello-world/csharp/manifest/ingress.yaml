@@ -1,0 +1,14 @@
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: hello-csharp
+  namespace: apps
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`hello-csharp.apps.example.com`)
+      kind: Rule
+      services:
+        - name: hello-csharp
+          port: 80

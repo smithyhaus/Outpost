@@ -1,0 +1,14 @@
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: hello-go
+  namespace: apps
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`hello-go.apps.example.com`)
+      kind: Rule
+      services:
+        - name: hello-go
+          port: 80

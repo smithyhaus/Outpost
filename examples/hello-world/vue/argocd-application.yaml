@@ -1,0 +1,23 @@
+# Drop into your manifest repo as: argocd-apps/hello-vue.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hello-vue
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://gitee.com/<your-user>/<manifest-repo>.git
+    targetRevision: main
+    path: apps/hello-vue
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: apps
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

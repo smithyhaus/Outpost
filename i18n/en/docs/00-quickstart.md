@@ -195,7 +195,14 @@ Full instructions in `04-client-access.md`. Short version:
 
 ### Phase I — Onboard your first app (optional) — **same on all platforms**
 
-Full procedure in `05-onboard-project.md`. Sketch:
+**Fastest end-to-end CI/CD smoke test**: use one of the ready-made
+Hello-World apps in `examples/hello-world/<lang>/` as your application
+repo — gets the whole pipeline exercised in ~2 minutes without writing
+any code. Six languages: React / Vue / C# / Python / Java / Go. Each
+ships with a `Dockerfile`, `manifest/`, and `argocd-application.yaml`.
+Walkthrough: `../../../examples/hello-world/README.md`.
+
+Onboarding your own application: see `05-onboard-project.md`. Sketch:
 
 1. Create an application code repo with a `Dockerfile` at the root
 2. In the manifest repo, add `apps/<app>/` (Deployment + Service + Ingress) and `argocd-apps/<app>.yaml` (ArgoCD Application)

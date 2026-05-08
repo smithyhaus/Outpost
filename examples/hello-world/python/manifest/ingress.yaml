@@ -1,0 +1,14 @@
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: hello-python
+  namespace: apps
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`hello-python.apps.example.com`)
+      kind: Rule
+      services:
+        - name: hello-python
+          port: 80

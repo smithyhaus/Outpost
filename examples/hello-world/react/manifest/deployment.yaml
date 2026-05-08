@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-react
+  namespace: apps
+  labels:
+    app: hello-react
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hello-react
+  template:
+    metadata:
+      labels:
+        app: hello-react
+    spec:
+      containers:
+        - name: app
+          # Tekton's update-manifest task rewrites this on every successful build.
+          # Replace registry.example.com with registry.<your-root-domain>.
+          image: registry.example.com/hello-react:latest
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }

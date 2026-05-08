@@ -78,7 +78,8 @@ in production, change only the ExternalName — application code stays unchanged
 | ArgoCD pieces | `core/k8s/04-argocd/` |
 | Tekton pieces | `core/k8s/05-tekton/` |
 | Bridge services | `core/k8s/06-bridges/` |
-| Demo app | `examples/demo-app/` |
+| Demo app (manifest-only template) | `examples/demo-app/` |
+| Hello-World pipeline smoke tests (6 languages) | `examples/hello-world/` |
 | Cross-platform shell helpers | `platform/lib/portable.sh` |
 | Per-OS hooks | `platform/{macos,linux,wsl2}.sh` |
 | Plugins | `plugins/<kind>/<name>/` |

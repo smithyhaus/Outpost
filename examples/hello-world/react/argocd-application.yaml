@@ -1,0 +1,24 @@
+# Drop into your manifest repo as: argocd-apps/hello-react.yaml
+# Replace repoURL with your real manifest repo URL.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hello-react
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://gitee.com/<your-user>/<manifest-repo>.git
+    targetRevision: main
+    path: apps/hello-react
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: apps
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

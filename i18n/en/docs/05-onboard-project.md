@@ -2,6 +2,13 @@
 
 End-to-end takes about 5 minutes per project once the infrastructure is up.
 
+> **Want to verify the pipeline works before onboarding your real
+> application?** Use one of the prebuilt Hello-World apps in
+> `examples/hello-world/<lang>/` (React / Vue / C# / Python / Java /
+> Go). All Dockerfiles and manifests are ready — push, copy, watch the
+> pipeline succeed in ~2 minutes. See
+> `../../../examples/hello-world/README.md`.
+
 ## Prerequisites
 
 - `bash bootstrap.sh` has completed successfully

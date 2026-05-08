@@ -179,7 +179,9 @@ HTTP 服务(ArgoCD UI / RabbitMQ UI / Meilisearch / Registry)直接浏览器开 
 
 ### Phase I — 接第一个真实应用(可选)— **三平台相同**
 
-完整流程见 `05-onboard-project.md`。骨架:
+**最快验证 CI/CD 端到端**:用 `examples/hello-world/<lang>/` 里的现成 Hello-World 当应用仓库,~2 分钟跑通整条流水线,无需自己写代码。支持 React / Vue / C# / Python / Java / Go 6 种语言,每个都自带 `Dockerfile` + `manifest/` + `argocd-application.yaml`。详见 `../../../examples/hello-world/README.md`。
+
+正式接入自己的应用流程见 `05-onboard-project.md`。骨架:
 
 1. 在 Git 平台建应用代码仓库,根目录有 `Dockerfile`
 2. 在 manifest 仓库的 `apps/<app>/` 写 K8s YAML,在 `argocd-apps/<app>.yaml` 写 ArgoCD Application

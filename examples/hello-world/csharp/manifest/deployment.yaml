@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-csharp
+  namespace: apps
+  labels:
+    app: hello-csharp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hello-csharp
+  template:
+    metadata:
+      labels:
+        app: hello-csharp
+    spec:
+      containers:
+        - name: app
+          image: registry.example.com/hello-csharp:latest
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits:   { cpu: 1000m, memory: 512Mi }

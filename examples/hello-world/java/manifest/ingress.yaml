@@ -1,0 +1,14 @@
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: hello-java
+  namespace: apps
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`hello-java.apps.example.com`)
+      kind: Rule
+      services:
+        - name: hello-java
+          port: 80
