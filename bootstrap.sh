@@ -388,6 +388,41 @@ ok "Registry plugin applied"
 # =============================================================================
 phase "Phase 8 / 9  ArgoCD, Tekton, bridges"
 
+# -----------------------------------------------------------------------------
+# Cleanup: orphans from earlier bootstrap versions.
+#
+# Scope is intentionally narrow — each entry is a resource THIS bootstrap
+# created in a previous version with a name that has since changed. We only
+# touch exact (kind, namespace, name) tuples we know we own. No wildcards.
+# Every command is ignore-not-found so this is a no-op on a clean cluster.
+# -----------------------------------------------------------------------------
+log "Cleaning orphans from earlier bootstrap versions (narrow, no wildcards)..."
+
+# (a) Tekton catalog Tasks accidentally applied to `default` namespace by a
+#     pre-v0.2 bootstrap (the old `kubectl apply -f .../catalog/...` had no
+#     -n flag). Current bootstrap installs them in tekton-pipelines.
+for _t in git-clone kaniko; do
+  if kubectl get -n default task "$_t" >/dev/null 2>&1; then
+    log "  removing default/task/$_t (left over from old bootstrap)"
+    kubectl delete -n default task "$_t" --ignore-not-found >/dev/null
+  fi
+done
+
+# (b) Secrets renamed in v0.2 (provider-agnostic naming).
+#       gitee-credentials   -> git-credentials   (tekton-pipelines)
+#       gitee-manifest-repo -> git-manifest-repo (argocd)
+#     Old Secrets are unreferenced after the rename; safe to delete.
+for _entry in "tekton-pipelines:gitee-credentials" "argocd:gitee-manifest-repo"; do
+  _ns="${_entry%%:*}"; _name="${_entry##*:}"
+  if kubectl get -n "$_ns" secret "$_name" >/dev/null 2>&1; then
+    log "  removing $_ns/secret/$_name (renamed in v0.2)"
+    kubectl delete -n "$_ns" secret "$_name" --ignore-not-found >/dev/null
+  fi
+done
+
+unset _t _entry _ns _name
+ok "Orphan cleanup done"
+
 # ArgoCD
 # Server-side apply: ArgoCD's applicationsets CRD has annotations that
 # exceed the 256KB client-side-apply limit. --force-conflicts also lets
