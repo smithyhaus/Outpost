@@ -455,6 +455,16 @@ kubectl apply --server-side=true --force-conflicts \
 sleep 10
 kubectl wait --for=condition=Available --timeout=300s deployment --all -n tekton-pipelines || warn "some tekton deploys still rolling"
 
+# Tekton release.yaml sets pod-security.kubernetes.io/enforce=restricted on
+# the tekton-pipelines namespace. That's appropriate for the controllers,
+# but PipelineRuns also spawn pods in this namespace and the catalog
+# Tasks (git-clone, kaniko) need privileges restricted blocks (capabilities,
+# allowPrivilegeEscalation, runAsRoot for kaniko's chroot). Downgrade to
+# `baseline` — still hardened, but compatible with Tekton's catalog Tasks.
+# See https://tekton.dev/docs/concepts/podsecurity/
+kubectl label --overwrite ns tekton-pipelines \
+  pod-security.kubernetes.io/enforce=baseline
+
 # Now that Tekton CRDs (incl. triggers.tekton.dev) are registered, apply the
 # git-provider plugin (it contributes a TriggerBinding the EventListener uses).
 log "Applying git-provider plugin: ${GIT_PROVIDER_PLUGIN}"
