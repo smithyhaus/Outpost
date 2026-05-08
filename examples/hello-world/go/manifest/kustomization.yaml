@@ -1,0 +1,20 @@
+# Kustomize-managed image override (preferred for Outpost's GitOps pipeline).
+#
+# Tekton's update-manifest task auto-detects this file (when it has an
+# `images:` section) and rewrites the matching entry's `newTag` on every
+# successful build. The deployment.yaml below keeps a stable placeholder.
+#
+# To use the LEGACY mode instead (writes directly to deployment.yaml),
+# delete this file. See ../../README.md for details.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+
+images:
+  - name: registry.example.com/hello-go
+    newName: registry.example.com/hello-go
+    newTag: placeholder

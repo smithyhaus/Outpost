@@ -438,7 +438,16 @@ kubectl apply -n tekton-pipelines \
 kubectl apply -f core/k8s/05-tekton/rbac.yaml
 render_apply "core/k8s/05-tekton/secrets.template.yaml"
 render_apply "core/k8s/05-tekton/pipeline-build.yaml"
+
+# update-manifest Task is split: scripts/update-manifest.sh is the canonical
+# source, mounted into the Task via this ConfigMap. Re-apply on every run so
+# script edits take effect without manual ConfigMap surgery.
+kubectl create configmap update-manifest-script \
+  --from-file=update-manifest.sh=scripts/update-manifest.sh \
+  -n tekton-pipelines \
+  --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -f core/k8s/05-tekton/task-update-manifest.yaml
+
 render_apply "core/k8s/05-tekton/triggertemplate.yaml"
 render_apply "core/k8s/05-tekton/eventlistener.yaml"
 

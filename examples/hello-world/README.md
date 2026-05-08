@@ -12,6 +12,22 @@ the **smallest thing that proves your CI/CD pipeline works**:
 | Java     | Spring Boot 3.3 + Spring Web        | `eclipse-temurin:21-jre-alpine` |
 | Go       | `net/http` (no external deps)       | `scratch`              |
 
+## Manifest layout — two supported modes
+
+The `update-manifest` Tekton task auto-detects how to bump the image tag:
+
+| Mode | Trigger | What gets rewritten on each push |
+|------|---------|----------------------------------|
+| **kustomize** *(preferred)* | `apps/<app>/kustomization.yaml` exists with an `images:` section | matching `.images[].newTag` (and `.newName`) — appends if no match |
+| **legacy** | only `apps/<app>/deployment.yaml` exists | `.spec.template.spec.containers[0].image` |
+
+Five of the examples (`react`, `vue`, `csharp`, `python`, `java`) ship the
+**legacy** layout (`manifest/deployment.yaml` + `service.yaml` + `ingress.yaml`).
+The **`go`** example additionally ships `manifest/kustomization.yaml` to
+demonstrate the kustomize path; copy that whole `manifest/` directory into
+your manifest repo as `apps/hello-go/` and the Tekton task will pick the
+kustomize mode automatically.
+
 ## Common contract
 
 Every example, identical from the platform's perspective:

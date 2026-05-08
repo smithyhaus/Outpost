@@ -5,6 +5,11 @@ Plain `net/http` for smoke-testing the Outpost CI/CD pipeline.
 - Single `main.go`, two endpoints, no external deps
 - Static binary in a `scratch` image — final image ~5 MB
 - Fastest to build and the cheapest to run of the six samples
+- **`manifest/` ships the kustomize layout** — `kustomization.yaml` +
+  three resources. On each push the Tekton `update-manifest` task
+  rewrites `.images[name=registry.<root>/hello-go].newTag` rather than
+  patching `deployment.yaml` directly. To try the legacy mode instead,
+  delete `manifest/kustomization.yaml` before copying.
 
 ## Local sanity check
 
