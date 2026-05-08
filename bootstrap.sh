@@ -143,7 +143,7 @@ MEILI_ENV="${MEILI_ENV:-production}"
 [[ -z "${MEILI_MASTER_KEY:-}" ]]     && MEILI_MASTER_KEY=$(gen_password)
 [[ -z "${GIT_WEBHOOK_SECRET:-}" ]]   && GIT_WEBHOOK_SECRET=$(gen_password)
 
-# Plugin selection only matters in full mode
+# Plugin selection only matters in full mode (existence check is cheap, do it first)
 if [[ "$OUTPOST_MODE" == "full" ]]; then
   if [[ ! -d "plugins/registry/${REGISTRY_PLUGIN}" ]]; then
     err "Unknown REGISTRY_PLUGIN: ${REGISTRY_PLUGIN}"
@@ -156,14 +156,12 @@ if [[ "$OUTPOST_MODE" == "full" ]]; then
     exit 1
   fi
   ok "Plugins selected: registry=${REGISTRY_PLUGIN}  git-provider=${GIT_PROVIDER_PLUGIN}"
-
-  log "Running plugin preflight checks..."
-  ( set -a; source .env; set +a; bash "plugins/registry/${REGISTRY_PLUGIN}/preflight.sh" )
-  ( set -a; source .env; set +a; bash "plugins/git-provider/${GIT_PROVIDER_PLUGIN}/preflight.sh" )
-  ok "Plugin preflights passed"
 fi
 
-# Persist .env (canonical form)
+# Persist .env (canonical form). MUST happen before plugin preflight runs:
+# the preflight subshell does `source .env`, so any auto-generated value
+# (e.g. GIT_WEBHOOK_SECRET) needs to be on disk first or the subshell sees
+# the stale empty value.
 {
   echo "OUTPOST_MODE=${OUTPOST_MODE}"
   echo "ROOT_DOMAIN=${ROOT_DOMAIN}"
@@ -192,10 +190,18 @@ fi
 } > .env
 chmod 600 .env
 
-# Re-export for envsubst
+# Re-export for envsubst (and for the preflight subshell below)
 set -a; # shellcheck disable=SC1091
 source .env; set +a
 ok ".env written (perm 600)"
+
+# Now that .env is canonical, run plugin preflight checks
+if [[ "$OUTPOST_MODE" == "full" ]]; then
+  log "Running plugin preflight checks..."
+  ( set -a; source .env; set +a; bash "plugins/registry/${REGISTRY_PLUGIN}/preflight.sh" )
+  ( set -a; source .env; set +a; bash "plugins/git-provider/${GIT_PROVIDER_PLUGIN}/preflight.sh" )
+  ok "Plugin preflights passed"
+fi
 
 # =============================================================================
 # Phase 3 — Render INFRA.md
