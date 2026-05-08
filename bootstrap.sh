@@ -357,16 +357,16 @@ kubeseal --fetch-cert > secrets-backup/sealed-secrets-pub.pem 2>/dev/null || tru
 ok "sealed-secrets ready"
 
 # =============================================================================
-# Phase 7 — Plugins
+# Phase 7 — Plugins (registry only; git-provider needs Tekton CRDs from Phase 8)
 # =============================================================================
-phase "Phase 7 / 9  Plugins"
+phase "Phase 7 / 9  Plugins (registry)"
 
 log "Applying registry plugin: ${REGISTRY_PLUGIN}"
 render_apply "plugins/registry/${REGISTRY_PLUGIN}/manifest.yaml"
+ok "Registry plugin applied"
 
-log "Applying git-provider plugin: ${GIT_PROVIDER_PLUGIN}"
-render_apply "plugins/git-provider/${GIT_PROVIDER_PLUGIN}/manifest.yaml"
-ok "Plugins applied"
+# git-provider plugin contains Tekton TriggerBinding (triggers.tekton.dev CRD).
+# Defer it to Phase 8 right after `kubectl apply` of Tekton triggers/release.yaml.
 
 # =============================================================================
 # Phase 8 — ArgoCD + Tekton + bridges
@@ -382,12 +382,18 @@ render_apply "core/k8s/04-argocd/ingress.yaml"
 render_apply "core/k8s/04-argocd/repo-secret.template.yaml"
 render_apply "core/k8s/04-argocd/bootstrap-app.yaml"
 
-# Tekton
+# Tekton — install pipelines + triggers CRDs and controllers
 kubectl apply -f https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
 kubectl apply -f https://storage.googleapis.com/tekton-releases/triggers/latest/release.yaml
 kubectl apply -f https://storage.googleapis.com/tekton-releases/triggers/latest/interceptors.yaml
 sleep 10
 kubectl wait --for=condition=Available --timeout=300s deployment --all -n tekton-pipelines || warn "some tekton deploys still rolling"
+
+# Now that Tekton CRDs (incl. triggers.tekton.dev) are registered, apply the
+# git-provider plugin (it contributes a TriggerBinding the EventListener uses).
+log "Applying git-provider plugin: ${GIT_PROVIDER_PLUGIN}"
+render_apply "plugins/git-provider/${GIT_PROVIDER_PLUGIN}/manifest.yaml"
+ok "Git-provider plugin applied"
 
 # Catalog tasks (git-clone, kaniko)
 kubectl apply -f https://raw.githubusercontent.com/tektoncd/catalog/main/task/git-clone/0.9/git-clone.yaml
