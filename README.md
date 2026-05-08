@@ -49,12 +49,19 @@ Outpost ships in two modes; pick the one that matches what you need today.
 
 Switch by editing `OUTPOST_MODE` in `.env`. Re-running `bash bootstrap.sh` is idempotent; passwords already in `.env` are reused.
 
-## Quick start (local mode)
+## Quick start
+
+> Full step-by-step walkthrough — including macOS / Linux / WSL2 platform
+> branches, Cloudflare-side prep, manifest-repo init, and verification —
+> lives in **[`i18n/en/docs/00-quickstart.md`](i18n/en/docs/00-quickstart.md)**.
+> The block below is a quick recap for someone who's done it before.
+
+### `local` mode (~2 min, zero required input)
 
 ```bash
 git clone https://github.com/smithyhaus/outpost.git ~/outpost
 cd ~/outpost
-bash bootstrap.sh          # ~2 minutes — no .env edit needed
+bash bootstrap.sh          # default mode is `local` — no .env edit needed
 ```
 
 After it finishes:
@@ -62,13 +69,19 @@ After it finishes:
 - `INFRA.md` lists every connection string + password (auto-generated)
 - Connect from your apps: `postgresql://postgres:<pw>@localhost:5432/postgres` etc.
 
-## Quick start (full mode)
+### `full` mode (~30 min on first run, including Cloudflare + repo prep)
+
+You'll need first:
+1. A Cloudflare account + domain (NS already moved to Cloudflare) + a Tunnel token ([`docs/01`](i18n/en/docs/01-cloudflare-setup.md))
+2. An empty Gitee / GitHub / GitLab **manifest repo** (with empty `apps/` and `argocd-apps/` directories) + a PAT
+3. Six required `.env` fields: `OUTPOST_MODE=full`, `ROOT_DOMAIN`, `CF_TUNNEL_TOKEN`, `GIT_USER`, `GIT_TOKEN`, `MANIFEST_REPO_URL`
 
 ```bash
 git clone https://github.com/smithyhaus/outpost.git ~/outpost
 cd ~/outpost
-cp .env.example .env       # set OUTPOST_MODE=full + ROOT_DOMAIN + CF_TUNNEL_TOKEN
+cp .env.example .env       # fill in the 6 fields; leave passwords blank to auto-generate
 bash bootstrap.sh          # ~5 minutes
+bash verify.sh             # should be all PASS
 ```
 
 After it finishes:
@@ -76,8 +89,6 @@ After it finishes:
 - Open `INFRA.md` for every connection string and password
 - ArgoCD UI: `https://argocd.<your-domain>`
 - Webhook URL for your Git provider: `https://hooks.<your-domain>`
-
-See [`i18n/en/docs/`](i18n/en/docs/) for full setup guides.
 
 ## Why Outpost
 
@@ -120,9 +131,10 @@ Drop Outpost into a Claude Code session and ask "is the stack healthy?" — it w
 
 | Topic | English | 中文 |
 |-------|---------|------|
+| **Quick Start (read first)** | [docs/00](i18n/en/docs/00-quickstart.md) | [docs/00](i18n/zh-CN/docs/00-quickstart.md) |
 | Architecture | [`ARCHITECTURE.md`](ARCHITECTURE.md) | (English only — single source) |
 | Cloudflare setup | [docs/01](i18n/en/docs/01-cloudflare-setup.md) | [docs/01](i18n/zh-CN/docs/01-cloudflare-setup.md) |
-| WSL2 config | [docs/02](i18n/en/docs/02-wsl-config.md) | [docs/02](i18n/zh-CN/docs/02-wsl-config.md) |
+| WSL2 config (WSL2 only) | [docs/02](i18n/en/docs/02-wsl-config.md) | [docs/02](i18n/zh-CN/docs/02-wsl-config.md) |
 | Windows autostart | [docs/03](i18n/en/docs/03-windows-autostart.md) | [docs/03](i18n/zh-CN/docs/03-windows-autostart.md) |
 | Client TCP access | [docs/04](i18n/en/docs/04-client-access.md) | [docs/04](i18n/zh-CN/docs/04-client-access.md) |
 | Onboard a project | [docs/05](i18n/en/docs/05-onboard-project.md) | [docs/05](i18n/zh-CN/docs/05-onboard-project.md) |

@@ -1,4 +1,7 @@
-# 02 — WSL2 配置
+# 02 — WSL2 主机配置(仅 WSL 用户)
+
+> macOS / Linux 原生用户**跳过本文档**。这一篇只在 Outpost 主机是 Windows + WSL2 时需要。
+> macOS 和 Linux 的系统准备见 `00-quickstart.md` 的 Phase B-mac / B-linux。
 
 ## 一、`.wslconfig`（在 Windows 端）
 

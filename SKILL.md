@@ -65,6 +65,7 @@ in production, change only the ExternalName — application code stays unchanged
 
 | Looking for | Path |
 |-------------|------|
+| **First-run quickstart (all platforms)** | `i18n/en/docs/00-quickstart.md` / `i18n/zh-CN/docs/00-quickstart.md` |
 | Static architecture doc | `ARCHITECTURE.md` |
 | Credentials (rendered) | `INFRA.md` / `INFRA.zh-CN.md` (gitignored) |
 | Credential template (full mode) | `i18n/en/INFRA.md.template`, `i18n/zh-CN/INFRA.md.template` |

@@ -82,7 +82,7 @@ restart deploy/argocd-server -n argocd`. Or IngressRoute Host typo.
 - Common: manifest YAML invalid; repo unreachable; credentials secret stale
 
 ### Repo authentication fails
-- Secret `gitee-manifest-repo` (or whichever provider) carries the token
+- Secret `git-manifest-repo` (provider-agnostic) carries the token
 - `kubectl edit secret -n argocd <secret>` to rotate
 
 ## Tekton
@@ -96,7 +96,7 @@ rejects the event.
 
 ### PipelineRun stuck on git-clone
 - workspace PVC unbound → `kubectl describe pvc -n tekton-pipelines`
-- Git credentials wrong → secret `<provider>-credentials`
+- Git credentials wrong → secret `git-credentials` (in `tekton-pipelines` namespace)
 
 ### Kaniko build fails
 - Dockerfile missing in the app repo root

@@ -12,7 +12,9 @@ Windows (WSL2). One `bash bootstrap.sh` brings it all up.
 
 ## Project map
 
-- [README](README.md): top-level introduction, quick start, why-use-it
+- [Quick Start (EN)](i18n/en/docs/00-quickstart.md): single canonical step-by-step setup walkthrough for macOS / Linux / WSL2 (read this first)
+- [Quick Start (ZH)](i18n/zh-CN/docs/00-quickstart.md): Chinese version of the quickstart
+- [README](README.md): top-level introduction, recap, why-use-it
 - [README.zh-CN](README.zh-CN.md): Chinese version of the README
 - [ARCHITECTURE](ARCHITECTURE.md): static system diagram, layer split, bridge model
 - [SKILL](SKILL.md): operating skill for AI agents (Claude format), with invariants and task playbooks

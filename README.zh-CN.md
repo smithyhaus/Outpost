@@ -48,12 +48,18 @@ Outpost 提供两种模式，按当前需求挑一个。
 
 通过修改 `.env` 里的 `OUTPOST_MODE` 切换。重跑 `bash bootstrap.sh` 是幂等的；`.env` 里已有的密码会被复用。
 
-## 快速开始（local 模式）
+## 快速开始
+
+> 完整 step-by-step 走查（含 macOS / Linux / WSL2 三平台分支、Cloudflare 侧准备、manifest 仓库初始化、验证步骤）见
+> **[`i18n/zh-CN/docs/00-quickstart.md`](i18n/zh-CN/docs/00-quickstart.md)**。
+> 下方是极简版，适合"已经做过一次"快速回忆。
+
+### local 模式（~2 分钟，零必填）
 
 ```bash
 git clone https://github.com/smithyhaus/outpost.git ~/outpost
 cd ~/outpost
-bash bootstrap.sh          # ~2 分钟，无需改 .env
+bash bootstrap.sh          # 默认就是 local 模式，无需改 .env
 ```
 
 完成后：
@@ -61,13 +67,19 @@ bash bootstrap.sh          # ~2 分钟，无需改 .env
 - `INFRA.zh-CN.md` 列出所有连接串和密码（自动生成）
 - 应用直连：`postgresql://postgres:<pw>@localhost:5432/postgres` 等等
 
-## 快速开始（full 模式）
+### full 模式（~30 分钟首次，含 Cloudflare + 仓库准备）
+
+需要先准备：
+1. 一个 Cloudflare 账号 + 域名（NS 已切到 Cloudflare）+ 一个 Tunnel token（[`docs/01`](i18n/zh-CN/docs/01-cloudflare-setup.md)）
+2. 一个 Gitee / GitHub / GitLab **空 manifest 仓库**（含 `apps/` 和 `argocd-apps/` 两个空目录）+ 一个 PAT
+3. `.env` 里 6 个必填字段：`OUTPOST_MODE=full`、`ROOT_DOMAIN`、`CF_TUNNEL_TOKEN`、`GIT_USER`、`GIT_TOKEN`、`MANIFEST_REPO_URL`
 
 ```bash
 git clone https://github.com/smithyhaus/outpost.git ~/outpost
 cd ~/outpost
-cp .env.example .env       # 把 OUTPOST_MODE 改 full，填 ROOT_DOMAIN + CF_TUNNEL_TOKEN
+cp .env.example .env       # 编辑上面 6 项；密码字段留空会自动生成
 bash bootstrap.sh          # ~5 分钟
+bash verify.sh             # 应全 PASS
 ```
 
 完成后：
@@ -75,8 +87,6 @@ bash bootstrap.sh          # ~5 分钟
 - 打开 `INFRA.zh-CN.md` 查看所有连接串与密码
 - ArgoCD UI: `https://argocd.<你的域名>`
 - 给你的 Git 提供商配 webhook 用：`https://hooks.<你的域名>`
-
-完整指南见 [`i18n/zh-CN/docs/`](i18n/zh-CN/docs/)。
 
 ## 为什么用 Outpost
 
@@ -120,9 +130,10 @@ Plugin 协议与编写指南见 [`plugins/README.md`](plugins/README.md)。
 
 | 主题 | English | 中文 |
 |------|---------|------|
+| **Quick Start（先看这个）** | [docs/00](i18n/en/docs/00-quickstart.md) | [docs/00](i18n/zh-CN/docs/00-quickstart.md) |
 | 架构 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | （仅英文 —— 单一源） |
 | Cloudflare 配置 | [docs/01](i18n/en/docs/01-cloudflare-setup.md) | [docs/01](i18n/zh-CN/docs/01-cloudflare-setup.md) |
-| WSL2 配置 | [docs/02](i18n/en/docs/02-wsl-config.md) | [docs/02](i18n/zh-CN/docs/02-wsl-config.md) |
+| WSL2 配置（仅 WSL 用户） | [docs/02](i18n/en/docs/02-wsl-config.md) | [docs/02](i18n/zh-CN/docs/02-wsl-config.md) |
 | Windows 自启 | [docs/03](i18n/en/docs/03-windows-autostart.md) | [docs/03](i18n/zh-CN/docs/03-windows-autostart.md) |
 | 客户端 TCP 访问 | [docs/04](i18n/en/docs/04-client-access.md) | [docs/04](i18n/zh-CN/docs/04-client-access.md) |
 | 接入新项目 | [docs/05](i18n/en/docs/05-onboard-project.md) | [docs/05](i18n/zh-CN/docs/05-onboard-project.md) |

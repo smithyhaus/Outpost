@@ -5,6 +5,41 @@ a future contributor to pick it up cold.
 
 ---
 
+## Multi-provider EventListener wiring (Gitee-only today)
+
+**What:** The git-provider plugins (`plugins/git-provider/{gitee,github,gitlab}`)
+each emit a `<provider>-trigger-fragment` ConfigMap describing how the
+EventListener's `triggers:` block should be assembled for that provider.
+But `core/k8s/05-tekton/eventlistener.yaml` is currently a **hardcoded
+Gitee** EventListener — it ignores those fragments. Result: today
+`GIT_PROVIDER_PLUGIN=github` and `GIT_PROVIDER_PLUGIN=gitlab` apply the
+plugin's TriggerBinding + ConfigMap, but the EventListener still routes
+through `gitee-push-binding` and the `X-Gitee-Token` CEL filter.
+
+**Concrete TODO:** in `bootstrap.sh` Phase 8, instead of applying the
+hardcoded `eventlistener.yaml`, read the active plugin's
+`<provider>-trigger-fragment` ConfigMap, splice its `trigger.yaml` block
+into a generic EventListener template, and apply the result. Drop the
+hardcoded `eventlistener.yaml`. Move webhook-secret-substitution into
+the plugin layer (each plugin already has the right CEL filter).
+
+**Pros:** `GIT_PROVIDER_PLUGIN` actually means something for github /
+gitlab. Plugin model is honest.
+
+**Cons:** small Bash YAML manipulation (yq dependency).
+
+**Today's user-visible workaround:** keep `GIT_PROVIDER_PLUGIN=gitee`
+(the default) — the only fully wired path in v0.1. The provider-agnostic
+Secret rename (`gitee-credentials` → `git-credentials`,
+`gitee-manifest-repo` → `git-manifest-repo`) and `${GIT_HOST}` parameter
+make the eventual github/gitlab cutover purely local to this file.
+
+**Depends on:** none.
+
+**Milestone:** v0.2
+
+---
+
 ## ✅ Done in v0.2 — local/full mode split
 
 `OUTPOST_MODE={local|full}` toggles Compose-only vs full GitOps. New users

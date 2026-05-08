@@ -1,8 +1,13 @@
 # ============================================================================
 # EventListener — 公网 webhook 入口
-# Gitee Webhook 配置:
+#
+# 当前 v0.1 实现:仅 Gitee。GIT_PROVIDER_PLUGIN=github / gitlab 的支持
+# 见 plugins/git-provider/<name>/manifest.yaml,但本 EventListener
+# 当前没有把 plugin 的 trigger-fragment 合并进来,详见 TODOS.md。
+#
+# Gitee Webhook 配置(见 docs/05-onboard-project.md):
 #   URL: https://hooks.<ROOT_DOMAIN>
-#   Secret: 与 .env 中 GITEE_WEBHOOK_SECRET 一致
+#   Secret: .env 中的 GIT_WEBHOOK_SECRET(自动生成)
 #   触发事件: 仅 Push
 # ============================================================================
 apiVersion: triggers.tekton.dev/v1beta1
@@ -26,7 +31,7 @@ spec:
             name: cel
           params:
             - name: filter
-              value: "header['X-Gitee-Token'][0] == 'GITEE_WEBHOOK_SECRET_PLACEHOLDER'"
+              value: "header['X-Gitee-Token'][0] == '${GIT_WEBHOOK_SECRET}'"
         # 3. 排除 tag push、删除分支等
         - ref:
             name: cel

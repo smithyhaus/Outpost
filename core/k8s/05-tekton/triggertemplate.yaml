@@ -9,7 +9,7 @@ metadata:
 spec:
   params:
     - name: repo-url
-      description: Gitee 仓库 HTTPS URL
+      description: Git 仓库 HTTPS URL（Gitee / GitHub / GitLab 通用）
     - name: repo-name
       description: 仓库名（用于 image tag、manifest 路径）
     - name: branch
@@ -55,6 +55,6 @@ spec:
           - name: dockerconfig
             secret:
               secretName: registry-credentials
-          - name: gitee-creds
+          - name: git-creds
             secret:
-              secretName: gitee-credentials
+              secretName: git-credentials

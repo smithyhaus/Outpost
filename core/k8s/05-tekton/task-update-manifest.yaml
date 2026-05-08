@@ -26,7 +26,7 @@ spec:
 
   workspaces:
     - name: source
-    - name: gitee-creds
+    - name: git-creds
       description: 包含 .git-credentials（HTTPS 用户名/token）
 
   steps:
@@ -42,7 +42,7 @@ spec:
           -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq
 
         # 配置 Git credential
-        cp $(workspaces.gitee-creds.path)/.git-credentials ~/.git-credentials
+        cp $(workspaces.git-creds.path)/.git-credentials ~/.git-credentials
         git config --global credential.helper "store"
         git config --global user.email "tekton-ci@local"
         git config --global user.name "Tekton CI"

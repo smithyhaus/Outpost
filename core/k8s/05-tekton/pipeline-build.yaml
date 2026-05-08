@@ -43,7 +43,7 @@ spec:
   workspaces:
     - name: shared-workspace
     - name: dockerconfig
-    - name: gitee-creds
+    - name: git-creds
 
   tasks:
     # -------------------------------------------------------------------------
@@ -57,7 +57,7 @@ spec:
         - name: output
           workspace: shared-workspace
         - name: basic-auth
-          workspace: gitee-creds
+          workspace: git-creds
       params:
         - name: url
           value: $(params.repo-url)
@@ -107,8 +107,8 @@ spec:
         - name: source
           workspace: shared-workspace
           subPath: manifest
-        - name: gitee-creds
-          workspace: gitee-creds
+        - name: git-creds
+          workspace: git-creds
       params:
         - name: manifest-repo-url
           value: $(params.manifest-repo-url)

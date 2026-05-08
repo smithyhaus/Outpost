@@ -1,6 +1,8 @@
-# 02 — WSL2 host configuration
+# 02 — WSL2 host configuration (WSL2 only)
 
-> Skip this doc on macOS / Linux native — it only applies to Windows + WSL2.
+> macOS / native Linux users: **skip this doc**. It only applies when the
+> Outpost host is Windows + WSL2. For macOS / Linux system prep, see
+> `00-quickstart.md` Phase B-mac / B-linux.
 
 ## 1. `.wslconfig` (on the Windows side)
 

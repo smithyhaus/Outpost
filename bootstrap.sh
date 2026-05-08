@@ -112,6 +112,21 @@ else
   MANIFEST_REPO_URL="${MANIFEST_REPO_URL:-}"
 fi
 
+# Derive GIT_HOST from MANIFEST_REPO_URL (e.g. https://gitee.com/u/r.git → gitee.com).
+# Used by Tekton's git credentials Secret + .git-credentials file.
+# In local mode we leave it blank — Tekton phase doesn't run.
+if [[ -n "${MANIFEST_REPO_URL:-}" ]]; then
+  GIT_HOST="$(printf '%s\n' "$MANIFEST_REPO_URL" | awk -F/ '{print $3}')"
+  if [[ -z "$GIT_HOST" ]]; then
+    err "Could not derive GIT_HOST from MANIFEST_REPO_URL='$MANIFEST_REPO_URL'"
+    err "Expected an HTTPS URL like https://gitee.com/<user>/<repo>.git"
+    exit 1
+  fi
+else
+  GIT_HOST=""
+fi
+export GIT_HOST
+
 # Defaults shared by both modes
 REGISTRY_PLUGIN="${REGISTRY_PLUGIN:-self-hosted}"
 GIT_PROVIDER_PLUGIN="${GIT_PROVIDER_PLUGIN:-gitee}"
@@ -168,6 +183,7 @@ fi
   echo "GIT_WEBHOOK_SECRET=${GIT_WEBHOOK_SECRET}"
   echo "MANIFEST_REPO_URL=${MANIFEST_REPO_URL}"
   echo "MANIFEST_REPO_BRANCH=${MANIFEST_REPO_BRANCH}"
+  echo "GIT_HOST=${GIT_HOST}"
   # ACR specifics carried through if set
   [[ -n "${ALIYUN_ACR_REGISTRY:-}" ]]  && echo "ALIYUN_ACR_REGISTRY=${ALIYUN_ACR_REGISTRY}"
   [[ -n "${ALIYUN_ACR_NAMESPACE:-}" ]] && echo "ALIYUN_ACR_NAMESPACE=${ALIYUN_ACR_NAMESPACE}"
@@ -258,10 +274,11 @@ if [[ "$OUTPOST_MODE" == "local" ]]; then
   echo ""
   echo "  Read INFRA.md for full credential vault."
   echo "  Run ./verify.sh anytime to check stack health."
-  echo "  To upgrade to full mode (CF Tunnel + k3s + GitOps):"
-  echo "    1. set OUTPOST_MODE=full in .env"
-  echo "    2. fill ROOT_DOMAIN, CF_TUNNEL_TOKEN, GIT_USER, GIT_TOKEN, MANIFEST_REPO_URL"
-  echo "    3. re-run bash bootstrap.sh"
+  echo ""
+  echo "  To upgrade to full mode (CF Tunnel + k3s + GitOps), follow the"
+  echo "  quickstart full-mode walkthrough:"
+  echo "    i18n/en/docs/00-quickstart.md      (Phase A through I)"
+  echo "    i18n/zh-CN/docs/00-quickstart.md   (Chinese version)"
   echo ""
   exit 0
 fi
@@ -418,4 +435,12 @@ echo "  Webhook secret: ${GIT_WEBHOOK_SECRET}"
 echo ""
 echo "  Read INFRA.md for the full credential vault."
 echo "  Run ./verify.sh anytime to check stack health."
+echo ""
+echo "  First-time setup verification (Phase F of the quickstart):"
+echo "    bash verify.sh"
+echo "    docker logs cloudflared --tail 50 | grep 'Registered tunnel connection'"
+echo "    open https://argocd.${ROOT_DOMAIN}   # or curl"
+echo ""
+echo "  Step-by-step walkthrough (incl. autostart, dev workstation TCP,"
+echo "  onboarding apps): i18n/<lang>/docs/00-quickstart.md"
 echo ""

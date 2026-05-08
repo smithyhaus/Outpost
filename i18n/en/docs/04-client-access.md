@@ -1,9 +1,17 @@
 # 04 — Dev workstation access (cloudflared TCP)
 
-HTTP services are reachable directly via your browser (TLS terminated at
-the Cloudflare edge). For **TCP services** (PostgreSQL / Redis / RabbitMQ
-AMQP) you need `cloudflared` running on your dev workstation to open a
-local TCP tunnel.
+> ⚠️ **This doc operates on the *dev workstation*** — the laptop where
+> you write code and run DBeaver / Redis Insight / RabbitMQ clients. It
+> is **independent of the Outpost host**. If the Outpost host *is* your
+> dev workstation, just connect to `localhost:5432` and **skip this
+> entire doc**.
+
+HTTP services (ArgoCD UI / RabbitMQ UI / Meilisearch / Registry) work
+directly in the browser via `https://...` and do NOT need this doc.
+**TCP services** (PostgreSQL / Redis / RabbitMQ AMQP) need a different
+path because IDE clients can't speak Cloudflare's tunnel protocol — you
+install `cloudflared` on the dev workstation and have it map the remote
+service to `localhost:<port>`.
 
 ## 1. Install cloudflared
 

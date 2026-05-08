@@ -164,7 +164,7 @@ kubectl get application -n argocd
 kubectl get application -n argocd <name> -o yaml | yq '.status.conditions'
 ```
 - `ComparisonError`：manifest 仓库 yaml 语法错或不可访问
-- 缺凭据：`kubectl get secret -n argocd gitee-manifest-repo`
+- 缺凭据：`kubectl get secret -n argocd git-manifest-repo`
 - 网络：ArgoCD repo-server pod 内 `curl https://gitee.com`
 
 ### 1.9 Tekton EventListener

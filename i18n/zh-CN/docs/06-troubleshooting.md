@@ -83,9 +83,9 @@ kubectl get ingressroute -n argocd
 - 看 `Status` 详情，多半是 manifest 仓库里某个字段不合法
 - `kubectl get app -n argocd <app> -o yaml` 看 conditions
 
-### 拉 Gitee 失败
-- 检查 `gitee-manifest-repo` secret 里的 token 是否还有效
-- token 过期重新生成后：`kubectl edit secret -n argocd gitee-manifest-repo`
+### 拉 Git 仓库失败（任意 provider）
+- 检查 `git-manifest-repo` secret 里的 token 是否还有效
+- token 过期重新生成后：`kubectl edit secret -n argocd git-manifest-repo`
 
 ## Tekton
 
@@ -99,7 +99,7 @@ kubectl logs -n tekton-pipelines deploy/el-gitee-listener --tail 200
 
 ### PipelineRun 卡在 git-clone
 - workspace PVC 没绑上 → 看 `kubectl describe pvc -n tekton-pipelines`
-- gitee-credentials 没配对 → 测试：
+- git-credentials 没配对 → 测试：
   ```bash
   kubectl exec -it <git-clone-pod> -- git clone <repo>
   ```
