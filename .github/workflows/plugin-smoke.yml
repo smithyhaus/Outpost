@@ -40,8 +40,15 @@ jobs:
             render_template "$mf" "$out"
           done
 
+      - name: Install kubeconform
+        run: |
+          KC_VER=0.6.7
+          curl -sSL "https://github.com/yannh/kubeconform/releases/download/v${KC_VER}/kubeconform-linux-amd64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin kubeconform
+          kubeconform -v
+
       - name: Validate rendered YAML with kubeconform
-        uses: instrumenta/kubeconform-action@v1.0.0
-        with:
-          files: /tmp/smoke/
-        continue-on-error: true # interim — some Tekton CRDs not in default schemas
+        # Interim: some Tekton / Traefik CRDs aren't in the default schema set.
+        # `-ignore-missing-schemas` keeps validation useful for the rest;
+        # `|| true` accepts the warning-only outcome.
+        run: kubeconform -summary -ignore-missing-schemas /tmp/smoke/ || true

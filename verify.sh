@@ -26,7 +26,7 @@
 set -uo pipefail
 
 INFRA_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$INFRA_ROOT"
+cd "$INFRA_ROOT" || { echo "ERROR: cannot cd to $INFRA_ROOT" >&2; exit 1; }
 
 # shellcheck source=platform/lib/portable.sh
 source "${INFRA_ROOT}/platform/lib/portable.sh"

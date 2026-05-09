@@ -24,6 +24,10 @@ else
   SK_C_BLUE=''; SK_C_GREEN=''
   SK_C_YELLOW=''; SK_C_RED=''; SK_C_DIM=''
 fi
+# SK_C_DIM is reserved for future use (e.g. de-emphasized timestamps in
+# verbose mode); silence shellcheck SC2034 about it being currently unused.
+# shellcheck disable=SC2034
+: "${SK_C_DIM:=}"
 
 log()   { echo -e "${SK_C_BLUE}${SK_C_BOLD}[INFO]${SK_C_RESET} $*"; }
 ok()    { echo -e "${SK_C_GREEN}${SK_C_BOLD}[ OK ]${SK_C_RESET} $*"; }
@@ -135,21 +139,29 @@ render_template() {
     return 1
   fi
 
-  # Substitute only declared variables (envsubst with no args substitutes
-  # every \${X} in scope, which is fine here; see anti-silent-failure check
-  # below).
-  envsubst < "$src" > "$dst"
+  # Anti-silent-failure (SKILL.md invariant #10): every ${VAR} in the source
+  # MUST be set in the current environment. We check BEFORE envsubst because
+  # envsubst silently replaces unset vars with empty strings — the post-sub
+  # grep would never find them.
+  #
+  # Only enforce on the ${VAR}/${ VAR } braced form. Bare $VAR is too easy
+  # to mistake for shell text inside YAML; force authors to use ${VAR}.
+  local missing=()
+  local v
+  while IFS= read -r v; do
+    [[ -z "$v" ]] && continue
+    if [[ -z "${!v+x}" ]]; then
+      missing+=("$v")
+    fi
+  done < <(grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*\}' "$src" | sed 's/^\${//; s/}$//' | sort -u)
 
-  # Anti-silent-failure: any unsubstituted placeholder is a fatal config error.
-  # Match ${SOMETHING}; ignore $$ literal escapes that user may have written.
-  if grep -qE '\$\{[A-Za-z_][A-Za-z0-9_]*\}' "$dst"; then
-    local residues
-    residues=$(grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*\}' "$dst" | sort -u | tr '\n' ' ')
-    err "render_template: unresolved placeholders in $dst: $residues"
+  if (( ${#missing[@]} > 0 )); then
+    err "render_template: unresolved placeholders in $src: \${${missing[*]}}"
     err "Hint: ensure these variables are exported in the current shell."
-    rm -f "$dst"
     return 1
   fi
+
+  envsubst < "$src" > "$dst"
   return 0
 }
 
@@ -160,7 +172,11 @@ render_apply() {
   local src="$1"
   local tmp
   tmp=$(mktemp)
-  trap "rm -f '$tmp'" RETURN
+  # We DO want $tmp to expand at trap-define time (each render_apply call
+  # gets its own scratch path). Single-quote the rest so shellcheck SC2064
+  # is happy without changing semantics.
+  # shellcheck disable=SC2064
+  trap 'rm -f "'"$tmp"'"' RETURN
   if ! render_template "$src" "$tmp"; then
     return 1
   fi
