@@ -503,6 +503,19 @@ kubectl apply -f core/k8s/05-tekton/task-update-manifest.yaml
 render_apply "core/k8s/05-tekton/triggertemplate.yaml"
 render_apply "core/k8s/05-tekton/eventlistener.yaml"
 
+# Tekton Dashboard — Web UI for PipelineRuns / TaskRuns / logs.
+# release-full.yaml gives read+write (cancel run, delete PR, etc).
+# Exposed at tekton.<ROOT_DOMAIN> via Traefik (cloudflared 须在 CF Dashboard
+# 手动加 Public Hostname: tekton.<root> → http://host.docker.internal:30080)
+log "Installing Tekton Dashboard..."
+kubectl apply --server-side=true --force-conflicts \
+  -f https://storage.googleapis.com/tekton-releases/dashboard/latest/release-full.yaml
+kubectl wait --for=condition=Available --timeout=180s \
+  deployment/tekton-dashboard -n tekton-pipelines 2>/dev/null || \
+  warn "tekton-dashboard not ready yet — apply continues"
+render_apply "core/k8s/05-tekton/dashboard-ingress.yaml"
+ok "Tekton Dashboard installed (https://tekton.${ROOT_DOMAIN})"
+
 # Bridges
 kubectl apply -f core/k8s/06-bridges/
 ok "ArgoCD + Tekton + bridges applied"

@@ -24,6 +24,8 @@ ingress:
     service: http://host.docker.internal:30080
   - hostname: hooks.example.com
     service: http://host.docker.internal:30080
+  - hostname: tekton.example.com
+    service: http://host.docker.internal:30080
   - hostname: registry.example.com
     service: http://host.docker.internal:30080
     originRequest:

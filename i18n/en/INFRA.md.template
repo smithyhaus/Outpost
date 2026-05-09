@@ -23,6 +23,7 @@ Git provider plugin: `${GIT_PROVIDER_PLUGIN}`
 | RabbitMQ UI    | `https://mq.${ROOT_DOMAIN}`  | —     | `${RABBITMQ_USER}` | `${RABBITMQ_PASSWORD}`     |
 | Meilisearch    | `https://search.${ROOT_DOMAIN}` | — | (Bearer)          | `${MEILI_MASTER_KEY}`      |
 | ArgoCD         | `https://argocd.${ROOT_DOMAIN}` | — | `admin`           | (see §6)                   |
+| Tekton Dashboard | `https://tekton.${ROOT_DOMAIN}` | — | (cluster RBAC, no auth) | — |
 | Registry       | `https://registry.${ROOT_DOMAIN}` | — | (anonymous)       | —                          |
 
 ---
