@@ -259,6 +259,7 @@ check_url() {
 }
 if [[ "$ROOT_DOMAIN" != "example.com" ]]; then
   check_url "edge.argocd"   "https://argocd.${ROOT_DOMAIN}"
+  check_url "edge.tekton"   "https://tekton.${ROOT_DOMAIN}"
   check_url "edge.search"   "https://search.${ROOT_DOMAIN}/health"
   check_url "edge.mq"       "https://mq.${ROOT_DOMAIN}"
   check_url "edge.registry" "https://registry.${ROOT_DOMAIN}/v2/"

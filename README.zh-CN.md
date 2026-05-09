@@ -139,6 +139,7 @@ Plugin 协议与编写指南见 [`plugins/README.md`](plugins/README.md)。
 | 接入新项目 | [docs/05](i18n/en/docs/05-onboard-project.md) | [docs/05](i18n/zh-CN/docs/05-onboard-project.md) |
 | 故障排查 | [docs/06](i18n/en/docs/06-troubleshooting.md) | [docs/06](i18n/zh-CN/docs/06-troubleshooting.md) |
 | AI 验证 | [docs/07](i18n/en/docs/07-ai-verification.md) | [docs/07](i18n/zh-CN/docs/07-ai-verification.md) |
+| SealedSecret 工作流 | [docs/08](i18n/en/docs/08-seal-secret.md) | [docs/08](i18n/zh-CN/docs/08-seal-secret.md) |
 
 ## 项目状态
 

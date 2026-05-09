@@ -75,6 +75,7 @@ A single `cloudflared` container in Compose carries all ingress:
 | `mq.<domain>`                   | HTTP | `caddy:80` → `rabbitmq:15672`              |
 | `search.<domain>`               | HTTP | `caddy:80` → `meilisearch:7700`            |
 | `argocd.<domain>`               | HTTP | `host.docker.internal:30080` → ArgoCD      |
+| `tekton.<domain>`               | HTTP | `host.docker.internal:30080` → Tekton Dashboard |
 | `hooks.<domain>`                | HTTP | `host.docker.internal:30080` → Tekton EL   |
 | `registry.<domain>`             | HTTP | `host.docker.internal:30080` → Registry    |
 | `*.apps.<domain>`               | HTTP | `host.docker.internal:30080` → user apps   |

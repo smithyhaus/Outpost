@@ -7,6 +7,12 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: tekton-pipelines
+  labels:
+    # Tekton Dashboard + EventListener pods fail under the K8s default
+    # `restricted` Pod Security level (they need things like
+    # allowPrivilegeEscalation / runAsNonRoot=false defaults). Downgrade
+    # to `baseline`. Apps namespace stays at the cluster default.
+    pod-security.kubernetes.io/enforce: baseline
 ---
 apiVersion: v1
 kind: Namespace

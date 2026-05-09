@@ -109,10 +109,11 @@ curl -H "Authorization: Bearer ${MEILI_MASTER_KEY}" https://search.${ROOT_DOMAIN
 - 首次登录后建议改密码：`argocd account update-password`
 - 监听的 manifest 仓库：`${MANIFEST_REPO_URL}` (branch: `${MANIFEST_REPO_BRANCH}`)
 
-## 7. Tekton CI（webhook + pipeline）
+## 7. Tekton CI（webhook + pipeline + dashboard）
 
 - Webhook URL：`https://hooks.${ROOT_DOMAIN}`
 - Webhook Secret：`${GIT_WEBHOOK_SECRET}`
+- Dashboard UI：`https://tekton.${ROOT_DOMAIN}` （查看 PipelineRun / TaskRun / 日志,可在界面里 cancel / 删 run。**当前无登录鉴权,生产建议 CF Access 加白名单**。）
 - 当前 git-provider plugin：`${GIT_PROVIDER_PLUGIN}`
 - 在每个应用仓库的 webhook 设置中配上面的 URL 与 secret，仅勾选 Push 事件。
 

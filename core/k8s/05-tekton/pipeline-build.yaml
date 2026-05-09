@@ -60,6 +60,9 @@ spec:
     # 1. 拉应用代码
     # -------------------------------------------------------------------------
     - name: fetch-source
+      # Per-task budget. Pulling source over HTTPS clone is normally
+      # under a minute; allow 10m for large repos / slow networks.
+      timeout: "10m"
       taskRef:
         name: git-clone
         kind: Task
@@ -82,6 +85,9 @@ spec:
     # 2. Kaniko 构建并推到 registry
     # -------------------------------------------------------------------------
     - name: build-and-push
+      # Multi-stage Dockerfiles (Java/Maven, .NET SDK) on slow networks
+      # easily blow past 60min during base-image pulls. 90min cap.
+      timeout: "90m"
       runAfter:
         - fetch-source
       taskRef:
@@ -109,6 +115,8 @@ spec:
     # 3. 拉 manifest 仓库，改 image tag，提交回去
     # -------------------------------------------------------------------------
     - name: update-manifest
+      # yq edit + git commit + push — well under a minute normally.
+      timeout: "5m"
       runAfter:
         - build-and-push
       taskRef:

@@ -28,6 +28,7 @@ In your tunnel detail page → **Public Hostname** tab → add each row (mind th
 | `search`  | your root domain | HTTP | `caddy:80` |
 | `mq`      | your root domain | HTTP | `caddy:80` |
 | `argocd`  | your root domain | HTTP | `host.docker.internal:30080` |
+| `tekton`  | your root domain | HTTP | `host.docker.internal:30080` |
 | `hooks`   | your root domain | HTTP | `host.docker.internal:30080` |
 | `registry`| your root domain | HTTP | `host.docker.internal:30080` |
 | `*.apps`  | your root domain | HTTP | `host.docker.internal:30080` |

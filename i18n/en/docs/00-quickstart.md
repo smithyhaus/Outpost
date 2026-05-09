@@ -63,8 +63,8 @@ skip ahead.
 - [ ] **A1** Move your domain's NS to Cloudflare (Free plan is fine), wait for propagation
 - [ ] **A2** Zero Trust → Networks → Tunnels → **Create a tunnel** → choose `Cloudflared` → name it (anything, e.g. `outpost`) → Save
 - [ ] **A3** On the install page, **copy only the token** (a long `eyJhIjoi…` string). Keep it for Phase D. **Do NOT** run that install command — we run cloudflared inside Compose, not on the host directly
-- [ ] **A4** Open the tunnel detail page → **Public Hostname** tab → add the 9 rows (full table in `01-cloudflare-setup.md` §3):
-  - 6 HTTP rows: `search` / `mq` / `argocd` / `hooks` / `registry` / `*.apps`
+- [ ] **A4** Open the tunnel detail page → **Public Hostname** tab → add the 10 rows (full table in `01-cloudflare-setup.md` §3):
+  - 7 HTTP rows: `search` / `mq` / `argocd` / `tekton` / `hooks` / `registry` / `*.apps`
   - 3 TCP rows: `pg` / `redis` / `rabbitmq`
   - **Extra for `registry`**: expand *Additional application settings → HTTP Settings → HTTP Host Header* and set it to `registry.<your-domain>` (Docker Registry is Host-header sensitive; without this, image pulls 401)
 - [ ] **A5** The Tunnel status in the Dashboard will show *Inactive / Down* — **expected**, because cloudflared isn't running locally yet. **Do NOT run any connectivity check here.** Real verification happens in Phase F
@@ -154,7 +154,7 @@ skip ahead.
   ```
   Expect at least 4 lines (one per Cloudflare region)
 - [ ] **F3** Cloudflare Dashboard → tunnel status flips to *Healthy*
-- [ ] **F4** Browser → `https://argocd.<your-domain>` → ArgoCD login page. Credentials live in `INFRA.md`
+- [ ] **F4** Browser → `https://argocd.<your-domain>` (ArgoCD) and `https://tekton.<your-domain>` (Tekton Dashboard) — both should load. Credentials live in `INFRA.md`
 - [ ] **F5** Any FAIL → look up the matching section in `06-troubleshooting.md` or `07-ai-verification.md` §1
 
 ### Phase G — Survive a restart — **branches by Outpost-host platform**
@@ -208,6 +208,124 @@ Onboarding your own application: see `05-onboard-project.md`. Sketch:
 2. In the manifest repo, add `apps/<app>/` (Deployment + Service + Ingress) and `argocd-apps/<app>.yaml` (ArgoCD Application)
 3. Configure a webhook on the application repo: URL `https://hooks.<root>`, secret `${GIT_WEBHOOK_SECRET}` from `INFRA.md`
 4. Push code → Tekton builds → ArgoCD deploys → `https://<app>.apps.<root>` is live
+
+Application secrets (DB connection strings, API tokens) get sealed with
+SealedSecret before committing to git — see `08-seal-secret.md`.
+
+---
+
+## GitOps crash course — 5 things you'll do every day (for newcomers)
+
+### One-line mental model
+
+```
+You git push                                                   ┌── App is live
+    │                                                          │
+    └─> Tekton builds a docker image and pushes to registry    │
+          │                                                    │
+          └─> Tekton rewrites the image tag in the manifest    │
+              repo (new SHA)                                   │
+              │                                                │
+              └─> ArgoCD sees the manifest changed,            │
+                  kubectl applies it for you ─────────────────┘
+```
+
+**Everything flows through the manifest repo.** You don't `kubectl apply`
+from your terminal. To change replicas / env vars / resource limits, you
+edit YAML in the manifest repo and push — ArgoCD catches up automatically.
+
+### 1️⃣ "Where is my latest build?"
+
+Open **Tekton Dashboard**: `https://tekton.<your-root>` (no login; the
+homepage *is* the PipelineRuns list).
+
+The top entry is your most recent build. Click in to see the 3 tasks:
+
+| Task | What it does | Common failure |
+|------|--------------|----------------|
+| `fetch-source` | clones your app repo | wrong git creds / wrong repo URL |
+| `build-and-push` | kaniko build + push to registry | bad Dockerfile / base-image pull timeout |
+| `update-manifest` | rewrites the image tag in the manifest repo | manifest repo missing `apps/<app>/` / token can't push |
+
+Each task expands to per-step logs, GitHub-Actions style.
+
+### 2️⃣ "Is my app actually running in K8s?"
+
+Open **ArgoCD UI**: `https://argocd.<your-root>` (user `admin`, password
+in `INFRA.md` §6 or via `grep ARGOCD_ADMIN_PASSWORD .env`).
+
+The home page shows every Application as a card with two status flags:
+
+| Status | Meaning | What to do |
+|--------|---------|------------|
+| **Synced + Healthy** (green) | what's running == what's in git, and pods ready | nothing |
+| **OutOfSync** | git changed, cluster hasn't caught up yet | usually auto-syncs in 30s. Otherwise click **SYNC** |
+| **Degraded** | applied OK but pods aren't healthy (CrashLoop / ImagePullBackOff / readiness failing) | click into the card → find the red resource → click the pod → look at Events / Logs |
+| **Missing** | manifest declares it but cluster doesn't have it | same: click SYNC |
+
+Click any card and you see "what the manifest declares" vs "what the
+cluster actually has", with the diff highlighted.
+
+### 3️⃣ Force ArgoCD to sync now (don't wait the 30s)
+
+ArgoCD UI → click the Application card → top right **SYNC** → default
+options → SYNCHRONIZE.
+
+Or from the terminal:
+```bash
+kubectl patch application <app> -n argocd --type merge \
+  -p '{"operation":{"sync":{}}}'
+```
+
+### 4️⃣ My app is broken — how do I get to the logs?
+
+Via ArgoCD: open the Application → click the red pod → **LOGS** tab.
+Or via terminal:
+
+```bash
+# Find the pod name
+kubectl get pods -n apps -l app=<app-name>
+
+# Live tail
+kubectl logs -n apps -l app=<app-name> -f --all-containers
+
+# Logs from the previous crash
+kubectl logs -n apps <pod-name> --previous
+```
+
+### 5️⃣ How do I "deploy" a change?
+
+**Option A — change code** (most common):
+```
+edit code in the app repo → git push → watch Tekton Dashboard ~30s
+                                     → wait for ArgoCD sync ~30s → done
+```
+Fully automatic. You only `git push`.
+
+**Option B — change deployment params** (replicas, env vars, limits):
+```
+edit apps/<app>/deployment.yaml in the manifest repo → git push
+                                     → ArgoCD applies within 30s
+```
+
+**Option C — change a secret** (DB password rotated, etc.):
+- Don't edit `sealed-secret.yaml` in git directly (encrypted bytes won't decrypt).
+- Re-run the application's `scripts/onboard.sh` to re-encrypt with the live public key, then push.
+- Full flow: `08-seal-secret.md`.
+
+> ⚠️ **Never `kubectl apply` directly into the `apps` namespace.** ArgoCD's
+> self-heal will overwrite your change within 30s, restoring whatever the
+> manifest repo says. Always edit the manifest repo.
+
+### Cheat sheet
+
+| Goal | Where |
+|------|-------|
+| See where my build is | Tekton Dashboard `https://tekton.<root>` |
+| See app deploy status / force sync | ArgoCD UI `https://argocd.<root>` |
+| See app runtime logs | ArgoCD → Application → pod → LOGS, or `kubectl logs -n apps -l app=<X>` |
+| Add a secret to an app | the app repo's `scripts/onboard.sh` (see `08-seal-secret.md`) |
+| Change replicas / resources / env | manifest repo `apps/<app>/deployment.yaml`, then push |
 
 ---
 

@@ -26,6 +26,7 @@
 | `search` | `<你的根域名>` | HTTP | `caddy:80` |
 | `mq` | `<你的根域名>` | HTTP | `caddy:80` |
 | `argocd` | `<你的根域名>` | HTTP | `host.docker.internal:30080` |
+| `tekton` | `<你的根域名>` | HTTP | `host.docker.internal:30080` |
 | `hooks` | `<你的根域名>` | HTTP | `host.docker.internal:30080` |
 | `registry` | `<你的根域名>` | HTTP | `host.docker.internal:30080` |
 | `*.apps` | `<你的根域名>` | HTTP | `host.docker.internal:30080` |

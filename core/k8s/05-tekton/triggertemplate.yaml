@@ -30,11 +30,14 @@ spec:
       spec:
         serviceAccountName: tekton-triggers-sa
         # 默认 1h 不够 — 多 stage Dockerfile + docker.io 拉镜像在国内网络下
-        # 容易碰边界。给 build-and-push 留 90min,update-manifest 5min,
-        # fetch-source 10min,合计 105min 上限。
+        # 容易碰边界。Per-task timeouts 已写在 pipeline-build.yaml
+        # (fetch-source 10m + build-and-push 90m + update-manifest 5m)。
+        # 这里的 timeouts.tasks 是**所有非 finally task 的总和上限**,
+        # 必须 >= 105m,留 15m 余量给 Tekton 调度延迟,故 120m。
+        # pipeline 给 2h 兜底(包括 PVC 等待、scheduling、finally)。
         timeouts:
           pipeline: "2h"
-          tasks: "100m"
+          tasks: "120m"
           finally: "5m"
         pipelineRef:
           name: build-and-deploy

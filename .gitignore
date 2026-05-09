@@ -21,6 +21,11 @@ Thumbs.db
 *~
 .vscode/
 .idea/
+# Visual Studio / Rider auto-generated solution scaffold (we are not a .NET project)
+*.sln
+*.suo
+*.user
+.vs/
 
 # Logs
 *.log

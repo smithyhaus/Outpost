@@ -52,6 +52,12 @@ spec:
 `ingress.yaml` should use `<app>.apps.<root>` (already covered by the
 wildcard in your Cloudflare Tunnel config — no CF change needed).
 
+**Secrets (connection strings, tokens, etc.):** seal with SealedSecret
+before committing. See [08-seal-secret.md](./08-seal-secret.md) for the
+mechanism and disaster recovery; the actual `kubeseal` invocation lives
+in each application's own onboard script because every app has different
+fields.
+
 ### 3. Manifest repo — `argocd-apps/<app>.yaml`
 
 ```yaml

@@ -111,10 +111,11 @@ curl -H "Authorization: Bearer ${MEILI_MASTER_KEY}" https://search.${ROOT_DOMAIN
 - Recommended: change the password after first login (`argocd account update-password`).
 - Manifest repo: `${MANIFEST_REPO_URL}` (branch `${MANIFEST_REPO_BRANCH}`)
 
-## 7. Tekton CI (webhook + pipeline)
+## 7. Tekton CI (webhook + pipeline + dashboard)
 
 - Webhook URL: `https://hooks.${ROOT_DOMAIN}`
 - Webhook secret: `${GIT_WEBHOOK_SECRET}`
+- Dashboard UI: `https://tekton.${ROOT_DOMAIN}` (PipelineRun / TaskRun / log viewer; can cancel runs, delete runs from the UI. **No auth — gate it with Cloudflare Access for anything beyond local dev.**)
 - Active git provider plugin: `${GIT_PROVIDER_PLUGIN}`
 - Configure your repos to send Push events to the URL above with the secret.
 

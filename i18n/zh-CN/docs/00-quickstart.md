@@ -47,8 +47,8 @@
 - [ ] **A1** 域名 NS 切到 Cloudflare(Free 计划够用),等 NS 生效
 - [ ] **A2** Zero Trust → Networks → Tunnels → **Create a tunnel** → 选 `Cloudflared` → 命名(随便,如 `outpost`)→ Save
 - [ ] **A3** 看到 install command 时**只复制 token**(`eyJhIjoi…` 长串),先放一边,**不要**执行那条 install 命令(我们用 Compose 跑 cloudflared,不是直接在主机)
-- [ ] **A4** 进入这个 Tunnel 的 **Public Hostname** 标签,逐条添加 9 条记录(详见 `01-cloudflare-setup.md` §3 表格):
-  - 6 条 HTTP:`search` / `mq` / `argocd` / `hooks` / `registry` / `*.apps`
+- [ ] **A4** 进入这个 Tunnel 的 **Public Hostname** 标签,逐条添加 10 条记录(详见 `01-cloudflare-setup.md` §3 表格):
+  - 7 条 HTTP:`search` / `mq` / `argocd` / `tekton` / `hooks` / `registry` / `*.apps`
   - 3 条 TCP:`pg` / `redis` / `rabbitmq`
   - **`registry` 那条额外**:展开 *Additional application settings → HTTP Settings → HTTP Host Header*,填 `registry.<你的根域名>`(Docker Registry 对 Host 头敏感,不写会拉镜像 401)
 - [ ] **A5** 此时 Cloudflare Dashboard 里 Tunnel 状态应该是 *Inactive / Down* —— **正常**,因为本地 cloudflared 还没起。**不要在这里跑任何验证命令**;真正的连通性验证在 Phase F
@@ -138,7 +138,7 @@
   ```
   应至少 4 行(对应 CF 的 4 个 region)
 - [ ] **F3** Cloudflare Dashboard 里 Tunnel 状态变 *Healthy*
-- [ ] **F4** 浏览器开 `https://argocd.<你的域名>`,应见 ArgoCD 登录页;凭据见 `INFRA.zh-CN.md`
+- [ ] **F4** 浏览器开 `https://argocd.<你的域名>`(ArgoCD)和 `https://tekton.<你的域名>`(Tekton Dashboard)各自能打开;凭据见 `INFRA.zh-CN.md`
 - [ ] **F5** 任何 FAIL 查 `06-troubleshooting.md` 或 `07-ai-verification.md` §1 对应小节
 
 ### Phase G — 关机后保活 — **按 Outpost 主机的平台分支**
@@ -187,6 +187,110 @@ HTTP 服务(ArgoCD UI / RabbitMQ UI / Meilisearch / Registry)直接浏览器开 
 2. 在 manifest 仓库的 `apps/<app>/` 写 K8s YAML,在 `argocd-apps/<app>.yaml` 写 ArgoCD Application
 3. 在应用仓库配 webhook → `https://hooks.<root>` + secret
 4. push → Tekton 自动构建 → ArgoCD 自动部署 → `https://<app>.apps.<root>` 可访问
+
+应用密钥(连接串、token 等)用 SealedSecret 加密后入库,见 `08-seal-secret.md`。
+
+---
+
+## GitOps 速成 — 日常 5 个最常操作(给没用过的人)
+
+### 一句话理解整套流
+
+```
+你 push 代码                                                       ┌── 应用跑起来
+      │                                                           │
+      └──> Tekton 把代码打成 docker image,推到 registry           │
+            │                                                     │
+            └──> Tekton 改 manifest 仓库里的 image 标签 (新 SHA)   │
+                  │                                               │
+                  └──> ArgoCD 看到 manifest 变了,kubectl apply ───┘
+```
+
+**一切都过 manifest 仓库**:你不会在终端敲 `kubectl apply`。要改部署/副本数/环境变量,都在 manifest 仓库改 YAML 然后 push。ArgoCD 自动追上。
+
+### 1️⃣ 看"我刚 push 的代码到底走到哪一步了"
+
+打开 **Tekton Dashboard**:`https://tekton.<你的根域名>`(无需登录,首页就是 PipelineRuns 列表)
+
+最上面那条就是你最新的 build。点进去看 3 个 task 的状态:
+
+| Task | 干嘛的 | 失败常见原因 |
+|------|--------|------------|
+| `fetch-source` | 拉应用代码 | git 凭据不对 / 仓库地址写错 |
+| `build-and-push` | kaniko 构建并推 image | Dockerfile 有问题 / 拉基础镜像超时 |
+| `update-manifest` | 改 manifest 仓库 image 标签 | manifest 仓库没建对应 `apps/<app>/` 目录 / token 没 push 权 |
+
+每个 task 都能点开看每一步的 logs,跟 GitHub Actions 一样直观。
+
+### 2️⃣ 看"我的应用在 K8s 里到底活没活"
+
+打开 **ArgoCD UI**:`https://argocd.<你的根域名>`(用户名 `admin`,密码见 `INFRA.zh-CN.md` §6 或终端运行 `grep ARGOCD_ADMIN_PASSWORD .env`)
+
+首页是所有 Application 的卡片,每张卡片两个状态:
+
+| 状态 | 含义 | 看到这个该做啥 |
+|------|------|---------------|
+| **Synced + Healthy**(绿) | 集群里跑的 = git 里写的 + 所有 pod ready | 啥都不用做 |
+| **OutOfSync** | git 里有改动,集群还没追上 | 通常 ArgoCD 30s 内会自动 sync。等不及就点卡片右下角 **SYNC** |
+| **Degraded** | 部署进去了,但 pod 起不来(CrashLoop / 镜像拉不到 / readiness 失败) | 点进卡片 → 找红色资源 → 点 pod → 看 Events / Logs |
+| **Missing** | manifest 写了,但还没创建 | 同上,点 SYNC |
+
+点进任意一张卡片,你看到的是"manifest 仓库里这个 app 声明了什么 → 集群里实际跑成啥",**两边的 diff 高亮显示**。
+
+### 3️⃣ 强制让 ArgoCD 重新同步(改完 manifest 后等不及那 30s)
+
+ArgoCD UI → 点 Application 卡片 → 右上 **SYNC** → 默认参数 → SYNCHRONIZE
+
+或终端:
+```bash
+kubectl patch application <app> -n argocd --type merge \
+  -p '{"operation":{"sync":{}}}'
+```
+
+### 4️⃣ 应用挂了,我怎么从 0 摸到 logs
+
+进 ArgoCD 那个 Application → 看到红色的 pod → 点开 pod → **LOGS** 标签。或终端:
+
+```bash
+# 看 pod 名字
+kubectl get pods -n apps -l app=<app-name>
+
+# 看实时 logs (-f 是 follow)
+kubectl logs -n apps -l app=<app-name> -f --all-containers
+
+# 看上一次 crash 的 logs
+kubectl logs -n apps <pod-name> --previous
+```
+
+### 5️⃣ 我改了配置/代码,要怎么"上线"
+
+**方式 A — 改代码**(最常见):
+```
+应用仓库改代码 → git push → 等 30s 看 Tekton Dashboard → 等 ArgoCD 同步 → 完成
+```
+全自动,你只要 `git push`。
+
+**方式 B — 改部署参数**(改副本数、环境变量、限额等):
+```
+manifest 仓库改 apps/<app>/deployment.yaml → git push → 30s 内 ArgoCD 自动 apply
+```
+
+**方式 C — 改密钥**(数据库密码改了之类):
+- 不要直接改 git 里的 sealed-secret.yaml(改了密文也解不开)
+- 重跑应用自己的 `scripts/onboard.sh` 重新加密 → push
+- 完整流程见 `08-seal-secret.md`
+
+> ⚠️ **永远不要直接 `kubectl apply` 到 `apps` namespace**。ArgoCD self-heal 会在 30s 内把你的改动覆盖回 manifest 仓库的版本。要改就走 manifest 仓库。
+
+### 速记表
+
+| 我想… | 去哪 |
+|------|------|
+| 看 build 跑到哪一步 | Tekton Dashboard `https://tekton.<root>` |
+| 看应用部署状态 / 强制同步 | ArgoCD UI `https://argocd.<root>` |
+| 看应用运行日志 | ArgoCD → Application → pod → LOGS,或 `kubectl logs -n apps -l app=<X>` |
+| 给应用加密钥 | 应用 repo 的 `scripts/onboard.sh`(详见 `08-seal-secret.md`) |
+| 改副本数/资源限额/env | manifest 仓库 `apps/<app>/deployment.yaml`,然后 push |
 
 ---
 
