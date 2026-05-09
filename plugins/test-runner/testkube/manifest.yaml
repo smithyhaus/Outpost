@@ -1,0 +1,35 @@
+# =============================================================================
+# Plugin: test-runner / testkube
+# -----------------------------------------------------------------------------
+# Marker + post-install configuration. The Testkube agent itself is installed
+# by bootstrap.sh via `helm install` (helm is auto-downloaded if absent —
+# matching the kubeseal pattern). This file:
+#   - Records which test-runner is active (used by the run-tests Task).
+#   - Sets a tight ResourceQuota on the testkube namespace so a runaway
+#     TestWorkflow can't OOM the cluster.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: outpost-test-runner
+  namespace: tekton-pipelines
+  labels:
+    outpost.io/plugin-kind: test-runner
+data:
+  runner: "testkube"
+  mode: "${TESTKUBE_MODE}"
+  # The run-tests Task reads `cli-image` to invoke `testkube run testworkflow`.
+  cli-image: "kubeshop/testkube-cli:latest"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: testkube-quota
+  namespace: testkube
+spec:
+  hard:
+    pods: "20"
+    requests.cpu: "4"
+    requests.memory: "8Gi"
+    limits.cpu: "8"
+    limits.memory: "16Gi"

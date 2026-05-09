@@ -1,0 +1,32 @@
+# =============================================================================
+# Outpost test contract — hello-world-go
+# Schema v1. Phase 1 MVP: runner.command is eval'd directly inside an alpine
+# step. Phase 2 will swap to a Testkube TestWorkflow with content.git for
+# proper isolation + history.
+# =============================================================================
+version: 1
+
+runner:
+  # MVP placeholder — validates pipeline plumbing end-to-end.
+  command:
+    - sh
+    - -c
+    - echo "[hello-world-go] Gate A placeholder OK — see tests/main_test.go for real tests"
+  # Phase 2 form (commented for reference — uncomment after Testkube cutover):
+  # image: golang:1.22-alpine
+  # command:
+  #   - sh
+  #   - -c
+  #   - "go test -race -cover ./..."
+
+gates:
+  pre-deploy:
+    timeout: 1m
+  post-deploy-smoke:
+    enabled: true
+    image: curlimages/curl:8.10.0
+    command:
+      - sh
+      - -c
+      - "curl -fsS http://hello-world-go.apps.svc.cluster.local/healthz"
+    timeout: 30s

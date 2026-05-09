@@ -1,0 +1,29 @@
+# =============================================================================
+# Default AnalysisTemplate — Web provider HTTP probe.
+# Works without Testkube. Hits the canary's /healthz; auto-rollback if not 200.
+# =============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: outpost-default
+  namespace: argo-rollouts
+spec:
+  args:
+    - name: service-name
+    - name: namespace
+      value: apps
+  metrics:
+    - name: healthz-200
+      # Decided defaults (per proposal §10):
+      #   failureLimit=2 — 2 consecutive failures abort the rollout
+      #   consecutiveErrorLimit=3 — 3 consecutive errors (no response, 5xx)
+      #     before treating provider as unstable (vs. test as failed)
+      failureLimit: 2
+      consecutiveErrorLimit: 3
+      interval: 30s
+      successCondition: result == 200
+      provider:
+        web:
+          url: "http://{{args.service-name}}.{{args.namespace}}.svc.cluster.local/healthz"
+          timeoutSeconds: 5
+          jsonPath: "{$.status_code}"

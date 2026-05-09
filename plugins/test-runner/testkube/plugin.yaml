@@ -1,0 +1,26 @@
+kind: test-runner
+name: testkube
+description: |
+  Testkube — Kubernetes-native test orchestrator. 30+ built-in engines
+  (Cypress / Playwright / Postman / k6 / JMeter / Pytest / Jest / JUnit /
+  Ginkgo / Maven / Gradle / dotnet test / etc.).
+
+  Defines tests as `TestWorkflow` CRDs. Same definition is reused by:
+   - Pipeline Gate A (Tekton run-tests task → testkube run testworkflow)
+   - Gate B (Argo Rollouts AnalysisTemplate Job → testkube run testworkflow)
+
+  bootstrap.sh auto-downloads helm if absent and runs:
+    helm install testkube oci://registry-1.docker.io/kubeshop/testkube \
+      --namespace testkube --create-namespace
+required_env: []
+optional_env:
+  - TESTKUBE_MODE          # oss (default) | cloud
+  - TESTKUBE_CLOUD_API_KEY # only if TESTKUBE_MODE=cloud
+provides:
+  - test-runner: testkube
+  - cli-image: kubeshop/testkube-cli
+  - crds: TestWorkflow, TestTrigger
+caveats:
+  - Each TestWorkflow run spins ≥1 pod. On a small k3d cluster, set tight
+    resource quotas on the `testkube` namespace.
+  - `cloud` mode requires a Testkube Pro account + API key (Phase 2).

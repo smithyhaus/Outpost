@@ -1,0 +1,26 @@
+# =============================================================================
+# Outpost test contract — hello-world-java (Spring Boot)
+# Schema v1.
+# =============================================================================
+version: 1
+
+runner:
+  command:
+    - sh
+    - -c
+    - echo "[hello-world-java] Gate A placeholder OK — see tests/HelloAppTest.java for real tests"
+  # Phase 2 form:
+  # image: maven:3.9-eclipse-temurin-17
+  # command: ["sh", "-c", "mvn -B -q test"]
+
+gates:
+  pre-deploy:
+    timeout: 5m       # Maven dep download is slow on cold cache
+  post-deploy-smoke:
+    enabled: true
+    image: curlimages/curl:8.10.0
+    command:
+      - sh
+      - -c
+      - "curl -fsS http://hello-world-java.apps.svc.cluster.local/healthz"
+    timeout: 1m

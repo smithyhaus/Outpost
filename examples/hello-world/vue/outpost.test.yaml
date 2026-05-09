@@ -1,0 +1,26 @@
+# =============================================================================
+# Outpost test contract — hello-world-vue
+# Schema v1.
+# =============================================================================
+version: 1
+
+runner:
+  command:
+    - sh
+    - -c
+    - echo "[hello-world-vue] Gate A placeholder OK — see tests/App.test.js for real tests"
+  # Phase 2 form:
+  # image: node:20-alpine
+  # command: ["sh", "-c", "npm ci && npm test -- --run"]
+
+gates:
+  pre-deploy:
+    timeout: 2m
+  post-deploy-smoke:
+    enabled: true
+    image: curlimages/curl:8.10.0
+    command:
+      - sh
+      - -c
+      - "curl -fsS http://hello-world-vue.apps.svc.cluster.local/"
+    timeout: 30s

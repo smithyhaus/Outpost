@@ -1,0 +1,19 @@
+kind: test-runner
+name: catalog-tasks
+description: |
+  Lightweight alternative to Testkube — uses the public Tekton Catalog
+  per-language test tasks (golang-test, pytest, jest, junit-runner,
+  dotnet-test). Good for teams who don't want Testkube's footprint.
+
+  Trade-off: each language has its own task contract; no unified
+  `outpost.test.yaml` UX. Works only for Gate A (pre-deploy). Gate B
+  must use a simple HTTP probe (Argo Rollouts Web provider).
+required_env: []
+optional_env: []
+provides:
+  - test-runner: catalog-tasks
+  - tasks: golang-test, pytest, jest, junit-runner, dotnet-test
+caveats:
+  - No unified test contract — each language repo configures its own task.
+  - Gate B (post-deploy) only supports Argo Rollouts Web provider (HTTP probe).
+  - Choose this over Testkube only if cluster footprint matters more than features.

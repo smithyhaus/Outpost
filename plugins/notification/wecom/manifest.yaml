@@ -1,0 +1,29 @@
+# =============================================================================
+# Plugin: notification / wecom (企业微信群机器人)
+# =============================================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: wecom-webhook
+  namespace: tekton-pipelines
+  labels:
+    outpost.io/notification-provider: wecom
+type: Opaque
+stringData:
+  webhook-url: "${WECOM_WEBHOOK_URL}"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wecom-template
+  namespace: tekton-pipelines
+  labels:
+    outpost.io/notification-provider: wecom
+data:
+  body.tmpl: |
+    {
+      "msgtype": "markdown",
+      "markdown": {
+        "content": "## <font color=\\"warning\\">[${NOTIFY_LEVEL}] ${NOTIFY_APP} ${NOTIFY_EVENT}</font>\\n>**ref**: \\u0060${NOTIFY_REF}\\u0060\\n>**commit**: \\u0060${NOTIFY_COMMIT}\\u0060\\n>**env**: \\u0060${NOTIFY_ENV}\\u0060\\n>**detail**: [open](${NOTIFY_URL})\\n>${NOTIFY_TEXT}"
+      }
+    }

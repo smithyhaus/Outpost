@@ -1,0 +1,17 @@
+kind: notification
+name: webhook-generic
+description: |
+  Generic JSON webhook fallback — POSTs the unified Outpost payload to your
+  own collector (e.g. an internal alertmanager, custom relay, or local script).
+  No vendor template; just the raw normalized JSON.
+required_env:
+  - GENERIC_WEBHOOK_URL
+optional_env:
+  - GENERIC_WEBHOOK_BEARER
+provides:
+  - channel: generic
+  - delivery: HTTPS POST {Content-Type: application/json}
+  - body: the unified Outpost payload (see proposal §4.2)
+caveats:
+  - No retry on 4xx/5xx — your receiver should be idempotent and tolerate replays.
+  - If GENERIC_WEBHOOK_BEARER is set, sent as `Authorization: Bearer <token>`.

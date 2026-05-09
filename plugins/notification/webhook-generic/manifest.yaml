@@ -1,0 +1,37 @@
+# =============================================================================
+# Plugin: notification / webhook-generic
+# -----------------------------------------------------------------------------
+# Sends the raw normalized Outpost payload (no vendor wrapper) to a configured
+# HTTPS endpoint. Useful for testing, custom collectors, alertmanager bridges.
+# =============================================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: generic-webhook
+  namespace: tekton-pipelines
+  labels:
+    outpost.io/notification-provider: generic
+type: Opaque
+stringData:
+  webhook-url: "${GENERIC_WEBHOOK_URL}"
+  bearer: "${GENERIC_WEBHOOK_BEARER}"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: generic-template
+  namespace: tekton-pipelines
+  labels:
+    outpost.io/notification-provider: generic
+data:
+  body.tmpl: |
+    {
+      "event": "${NOTIFY_EVENT}",
+      "level": "${NOTIFY_LEVEL}",
+      "app": "${NOTIFY_APP}",
+      "env": "${NOTIFY_ENV}",
+      "commit": "${NOTIFY_COMMIT}",
+      "ref": "${NOTIFY_REF}",
+      "url": "${NOTIFY_URL}",
+      "text": "${NOTIFY_TEXT}"
+    }

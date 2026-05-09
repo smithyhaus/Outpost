@@ -1,0 +1,17 @@
+kind: notification
+name: feishu
+description: |
+  Feishu (Lark) custom-bot webhook notifications. Renders the unified Outpost
+  notification payload into a Feishu interactive card. Optional signed webhook
+  supported.
+required_env:
+  - FEISHU_WEBHOOK_URL
+optional_env:
+  - FEISHU_SIGN_SECRET
+provides:
+  - channel: feishu
+  - delivery: HTTPS POST to open.feishu.cn
+  - integrates: argocd-notifications-cm + outpost-notify Tekton task
+caveats:
+  - Without sign secret, the bot accepts any traffic with the URL. Rotate if leaked.
+  - Per-bot rate limit ≈ 100 msg/min (more generous than DingTalk).

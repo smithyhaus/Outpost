@@ -1,0 +1,26 @@
+# =============================================================================
+# Outpost test contract — hello-world-csharp (ASP.NET Core)
+# Schema v1.
+# =============================================================================
+version: 1
+
+runner:
+  command:
+    - sh
+    - -c
+    - echo "[hello-world-csharp] Gate A placeholder OK — see tests/HelloCSharpTests.cs for real tests"
+  # Phase 2 form:
+  # image: mcr.microsoft.com/dotnet/sdk:8.0-alpine
+  # command: ["sh", "-c", "dotnet test --nologo --verbosity quiet"]
+
+gates:
+  pre-deploy:
+    timeout: 5m       # NuGet restore is slow on cold cache
+  post-deploy-smoke:
+    enabled: true
+    image: curlimages/curl:8.10.0
+    command:
+      - sh
+      - -c
+      - "curl -fsS http://hello-world-csharp.apps.svc.cluster.local/healthz"
+    timeout: 1m

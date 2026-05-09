@@ -1,0 +1,44 @@
+# Fragment merged into the `data:` section of `argocd-notifications-cm`.
+# Concatenated by bootstrap.sh — must keep the 2-space indent so the result
+# is still valid YAML.
+  service.webhook.dingtalk: |
+    url: $dingtalk-webhook-url
+    headers:
+      - name: Content-Type
+        value: application/json
+  template.app-sync-failed-dingtalk: |
+    webhook:
+      dingtalk:
+        method: POST
+        body: |
+          {
+            "msgtype": "markdown",
+            "markdown": {
+              "title": "[error] {{.app.metadata.name}} sync failed",
+              "text": "### {{.app.metadata.name}} sync failed\n- status: {{.app.status.sync.status}}\n- detail: [open](https://argocd.${ROOT_DOMAIN}/applications/{{.app.metadata.name}})"
+            }
+          }
+  template.app-degraded-dingtalk: |
+    webhook:
+      dingtalk:
+        method: POST
+        body: |
+          {
+            "msgtype": "markdown",
+            "markdown": {
+              "title": "[error] {{.app.metadata.name}} degraded",
+              "text": "### {{.app.metadata.name}} unhealthy\n- health: {{.app.status.health.status}}\n- detail: [open](https://argocd.${ROOT_DOMAIN}/applications/{{.app.metadata.name}})"
+            }
+          }
+  template.app-rollback-dingtalk: |
+    webhook:
+      dingtalk:
+        method: POST
+        body: |
+          {
+            "msgtype": "markdown",
+            "markdown": {
+              "title": "[error] {{.app.metadata.name}} rolled back",
+              "text": "### {{.app.metadata.name}} auto-rolled back\n- detail: [open](https://argocd.${ROOT_DOMAIN}/applications/{{.app.metadata.name}})"
+            }
+          }

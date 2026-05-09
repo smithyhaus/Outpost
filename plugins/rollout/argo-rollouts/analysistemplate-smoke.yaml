@@ -1,0 +1,63 @@
+# =============================================================================
+# Smoke AnalysisTemplate — Job provider runs a Testkube TestWorkflow.
+# Used when test-runner=testkube. Runs the same TestWorkflow as Gate A,
+# so test definition has one source of truth.
+# =============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: outpost-smoke
+  namespace: argo-rollouts
+spec:
+  args:
+    - name: app-name
+  metrics:
+    - name: testkube-smoke
+      failureLimit: 2
+      consecutiveErrorLimit: 3
+      provider:
+        job:
+          spec:
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                serviceAccountName: outpost-rollout-analysis
+                containers:
+                  - name: smoke
+                    image: kubeshop/testkube-cli:latest
+                    command:
+                      - sh
+                      - -c
+                      - |
+                        set -e
+                        testkube run testworkflow "{{args.app-name}}-post-deploy-smoke" --watch
+---
+# Minimal SA so the Job can call Testkube's API server.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: outpost-rollout-analysis
+  namespace: argo-rollouts
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: outpost-rollout-analysis
+rules:
+  - apiGroups: ["testworkflows.testkube.io"]
+    resources: ["testworkflows", "testworkflowexecutions"]
+    verbs: ["get", "list", "create", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: outpost-rollout-analysis
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: outpost-rollout-analysis
+subjects:
+  - kind: ServiceAccount
+    name: outpost-rollout-analysis
+    namespace: argo-rollouts

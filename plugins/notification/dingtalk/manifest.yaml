@@ -1,0 +1,37 @@
+# =============================================================================
+# Plugin: notification / dingtalk
+# -----------------------------------------------------------------------------
+# Per-provider Secret + template ConfigMap living in tekton-pipelines.
+# The shared `outpost-notify` Tekton Task mounts every notification plugin's
+# Secret + ConfigMap, then iterates NOTIFICATION_PROVIDERS to fan out.
+# =============================================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dingtalk-webhook
+  namespace: tekton-pipelines
+  labels:
+    outpost.io/notification-provider: dingtalk
+type: Opaque
+stringData:
+  webhook-url: "${DINGTALK_WEBHOOK_URL}"
+  sign-secret: "${DINGTALK_SIGN_SECRET}"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dingtalk-template
+  namespace: tekton-pipelines
+  labels:
+    outpost.io/notification-provider: dingtalk
+data:
+  # The outpost-notify Task reads `body.tmpl` and pipes it through `envsubst`
+  # at run time with NOTIFY_* env vars derived from the unified payload.
+  body.tmpl: |
+    {
+      "msgtype": "markdown",
+      "markdown": {
+        "title": "[${NOTIFY_LEVEL}] ${NOTIFY_APP} ${NOTIFY_EVENT}",
+        "text": "### ${NOTIFY_APP} \\u0060${NOTIFY_COMMIT}\\u0060 in \\u0060${NOTIFY_ENV}\\u0060\\n\\n- **event**: ${NOTIFY_EVENT}\\n- **ref**: ${NOTIFY_REF}\\n- **detail**: [open](${NOTIFY_URL})\\n\\n${NOTIFY_TEXT}"
+      }
+    }

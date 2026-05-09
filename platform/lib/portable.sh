@@ -165,6 +165,58 @@ render_template() {
   return 0
 }
 
+# ---- render_template_only (targeted substitution) --------------------------
+# Like render_template, but only substitutes ${VAR} placeholders for vars in
+# the allowlist. All other ${VAR} placeholders are preserved literally —
+# essential for templates that mix install-time vars with runtime placeholders
+# (e.g. notification body templates carrying ${NOTIFY_APP} for the notify-task
+# to render at fanout time).
+#
+# Strict check still applies to the allowlist: a listed var that appears in
+# the source MUST be set in the env, otherwise abort. Unlisted ${VAR} patterns
+# pass through untouched.
+#
+# Usage:
+#   render_template_only <src> <dst> "VAR1 VAR2 VAR3"
+render_template_only() {
+  local src="$1" dst="$2" varlist="$3"
+  if [[ ! -r "$src" ]]; then
+    err "render_template_only: source not readable: $src"
+    return 1
+  fi
+  if ! command -v envsubst >/dev/null 2>&1; then
+    err "render_template_only: envsubst not found (install gettext/gettext-base)"
+    return 1
+  fi
+
+  # Strict residue check: every allowlist var that appears in the source
+  # must be set. Unlisted placeholders are intentionally not checked.
+  local missing=()
+  local v
+  for v in $varlist; do
+    if grep -qE "\\\$\\{${v}\\}" "$src"; then
+      if [[ -z "${!v+x}" ]]; then
+        missing+=("$v")
+      fi
+    fi
+  done
+  if (( ${#missing[@]} > 0 )); then
+    err "render_template_only: unresolved placeholders in $src: \${${missing[*]}}"
+    err "Hint: ensure these variables are exported in the current shell."
+    return 1
+  fi
+
+  # Build envsubst targeted substitution list: "$VAR1 $VAR2 ...".
+  local sublist=""
+  for v in $varlist; do
+    sublist="$sublist \$$v"
+  done
+
+  # shellcheck disable=SC2086 # sublist is intentionally word-split
+  envsubst "$sublist" < "$src" > "$dst"
+  return 0
+}
+
 # ---- render_apply -----------------------------------------------------------
 # render a template + kubectl apply. Used by bootstrap.sh in many places to
 # replace the historical multi-sed-pipe pattern.

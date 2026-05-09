@@ -1,0 +1,26 @@
+# =============================================================================
+# Outpost test contract — hello-world-python
+# Schema v1.
+# =============================================================================
+version: 1
+
+runner:
+  command:
+    - sh
+    - -c
+    - echo "[hello-world-python] Gate A placeholder OK — see tests/test_main.py for real tests"
+  # Phase 2 form:
+  # image: python:3.12-alpine
+  # command: ["sh", "-c", "pip install -q pytest fastapi httpx && pytest tests/"]
+
+gates:
+  pre-deploy:
+    timeout: 1m
+  post-deploy-smoke:
+    enabled: true
+    image: curlimages/curl:8.10.0
+    command:
+      - sh
+      - -c
+      - "curl -fsS http://hello-world-python.apps.svc.cluster.local/healthz"
+    timeout: 30s

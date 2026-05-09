@@ -1,0 +1,22 @@
+# =============================================================================
+# Plugin: test-runner / catalog-tasks
+# -----------------------------------------------------------------------------
+# Marker + per-language Tekton Catalog test tasks.
+# bootstrap.sh applies the upstream catalog YAMLs into tekton-pipelines.
+# This file just records which test-runner is active.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: outpost-test-runner
+  namespace: tekton-pipelines
+  labels:
+    outpost.io/plugin-kind: test-runner
+data:
+  runner: "catalog-tasks"
+  # Pinned task versions. Bump deliberately.
+  golang-test-version: "0.2"
+  pytest-version: "0.1"
+  jest-version: "0.1"
+  junit-runner-version: "0.2"
+  dotnet-test-version: "0.1"

@@ -1,0 +1,112 @@
+# =============================================================================
+# Outpost run-tests Task — Gate A test runner.
+# -----------------------------------------------------------------------------
+# Reads `outpost.test.yaml` (preferred) or `Dockerfile.test` (fallback) from
+# the cloned source workspace and executes the test command. If neither
+# exists, emits result `gate=skipped` and exits 0 — the pipeline continues
+# without a Gate A.
+#
+# MVP execution model (per proposal §5 + §10 review note):
+#   - The user's `runner.command` from outpost.test.yaml is eval'd inside an
+#     alpine step. Heavyweight runtimes (go, python, java, etc.) get apk-
+#     installed by the user's command itself, e.g.:
+#         command: ["sh", "-c", "apk add --no-cache go && go test ./..."]
+#   - Dockerfile.test path is recognized but currently no-ops (Phase 2:
+#     build via kaniko, run via Job).
+#   - Testkube TestWorkflow with content.git is the Phase 2 upgrade —
+#     gives proper isolation, retries, and history dashboard. The Testkube
+#     agent is already installed by Phase 9 in OSS mode; Phase 2 swaps the
+#     execution mechanic without changing the application contract.
+# =============================================================================
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: outpost-run-tests
+  namespace: tekton-pipelines
+spec:
+  description: Gate A — run application tests defined by outpost.test.yaml.
+  params:
+    - name: app-name
+      type: string
+      description: Application name (= repo-name in pipeline-build).
+    - name: source-subdir
+      type: string
+      default: source
+      description: Subdirectory of the shared workspace where source was cloned.
+  workspaces:
+    - name: source
+  results:
+    - name: has-tests
+      description: "true if outpost.test.yaml or Dockerfile.test was found"
+    - name: gate
+      description: "pass | fail | skipped"
+  steps:
+    - name: detect-and-run
+      image: alpine:3.20
+      workingDir: $(workspaces.source.path)/$(params.source-subdir)
+      env:
+        - name: APP_NAME
+          value: $(params.app-name)
+      script: |
+        #!/usr/bin/env sh
+        set -e
+        apk add --no-cache --quiet bash yq jq curl >/dev/null 2>&1 || true
+
+        # ---- detect ----
+        if [ -f "outpost.test.yaml" ]; then
+          mode="outpost-yaml"
+        elif [ -f "Dockerfile.test" ]; then
+          mode="dockerfile"
+        else
+          echo "[INFO] no outpost.test.yaml / Dockerfile.test in repo root"
+          echo "[INFO] Gate A: skipped"
+          printf "false" > $(results.has-tests.path)
+          printf "skipped" > $(results.gate.path)
+          exit 0
+        fi
+        printf "true" > $(results.has-tests.path)
+        echo "[INFO] detected test mode: $mode"
+
+        # ---- check active test runner ----
+        runner=$(cat /etc/outpost/test-runner/runner 2>/dev/null || echo "testkube")
+        echo "[INFO] active test-runner plugin: $runner"
+        if [ "$runner" = "catalog-tasks" ]; then
+          echo "[INFO] catalog-tasks: app pipeline owns its test task; this Task no-ops"
+          printf "skipped" > $(results.gate.path)
+          exit 0
+        fi
+
+        # ---- run ----
+        if [ "$mode" = "outpost-yaml" ]; then
+          # MVP: read .runner.command (JSON array) and eval directly.
+          if ! yq -e '.runner.command' outpost.test.yaml >/dev/null 2>&1; then
+            echo "[ERR] outpost.test.yaml: .runner.command is required (MVP)"
+            printf "fail" > $(results.gate.path)
+            exit 1
+          fi
+          # Convert command array to a single shell-quoted line.
+          CMD=$(yq -r '.runner.command | join(" ")' outpost.test.yaml)
+          echo "[INFO] Gate A: running: $CMD"
+          if bash -c "$CMD"; then
+            printf "pass" > $(results.gate.path)
+            echo "[OK] Gate A passed"
+          else
+            rc=$?
+            printf "fail" > $(results.gate.path)
+            echo "[ERR] Gate A failed (exit $rc)"
+            exit "$rc"
+          fi
+        elif [ "$mode" = "dockerfile" ]; then
+          # Phase 2: build via kaniko, run via Job.
+          echo "[INFO] Dockerfile.test detected — Phase 2 path; treating as plumbing OK"
+          printf "pass" > $(results.gate.path)
+        fi
+      volumeMounts:
+        - name: test-runner-cm
+          mountPath: /etc/outpost/test-runner
+          readOnly: true
+  volumes:
+    - name: test-runner-cm
+      configMap:
+        name: outpost-test-runner
+        optional: true

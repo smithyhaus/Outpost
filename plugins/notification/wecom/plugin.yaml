@@ -1,0 +1,17 @@
+kind: notification
+name: wecom
+description: |
+  WeCom (企业微信) group robot webhook notifications. Renders the unified
+  Outpost payload into a WeCom markdown message.
+required_env:
+  - WECOM_WEBHOOK_URL
+optional_env: []
+provides:
+  - channel: wecom
+  - delivery: HTTPS POST to qyapi.weixin.qq.com
+  - integrates: argocd-notifications-cm + outpost-notify Tekton task
+caveats:
+  - WeCom does not offer per-message HMAC signing — protect the URL itself.
+  - Rate limit ≈ 20 msg/min per bot.
+  - WeCom markdown is a strict subset (no tables; supports color hints
+    with `<font color="warning">…</font>`).

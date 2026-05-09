@@ -1,0 +1,40 @@
+# =============================================================================
+# argocd-notifications-cm — base template.
+# -----------------------------------------------------------------------------
+# bootstrap.sh CONCATENATES per-plugin fragments into the `data:` section
+# below. Each enabled notification plugin contributes:
+#   - a `service.webhook.<provider>` definition
+#   - one or more `template.<event>-<provider>` body templates
+#
+# The triggers + subscriptions are added at the END (also concatenated by
+# bootstrap.sh) so they reference per-provider templates dynamically.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-notifications-cm
+  namespace: argocd
+data:
+  # --- Universal triggers (provider-agnostic) ---
+  trigger.on-sync-failed: |
+    - description: Application sync has failed
+      send: [_PLUGIN_TEMPLATES_SYNC_FAILED_]
+      when: app.status.operationState.phase in ['Error', 'Failed']
+  trigger.on-degraded: |
+    - description: Application is degraded
+      send: [_PLUGIN_TEMPLATES_DEGRADED_]
+      when: app.status.health.status == 'Degraded'
+  trigger.on-rollback: |
+    - description: Rollouts auto-rolled back
+      send: [_PLUGIN_TEMPLATES_ROLLBACK_]
+      when: |
+        app.metadata.annotations != nil &&
+        app.metadata.annotations['argocd-rollouts.outpost.io/last-state'] == 'Aborted'
+
+  # --- Subscriptions: who listens to which trigger ---
+  # Default: every Application subscribes to all webhook services that exist.
+  # Per-app override via Application.metadata.annotations:
+  #   notifications.argoproj.io/subscribe.on-sync-failed.webhook.dingtalk: ""
+  subscriptions: |
+    - recipients: [_PLUGIN_RECIPIENTS_]
+      triggers: [on-sync-failed, on-degraded, on-rollback]

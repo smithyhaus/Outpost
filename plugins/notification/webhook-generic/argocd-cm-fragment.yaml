@@ -1,0 +1,24 @@
+# Fragment merged into `data:` of argocd-notifications-cm.
+  service.webhook.generic: |
+    url: $generic-webhook-url
+    headers:
+      - name: Content-Type
+        value: application/json
+  template.app-sync-failed-generic: |
+    webhook:
+      generic:
+        method: POST
+        body: |
+          {"event":"argocd.app.sync_failed","level":"error","app":"{{.app.metadata.name}}","env":"{{.app.spec.destination.namespace}}","url":"https://argocd.${ROOT_DOMAIN}/applications/{{.app.metadata.name}}","text":"sync failed: {{.app.status.sync.status}}"}
+  template.app-degraded-generic: |
+    webhook:
+      generic:
+        method: POST
+        body: |
+          {"event":"argocd.app.degraded","level":"error","app":"{{.app.metadata.name}}","env":"{{.app.spec.destination.namespace}}","url":"https://argocd.${ROOT_DOMAIN}/applications/{{.app.metadata.name}}","text":"app unhealthy: {{.app.status.health.status}}"}
+  template.app-rollback-generic: |
+    webhook:
+      generic:
+        method: POST
+        body: |
+          {"event":"rollout.aborted","level":"error","app":"{{.app.metadata.name}}","env":"{{.app.spec.destination.namespace}}","url":"https://argocd.${ROOT_DOMAIN}/applications/{{.app.metadata.name}}","text":"auto-rollback fired"}

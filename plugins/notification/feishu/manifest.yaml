@@ -1,0 +1,53 @@
+# =============================================================================
+# Plugin: notification / feishu
+# -----------------------------------------------------------------------------
+# Per-provider Secret + template ConfigMap living in tekton-pipelines.
+# =============================================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: feishu-webhook
+  namespace: tekton-pipelines
+  labels:
+    outpost.io/notification-provider: feishu
+type: Opaque
+stringData:
+  webhook-url: "${FEISHU_WEBHOOK_URL}"
+  sign-secret: "${FEISHU_SIGN_SECRET}"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: feishu-template
+  namespace: tekton-pipelines
+  labels:
+    outpost.io/notification-provider: feishu
+data:
+  # Feishu interactive card — read at run time and envsubst-rendered with
+  # NOTIFY_* env vars.
+  body.tmpl: |
+    {
+      "msg_type": "interactive",
+      "card": {
+        "config": { "wide_screen_mode": true },
+        "header": {
+          "title": { "tag": "plain_text", "content": "[${NOTIFY_LEVEL}] ${NOTIFY_APP} ${NOTIFY_EVENT}" },
+          "template": "red"
+        },
+        "elements": [
+          {
+            "tag": "div",
+            "text": {
+              "tag": "lark_md",
+              "content": "**${NOTIFY_APP}** \\u0060${NOTIFY_COMMIT}\\u0060 in \\u0060${NOTIFY_ENV}\\u0060\\n\\n- event: ${NOTIFY_EVENT}\\n- ref: ${NOTIFY_REF}\\n- ${NOTIFY_TEXT}"
+            }
+          },
+          {
+            "tag": "action",
+            "actions": [
+              { "tag": "button", "text": { "tag": "plain_text", "content": "Open" }, "type": "primary", "url": "${NOTIFY_URL}" }
+            ]
+          }
+        ]
+      }
+    }

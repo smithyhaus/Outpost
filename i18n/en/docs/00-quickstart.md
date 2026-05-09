@@ -212,6 +212,129 @@ Onboarding your own application: see `05-onboard-project.md`. Sketch:
 Application secrets (DB connection strings, API tokens) get sealed with
 SealedSecret before committing to git — see `08-seal-secret.md`.
 
+### Phase J — Test gate, auto-rollback, notifications (optional but recommended)
+
+> Full design: `proposals/cicd-test-gate.md`. This phase wires up:
+>
+> - **Gate A** — pre-deploy tests in the Tekton pipeline (Testkube). On failure the manifest never updates, so the cluster never sees the broken image.
+> - **Gate B** — post-deploy canary + automated rollback (Argo Rollouts). On failed analysis, traffic is pulled back to the previous stable version automatically.
+> - **Multi-channel notifications** — DingTalk / Feishu / WeCom / generic webhook, plugin-driven. Same JSON payload everywhere; each plugin contributes a vendor template.
+>
+> **All of this is opt-in.** If you skip Phase J your pipeline still works — you just don't get tests, canaries, or alerts.
+
+#### J-1. Pick channels (browser, ~5 min)
+
+For each channel you want, get a webhook URL from the vendor:
+
+| Channel | Where to create the bot | Optional |
+|---|---|---|
+| DingTalk | Group settings → Bots → Custom (recommend signed) | sign secret |
+| Feishu (Lark) | Group settings → Bots → Custom Bot | sign secret |
+| WeCom (企业微信) | Group settings → Add Group Robot → Custom | — |
+| Generic | Your own HTTPS endpoint that accepts JSON POST | Bearer token |
+
+#### J-2. Drop into `.env` (Outpost host, ~1 min)
+
+```env
+# Pick any combination — comma-separated. Empty = no notifications.
+NOTIFICATION_PROVIDERS=dingtalk,feishu
+
+DINGTALK_WEBHOOK_URL=https://oapi.dingtalk.com/robot/send?access_token=...
+DINGTALK_SIGN_SECRET=SEC...                  # optional (recommended)
+
+FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/...
+FEISHU_SIGN_SECRET=                          # optional
+
+WECOM_WEBHOOK_URL=
+GENERIC_WEBHOOK_URL=
+GENERIC_WEBHOOK_BEARER=                       # optional Bearer token
+
+# Tests + rollback (defaults shown — usually no override needed)
+TEST_RUNNER=testkube                         # or catalog-tasks
+TESTKUBE_MODE=oss                            # bootstrap auto-installs the agent
+ROLLOUT_PLUGIN=argo-rollouts
+ROLLOUTS_DASHBOARD_HOST=                     # default rollouts.<root>
+```
+
+#### J-3. Re-run bootstrap (~3 min)
+
+```bash
+bash bootstrap.sh
+```
+
+Phase 9 of bootstrap will:
+
+1. Install **Testkube** in `testkube` namespace (auto-downloads helm if absent).
+2. Install **Argo Rollouts** controller + dashboard in `argo-rollouts` namespace.
+3. Apply per-plugin notification Secrets + ConfigMaps in `tekton-pipelines`.
+4. Build a combined `argocd-notifications-cm` + `argocd-notifications-secret` from the enabled plugins' fragments.
+5. Apply the shared `outpost-notify` Tekton Task that the Pipeline `finally` block calls on PipelineRun failure.
+
+#### J-4. Add `outpost.test.yaml` to your app repo (~2 min per app)
+
+Drop this at the repo root:
+
+```yaml
+version: 1
+runner:
+  command:
+    - sh
+    - -c
+    - "go test ./..."         # or pytest, npm test, mvn test, dotnet test
+gates:
+  pre-deploy:
+    timeout: 5m
+  post-deploy-smoke:
+    enabled: true
+    image: curlimages/curl:8.10.0
+    command: ["sh","-c","curl -fsS http://my-app.apps.svc.cluster.local/healthz"]
+    timeout: 30s
+```
+
+If neither `outpost.test.yaml` nor `Dockerfile.test` is present in the repo root, the run-tests Task **skips cleanly** — your pipeline still works without tests.
+
+#### J-5. Adopt Argo Rollouts in your app's manifest (optional but where the magic is)
+
+In your manifest repo's `apps/<app>/deployment.yaml`, swap `Deployment` for `Rollout`:
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata: { name: my-app, namespace: apps }
+spec:
+  replicas: 3
+  strategy:
+    canary:
+      steps:
+        - setWeight: 10
+        - pause: { duration: 30s }
+        - analysis:
+            templates: [{ templateName: outpost-default }]   # or outpost-smoke (Testkube)
+            args: [{ name: service-name, value: my-app }]
+        - setWeight: 50
+        - pause: { duration: 30s }
+        - setWeight: 100
+  selector: { matchLabels: { app: my-app } }
+  template: { ... }      # same as Deployment.spec.template
+```
+
+If a canary step's analysis fails (default thresholds: `failureLimit: 2`, `consecutiveErrorLimit: 3`) → **automatic rollback** to the previous stable ReplicaSet → ArgoCD notifications fire (the Application enters `Degraded`/`Suspended`) → all enabled channels receive the alert.
+
+#### J-6. Verify the wiring works (~2 min)
+
+```bash
+# Visit the dashboards
+open https://tekton.${ROOT_DOMAIN}             # PipelineRuns / TaskRuns / logs
+open https://${ROLLOUTS_DASHBOARD_HOST}        # Canary progress / abort / promote
+
+# Inspect the namespaces
+kubectl get pods -n testkube
+kubectl get pods -n argo-rollouts
+kubectl get cm,secret -n argocd | grep notifications
+```
+
+Test the failure path: break `examples/hello-world-go/main.go` (e.g. add a `os.Exit(1)` at process start), `git push` → Tekton fails at `run-tests` → DingTalk/Feishu shows the error → manifest repo unchanged → cluster app unaffected.
+
 ---
 
 ## GitOps crash course — 5 things you'll do every day (for newcomers)

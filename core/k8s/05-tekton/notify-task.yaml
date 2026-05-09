@@ -1,0 +1,137 @@
+# =============================================================================
+# Outpost notify-task — fan-out failure notifications.
+# -----------------------------------------------------------------------------
+# Reads a normalized JSON payload (see proposal §4.2) and a comma-separated
+# list of providers, then for each provider:
+#   1. Loads webhook URL from Secret <provider>-webhook
+#   2. Loads body template from ConfigMap <provider>-template
+#   3. envsubst-renders the template with NOTIFY_* env vars from the payload
+#   4. POSTs to the webhook (with HMAC sig for dingtalk/feishu if sign-secret set)
+#
+# Used by:
+#   - pipeline-build.yaml `finally` task on PipelineRun failure
+#   - argocd-notifications controller (via webhook services it defines itself)
+#
+# Idempotent: a delivery failure to one provider does NOT block the others.
+# =============================================================================
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: outpost-notify
+  namespace: tekton-pipelines
+spec:
+  description: Fan-out a normalized notification payload to all enabled providers.
+  params:
+    - name: payload
+      type: string
+      description: Normalized JSON payload (event/level/app/env/commit/ref/url/text).
+    - name: providers
+      type: string
+      description: Comma-separated list of enabled providers (dingtalk,feishu,wecom,generic).
+  steps:
+    - name: fanout
+      # alpine + apk install pulls jq/curl/gettext/openssl in ~3s. Phase 2:
+      # bake a small custom image with these pre-installed.
+      image: alpine:3.20
+      env:
+        - name: PAYLOAD
+          value: $(params.payload)
+        - name: PROVIDERS
+          value: $(params.providers)
+      volumeMounts:
+        - { name: dingtalk-secret,    mountPath: /secrets/dingtalk,     readOnly: true }
+        - { name: dingtalk-template,  mountPath: /templates/dingtalk,   readOnly: true }
+        - { name: feishu-secret,      mountPath: /secrets/feishu,       readOnly: true }
+        - { name: feishu-template,    mountPath: /templates/feishu,     readOnly: true }
+        - { name: wecom-secret,       mountPath: /secrets/wecom,        readOnly: true }
+        - { name: wecom-template,     mountPath: /templates/wecom,      readOnly: true }
+        - { name: generic-secret,     mountPath: /secrets/generic,      readOnly: true }
+        - { name: generic-template,   mountPath: /templates/generic,    readOnly: true }
+      script: |
+        #!/usr/bin/env sh
+        set -e
+        apk add --no-cache --quiet jq curl gettext openssl coreutils >/dev/null
+
+        # Extract NOTIFY_* env vars from the payload. envsubst will pick them up.
+        NOTIFY_EVENT=$(echo "$PAYLOAD"   | jq -r '.event   // ""')
+        NOTIFY_LEVEL=$(echo "$PAYLOAD"   | jq -r '.level   // "info"')
+        NOTIFY_APP=$(echo "$PAYLOAD"     | jq -r '.app     // ""')
+        NOTIFY_ENV=$(echo "$PAYLOAD"     | jq -r '.env     // "dev"')
+        NOTIFY_COMMIT=$(echo "$PAYLOAD"  | jq -r '.commit  // ""')
+        NOTIFY_REF=$(echo "$PAYLOAD"     | jq -r '.ref     // ""')
+        NOTIFY_URL=$(echo "$PAYLOAD"     | jq -r '.url     // ""')
+        NOTIFY_TEXT=$(echo "$PAYLOAD"    | jq -r '.text    // ""')
+        export NOTIFY_EVENT NOTIFY_LEVEL NOTIFY_APP NOTIFY_ENV NOTIFY_COMMIT NOTIFY_REF NOTIFY_URL NOTIFY_TEXT
+
+        IFS=','; for p in $PROVIDERS; do
+          p=$(echo "$p" | tr -d ' ')
+          [ -z "$p" ] && continue
+          WEBHOOK="/secrets/$p/webhook-url"
+          TEMPLATE="/templates/$p/body.tmpl"
+          SIGN="/secrets/$p/sign-secret"
+          if [ ! -s "$WEBHOOK" ]; then
+            echo "[WARN] $p: no webhook-url Secret mounted; skipping"
+            continue
+          fi
+          if [ ! -s "$TEMPLATE" ]; then
+            echo "[WARN] $p: no body.tmpl ConfigMap mounted; skipping"
+            continue
+          fi
+          url=$(cat "$WEBHOOK")
+          body=$(envsubst < "$TEMPLATE")
+
+          # Per-provider HMAC signing.
+          if [ -s "$SIGN" ]; then
+            sign_secret=$(cat "$SIGN")
+            ts=$(date +%s%3N)
+            case "$p" in
+              dingtalk)
+                # sign = base64(HMAC-SHA256("${ts}\n${secret}", secret))
+                str=$(printf '%s\n%s' "$ts" "$sign_secret")
+                sig=$(printf '%s' "$str" | openssl dgst -sha256 -hmac "$sign_secret" -binary | base64)
+                # URL-encode the signature minimally (+,/,=)
+                sig_enc=$(printf '%s' "$sig" | sed 's/+/%2B/g; s|/|%2F|g; s/=/%3D/g')
+                url="${url}&timestamp=${ts}&sign=${sig_enc}"
+                ;;
+              feishu)
+                # Feishu injects timestamp+sign INTO the body envelope.
+                str=$(printf '%s\n%s' "$ts" "$sign_secret")
+                sig=$(printf '%s' "$str" | openssl dgst -sha256 -hmac "$sign_secret" -binary | base64)
+                body=$(echo "$body" | jq --arg ts "$ts" --arg sg "$sig" '. + {timestamp: $ts, sign: $sg}')
+                ;;
+              *)
+                # Other providers don't support signing.
+                ;;
+            esac
+          fi
+
+          # Generic-webhook bearer token (optional)
+          curl_auth=""
+          if [ "$p" = "generic" ] && [ -s "/secrets/generic/bearer" ]; then
+            curl_auth="Authorization: Bearer $(cat /secrets/generic/bearer)"
+          fi
+
+          echo "[INFO] notify $p"
+          if [ -n "$curl_auth" ]; then
+            curl -fsS --max-time 10 -X POST \
+              -H "Content-Type: application/json" -H "$curl_auth" \
+              -d "$body" "$url" \
+              || echo "[WARN] $p delivery failed (continuing)"
+          else
+            curl -fsS --max-time 10 -X POST \
+              -H "Content-Type: application/json" \
+              -d "$body" "$url" \
+              || echo "[WARN] $p delivery failed (continuing)"
+          fi
+        done
+        echo "[OK] notify-task done"
+  volumes:
+    # Each volume is `optional: true` so a missing plugin doesn't break the task.
+    - { name: dingtalk-secret,    secret:    { secretName: dingtalk-webhook,    optional: true } }
+    - { name: dingtalk-template,  configMap: { name: dingtalk-template,         optional: true } }
+    - { name: feishu-secret,      secret:    { secretName: feishu-webhook,      optional: true } }
+    - { name: feishu-template,    configMap: { name: feishu-template,           optional: true } }
+    - { name: wecom-secret,       secret:    { secretName: wecom-webhook,       optional: true } }
+    - { name: wecom-template,     configMap: { name: wecom-template,            optional: true } }
+    - { name: generic-secret,     secret:    { secretName: generic-webhook,     optional: true } }
+    - { name: generic-template,   configMap: { name: generic-template,          optional: true } }

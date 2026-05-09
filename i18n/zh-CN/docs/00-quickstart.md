@@ -190,6 +190,127 @@ HTTP 服务(ArgoCD UI / RabbitMQ UI / Meilisearch / Registry)直接浏览器开 
 
 应用密钥(连接串、token 等)用 SealedSecret 加密后入库,见 `08-seal-secret.md`。
 
+### Phase J — 测试网关、自动回滚、多通道告警(可选,推荐)
+
+> 完整设计见 `proposals/cicd-test-gate.md`。这一阶段补齐:
+>
+> - **Gate A** — Tekton 流水线里的预部署测试(Testkube)。**测试不过,manifest 不会更新,集群完全看不到坏镜像**。
+> - **Gate B** — 部署后金丝雀 + 自动回滚(Argo Rollouts)。分析失败 → 自动撤回流量到上一稳定版。
+> - **多通道告警** — 钉钉 / 飞书 / 企微 / 通用 webhook,plugin 化。一份归一化 payload,每家 plugin 贡献自己的渲染模板。
+>
+> **整个 Phase J 都是可选的**。跳过它,流水线照样跑;只是没有测试、没有金丝雀、没有告警。
+
+#### J-1. 选通道(浏览器,~5 min)
+
+每个想要的通道,从厂商那拿 webhook URL:
+
+| 通道 | 在哪里建 bot | 可选 |
+|---|---|---|
+| 钉钉 | 群设置 → 智能群助手 → 添加 → 自定义机器人(建议加签) | 加签 secret |
+| 飞书 | 群设置 → 群机器人 → 添加自定义机器人 | 加签 secret |
+| 企业微信 | 群设置 → 添加群机器人 → 新创建 | — |
+| 通用 webhook | 你自己接的 HTTPS endpoint(JSON POST) | Bearer token |
+
+#### J-2. 写到 `.env`(Outpost 主机,~1 min)
+
+```env
+# 任意组合,逗号分隔。空字符串 = 不发任何告警。
+NOTIFICATION_PROVIDERS=dingtalk,feishu
+
+DINGTALK_WEBHOOK_URL=https://oapi.dingtalk.com/robot/send?access_token=...
+DINGTALK_SIGN_SECRET=SEC...                  # 可选(推荐)
+
+FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/...
+FEISHU_SIGN_SECRET=                          # 可选
+
+WECOM_WEBHOOK_URL=
+GENERIC_WEBHOOK_URL=
+GENERIC_WEBHOOK_BEARER=                       # 可选 Bearer token
+
+# 测试 + 回滚(默认值,通常不用改)
+TEST_RUNNER=testkube                         # 或 catalog-tasks
+TESTKUBE_MODE=oss                            # bootstrap 自动装 testkube agent
+ROLLOUT_PLUGIN=argo-rollouts
+ROLLOUTS_DASHBOARD_HOST=                     # 默认 rollouts.<root>
+```
+
+#### J-3. 重跑 bootstrap(~3 min)
+
+```bash
+bash bootstrap.sh
+```
+
+bootstrap 的 Phase 9 会:
+
+1. 在 `testkube` 命名空间装 **Testkube**(没装 helm 会自动下载)。
+2. 在 `argo-rollouts` 命名空间装 **Argo Rollouts** controller + Dashboard。
+3. 在 `tekton-pipelines` 应用每家通知 plugin 的 Secret + ConfigMap。
+4. 把每家 plugin 的 fragment 拼成统一的 `argocd-notifications-cm` + `argocd-notifications-secret`。
+5. 应用共享的 `outpost-notify` Tekton Task — Pipeline `finally` 块在失败时调它。
+
+#### J-4. 在应用仓库根目录加 `outpost.test.yaml`(每个应用 ~2 min)
+
+```yaml
+version: 1
+runner:
+  command:
+    - sh
+    - -c
+    - "go test ./..."         # 或 pytest / npm test / mvn test / dotnet test
+gates:
+  pre-deploy:
+    timeout: 5m
+  post-deploy-smoke:
+    enabled: true
+    image: curlimages/curl:8.10.0
+    command: ["sh","-c","curl -fsS http://my-app.apps.svc.cluster.local/healthz"]
+    timeout: 30s
+```
+
+仓库根没有 `outpost.test.yaml` 也没有 `Dockerfile.test` → run-tests Task **干净 skip**(不算失败),pipeline 照常跑。
+
+#### J-5. 让应用接 Argo Rollouts(可选,但这是回滚魔法生效的地方)
+
+把 manifest 仓库 `apps/<app>/deployment.yaml` 的 `Deployment` 换成 `Rollout`:
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata: { name: my-app, namespace: apps }
+spec:
+  replicas: 3
+  strategy:
+    canary:
+      steps:
+        - setWeight: 10
+        - pause: { duration: 30s }
+        - analysis:
+            templates: [{ templateName: outpost-default }]   # 或 outpost-smoke (Testkube)
+            args: [{ name: service-name, value: my-app }]
+        - setWeight: 50
+        - pause: { duration: 30s }
+        - setWeight: 100
+  selector: { matchLabels: { app: my-app } }
+  template: { ... }      # 跟 Deployment.spec.template 完全一样
+```
+
+某档分析失败(默认阈值:`failureLimit: 2`、`consecutiveErrorLimit: 3`)→ **自动回滚** 到上一稳定 ReplicaSet → ArgoCD notifications 触发(Application 进入 `Degraded`/`Suspended`)→ 所有启用的通道收到告警。
+
+#### J-6. 验证 wiring 通了(~2 min)
+
+```bash
+# 看 dashboard
+open https://tekton.${ROOT_DOMAIN}             # PipelineRuns / TaskRuns / logs
+open https://${ROLLOUTS_DASHBOARD_HOST}        # 金丝雀进度 / 中止 / 提升
+
+# 看 namespace
+kubectl get pods -n testkube
+kubectl get pods -n argo-rollouts
+kubectl get cm,secret -n argocd | grep notifications
+```
+
+测一下失败链路:把 `examples/hello-world-go/main.go` 改坏(比如开头加 `os.Exit(1)`)→ git push → Tekton 在 `run-tests` 步骤红 → 钉钉/飞书收到失败消息 → manifest 仓库未变 → 集群应用未受影响。
+
 ---
 
 ## GitOps 速成 — 日常 5 个最常操作(给没用过的人)

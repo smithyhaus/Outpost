@@ -1,0 +1,24 @@
+kind: rollout
+name: argo-rollouts
+description: |
+  Argo Rollouts — progressive delivery + automated rollback. Ships:
+   - Rollouts controller in `argo-rollouts` namespace
+   - Dashboard at https://rollouts.${ROOT_DOMAIN}
+   - Default AnalysisTemplate (Web provider HTTP probe — works without Testkube)
+   - Smoke AnalysisTemplate (Job provider — runs Testkube TestWorkflow)
+
+  Apps adopt `Rollout` CRD instead of `Deployment`. Failure thresholds default
+  to consecutiveErrorLimit=3, failureLimit=2. Auto-rollback on threshold breach.
+required_env: []
+optional_env:
+  - ROLLOUTS_DASHBOARD_HOST   # default: rollouts.${ROOT_DOMAIN}
+provides:
+  - controller: argoproj/argo-rollouts
+  - dashboard: https://rollouts.${ROOT_DOMAIN}
+  - crds: Rollout, AnalysisTemplate, AnalysisRun, Experiment
+  - default-templates: outpost-default (Web), outpost-smoke (Job + Testkube)
+caveats:
+  - Apps must convert Deployment → Rollout to gain canary + rollback.
+    Plugin install does NOT force-convert existing apps.
+  - Smoke template assumes test-runner=testkube (Job provider runs the CLI image).
+    With test-runner=catalog-tasks, only the default Web template applies.

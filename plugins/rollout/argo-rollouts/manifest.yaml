@@ -1,0 +1,25 @@
+# =============================================================================
+# Plugin: rollout / argo-rollouts
+# -----------------------------------------------------------------------------
+# This plugin's manifest.yaml is a marker. The actual Rollouts controller is
+# applied by bootstrap.sh from the upstream stable manifest:
+#   https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+#
+# This file:
+#   - Records which rollout strategy is active.
+#   - Triggers application of analysistemplate-*.yaml + ingressroute.yaml
+#     in the same namespace.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: outpost-rollout
+  namespace: tekton-pipelines
+  labels:
+    outpost.io/plugin-kind: rollout
+data:
+  strategy: "argo-rollouts"
+  default-template: "outpost-default"
+  smoke-template: "outpost-smoke"
+  failure-limit: "2"
+  consecutive-error-limit: "3"

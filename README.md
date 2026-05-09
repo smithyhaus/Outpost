@@ -20,15 +20,16 @@
                       cloudflared tunnel (egress)
                        ┌────────┴────────┐
                        ▼                 ▼
-              ┌──────────────┐    ┌────────────────────┐
-              │  Compose     │    │  k3s cluster       │
-              │              │    │                     │
-              │  Postgres    │    │  ArgoCD (GitOps)   │
-              │  + pgvector  │    │  Tekton + webhook  │
-              │  Redis       │    │  Registry          │
-              │  RabbitMQ    │    │  Your apps         │
-              │  Meilisearch │    │                     │
-              └──────────────┘    └────────────────────┘
+              ┌──────────────┐    ┌──────────────────────────┐
+              │  Compose     │    │  k3s cluster              │
+              │              │    │                            │
+              │  Postgres    │    │  ArgoCD (GitOps)          │
+              │  + pgvector  │    │  Tekton + webhook          │
+              │  Redis       │    │  Registry                  │
+              │  RabbitMQ    │    │  Testkube (test gate)      │
+              │  Meilisearch │    │  Argo Rollouts (auto-roll) │
+              │              │    │  Your apps                 │
+              └──────────────┘    └──────────────────────────┘
 ```
 
 - **Data layer (Compose)** — runs the stateful services that almost every
@@ -102,17 +103,28 @@ After it finishes:
 
 ## Plugins
 
-| Kind          | Built-in plugins                    |
-|---------------|-------------------------------------|
-| Registry      | `self-hosted` (default), `aliyun-acr` |
-| Git provider  | `gitee` (default), `github`, `gitlab` |
+| Kind          | Built-in plugins                                              | `.env` selector            |
+|---------------|---------------------------------------------------------------|----------------------------|
+| Registry      | `self-hosted` (default), `aliyun-acr`                         | `REGISTRY_PLUGIN`          |
+| Git provider  | `gitee` (default), `github`, `gitlab`                         | `GIT_PROVIDER_PLUGIN`      |
+| Test runner   | `testkube` (default), `catalog-tasks`                         | `TEST_RUNNER`              |
+| Rollout       | `argo-rollouts` (default — canary + auto-rollback)            | `ROLLOUT_PLUGIN`           |
+| Notification  | `dingtalk`, `feishu`, `wecom`, `webhook-generic`              | `NOTIFICATION_PROVIDERS` *(comma-list)* |
 
 Switch by editing `.env`:
 
 ```env
 REGISTRY_PLUGIN=aliyun-acr
 GIT_PROVIDER_PLUGIN=github
+TEST_RUNNER=testkube
+ROLLOUT_PLUGIN=argo-rollouts
+NOTIFICATION_PROVIDERS=dingtalk,feishu        # any combination
 ```
+
+**CI/CD test gate + auto-rollback + notifications** — full design at
+[`i18n/en/docs/proposals/cicd-test-gate.md`](i18n/en/docs/proposals/cicd-test-gate.md)
+([中文版](i18n/zh-CN/docs/proposals/cicd-test-gate.md)). Walkthrough in the
+quickstart's "Phase J" section.
 
 See [`plugins/README.md`](plugins/README.md) for the plugin contract and how to author your own.
 

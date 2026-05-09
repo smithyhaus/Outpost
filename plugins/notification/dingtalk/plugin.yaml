@@ -1,0 +1,18 @@
+kind: notification
+name: dingtalk
+description: |
+  DingTalk group robot webhook notifications. Renders the unified Outpost
+  notification payload into DingTalk markdown. Optional HMAC-signed webhook
+  supported (recommended).
+required_env:
+  - DINGTALK_WEBHOOK_URL
+optional_env:
+  - DINGTALK_SIGN_SECRET
+provides:
+  - channel: dingtalk
+  - delivery: HTTPS POST to oapi.dingtalk.com
+  - integrates: argocd-notifications-cm + outpost-notify Tekton task
+caveats:
+  - Without DINGTALK_SIGN_SECRET, anyone with the URL can post. Rotate if leaked.
+  - Per-bot rate limit ≈ 20 msg/min — heavy outage may drop messages.
+  - Header is `Content-Type: application/json`. Body is DingTalk's `msgtype: markdown` envelope.

@@ -3,9 +3,17 @@
 # 步骤：
 #   1. fetch-source     用 git clone 拉取应用代码
 #   2. build-and-push   用 Kaniko 构建镜像并推到 registry
-#   3. update-manifest  克隆 manifest 仓库，用 yq 改 image tag，commit + push
+#   3. run-tests        Gate A — 跑 outpost.test.yaml / Dockerfile.test;
+#                        没有这两个文件则 skipped(不算失败)
+#   4. update-manifest  克隆 manifest 仓库，用 yq 改 image tag，commit + push
 #
-# 应用代码仓库约定：根目录有 Dockerfile
+# finally:
+#   notify-on-failure   PipelineRun 失败时,fan-out 到所有启用的通知 plugin
+#                        (dingtalk / feishu / wecom / webhook-generic)。
+#                        provider 列表在 bootstrap 渲染时从 NOTIFICATION_PROVIDERS
+#                        envsubst 进来。
+#
+# 应用代码仓库约定：根目录有 Dockerfile,可选 outpost.test.yaml / Dockerfile.test
 # manifest 仓库约定：apps/<repo-name>/deployment.yaml 存在 image 字段
 # ============================================================================
 apiVersion: tekton.dev/v1beta1
@@ -112,13 +120,36 @@ spec:
             - "--insecure"
 
     # -------------------------------------------------------------------------
-    # 3. 拉 manifest 仓库，改 image tag，提交回去
+    # 3. Gate A — run application tests
+    # -------------------------------------------------------------------------
+    # No-ops cleanly when neither outpost.test.yaml nor Dockerfile.test
+    # exists in the repo root (skipped, not failed). On real failure, the
+    # Pipeline aborts here and update-manifest never runs — manifest repo
+    # is never touched, ArgoCD sees no change, the cluster is unaffected.
+    - name: run-tests
+      timeout: "20m"
+      runAfter:
+        - build-and-push
+      taskRef:
+        name: outpost-run-tests
+        kind: Task
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      params:
+        - name: app-name
+          value: $(params.repo-name)
+        - name: source-subdir
+          value: source
+
+    # -------------------------------------------------------------------------
+    # 4. 拉 manifest 仓库，改 image tag，提交回去
     # -------------------------------------------------------------------------
     - name: update-manifest
       # yq edit + git commit + push — well under a minute normally.
       timeout: "5m"
       runAfter:
-        - build-and-push
+        - run-tests
       taskRef:
         name: update-manifest-task
       workspaces:
@@ -138,3 +169,24 @@ spec:
           value: $(params.registry)/$(params.repo-name):$(params.image-tag)
         - name: commit-message
           value: "chore($(params.repo-name)): bump image to $(params.image-tag)"
+
+  # ---------------------------------------------------------------------------
+  # finally — runs unconditionally after all tasks complete (success or fail).
+  # The notify-on-failure task uses a `when:` clause to fire ONLY when the
+  # PipelineRun overall status is Failed (i.e. any task above failed).
+  # ---------------------------------------------------------------------------
+  finally:
+    - name: notify-on-failure
+      when:
+        - input: "$(tasks.status)"
+          operator: in
+          values: ["Failed"]
+      taskRef:
+        name: outpost-notify
+        kind: Task
+      params:
+        - name: payload
+          value: |
+            {"event":"tekton.pipelinerun.failed","level":"error","app":"$(params.repo-name)","env":"dev","commit":"$(params.image-tag)","ref":"$(params.branch)","url":"https://tekton.${ROOT_DOMAIN}/#/namespaces/tekton-pipelines/pipelineruns","text":"PipelineRun failed — see Tekton Dashboard for details"}
+        - name: providers
+          value: "${NOTIFICATION_PROVIDERS}"

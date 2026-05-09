@@ -1,0 +1,39 @@
+# Fragment merged into `data:` of argocd-notifications-cm.
+  service.webhook.wecom: |
+    url: $wecom-webhook-url
+    headers:
+      - name: Content-Type
+        value: application/json
+  template.app-sync-failed-wecom: |
+    webhook:
+      wecom:
+        method: POST
+        body: |
+          {
+            "msgtype": "markdown",
+            "markdown": {
+              "content": "## <font color=\"warning\">[error] {{.app.metadata.name}} sync failed</font>\n> status: {{.app.status.sync.status}}\n> [open](https://argocd.${ROOT_DOMAIN}/applications/{{.app.metadata.name}})"
+            }
+          }
+  template.app-degraded-wecom: |
+    webhook:
+      wecom:
+        method: POST
+        body: |
+          {
+            "msgtype": "markdown",
+            "markdown": {
+              "content": "## <font color=\"warning\">[error] {{.app.metadata.name}} degraded</font>\n> health: {{.app.status.health.status}}\n> [open](https://argocd.${ROOT_DOMAIN}/applications/{{.app.metadata.name}})"
+            }
+          }
+  template.app-rollback-wecom: |
+    webhook:
+      wecom:
+        method: POST
+        body: |
+          {
+            "msgtype": "markdown",
+            "markdown": {
+              "content": "## <font color=\"warning\">[error] {{.app.metadata.name}} rolled back</font>\n> auto-rollback fired\n> [open](https://argocd.${ROOT_DOMAIN}/applications/{{.app.metadata.name}})"
+            }
+          }

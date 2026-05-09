@@ -9,11 +9,12 @@
 #   local : Compose data services only (PG / Redis / RabbitMQ / Meilisearch
 #           on localhost). No CF Tunnel, no k3s, no GitOps. Zero required
 #           input — every value either has a sensible default or gets
-#           auto-generated. Phase 1 → 4 → 9.
+#           auto-generated. Phase 1 → 4 → 10.
 #
 #   full  : Everything in local + Cloudflare Tunnel + k3s + ArgoCD + Tekton
-#           CI/CD. Requires ROOT_DOMAIN, CF_TUNNEL_TOKEN, GIT_USER, GIT_TOKEN
-#           and MANIFEST_REPO_URL. Phase 1 → 9.
+#           CI/CD + Testkube + Argo Rollouts + multi-channel notifications.
+#           Requires ROOT_DOMAIN, CF_TUNNEL_TOKEN, GIT_USER, GIT_TOKEN
+#           and MANIFEST_REPO_URL. Phase 1 → 10.
 #
 # Phases:
 #   1. Preflight: tools, OS detection, docker daemon
@@ -25,8 +26,10 @@
 #   6. K8s base: namespaces, traefik NodePort, sealed-secrets
 #   7. Plugins: registry plugin + git-provider plugin
 #   8. ArgoCD + Tekton + bridges
+#   9. CI/CD test gate + auto-rollback + notifications
+#       (Testkube + Argo Rollouts + notification plugins)
 #   ────────────────────────────────
-#   9. Health checks + summary
+#   10. Health checks + summary
 # =============================================================================
 set -euo pipefail
 
@@ -42,7 +45,7 @@ export SK_INFRA_DIR="$INFRA_ROOT"
 # =============================================================================
 # Phase 1 — Preflight
 # =============================================================================
-phase "Phase 1 / 9  Preflight"
+phase "Phase 1 / 10 Preflight"
 
 require_cmd bash curl openssl envsubst sed grep awk
 
@@ -68,7 +71,7 @@ ok "docker compose v2 available"
 # =============================================================================
 # Phase 2 — Config
 # =============================================================================
-phase "Phase 2 / 9  Configuration"
+phase "Phase 2 / 10 Configuration"
 
 if [[ -f .env ]]; then
   warn ".env already exists — reusing values (mv .env .env.bak to start fresh)"
@@ -136,6 +139,21 @@ POSTGRES_DB="${POSTGRES_DB:-postgres}"
 RABBITMQ_USER="${RABBITMQ_USER:-admin}"
 MEILI_ENV="${MEILI_ENV:-production}"
 
+# Phase 9 plugin defaults (full mode only — but read in both so .env is consistent)
+TEST_RUNNER="${TEST_RUNNER:-testkube}"
+TESTKUBE_MODE="${TESTKUBE_MODE:-oss}"
+ROLLOUT_PLUGIN="${ROLLOUT_PLUGIN:-argo-rollouts}"
+ROLLOUTS_DASHBOARD_HOST="${ROLLOUTS_DASHBOARD_HOST:-rollouts.${ROOT_DOMAIN}}"
+NOTIFICATION_PROVIDERS="${NOTIFICATION_PROVIDERS:-}"
+DINGTALK_WEBHOOK_URL="${DINGTALK_WEBHOOK_URL:-}"
+DINGTALK_SIGN_SECRET="${DINGTALK_SIGN_SECRET:-}"
+FEISHU_WEBHOOK_URL="${FEISHU_WEBHOOK_URL:-}"
+FEISHU_SIGN_SECRET="${FEISHU_SIGN_SECRET:-}"
+WECOM_WEBHOOK_URL="${WECOM_WEBHOOK_URL:-}"
+GENERIC_WEBHOOK_URL="${GENERIC_WEBHOOK_URL:-}"
+GENERIC_WEBHOOK_BEARER="${GENERIC_WEBHOOK_BEARER:-}"
+TESTKUBE_CLOUD_API_KEY="${TESTKUBE_CLOUD_API_KEY:-}"
+
 # Auto-generate any blank passwords (both modes)
 [[ -z "${POSTGRES_PASSWORD:-}" ]]    && POSTGRES_PASSWORD=$(gen_password)
 [[ -z "${REDIS_PASSWORD:-}" ]]       && REDIS_PASSWORD=$(gen_password)
@@ -155,7 +173,36 @@ if [[ "$OUTPOST_MODE" == "full" ]]; then
     err "Available: $(ls plugins/git-provider)"
     exit 1
   fi
-  ok "Plugins selected: registry=${REGISTRY_PLUGIN}  git-provider=${GIT_PROVIDER_PLUGIN}"
+  if [[ ! -d "plugins/test-runner/${TEST_RUNNER}" ]]; then
+    err "Unknown TEST_RUNNER: ${TEST_RUNNER}"
+    err "Available: $(ls plugins/test-runner)"
+    exit 1
+  fi
+  if [[ ! -d "plugins/rollout/${ROLLOUT_PLUGIN}" ]]; then
+    err "Unknown ROLLOUT_PLUGIN: ${ROLLOUT_PLUGIN}"
+    err "Available: $(ls plugins/rollout)"
+    exit 1
+  fi
+  # Validate each enabled notification plugin exists.
+  if [[ -n "${NOTIFICATION_PROVIDERS}" ]]; then
+    IFS=',' read -ra _np <<< "${NOTIFICATION_PROVIDERS}"
+    for _p in "${_np[@]}"; do
+      _p="${_p// /}"
+      [[ -z "$_p" ]] && continue
+      if [[ ! -d "plugins/notification/${_p}" ]]; then
+        err "Unknown NOTIFICATION_PROVIDER '$_p'"
+        err "Available: $(ls plugins/notification)"
+        exit 1
+      fi
+    done
+    unset _np _p
+  fi
+  ok "Plugins: registry=${REGISTRY_PLUGIN} git=${GIT_PROVIDER_PLUGIN} test-runner=${TEST_RUNNER} rollout=${ROLLOUT_PLUGIN}"
+  if [[ -n "${NOTIFICATION_PROVIDERS}" ]]; then
+    ok "Notifications: ${NOTIFICATION_PROVIDERS}"
+  else
+    warn "Notifications: none (set NOTIFICATION_PROVIDERS to enable)"
+  fi
 fi
 
 # Persist .env (canonical form). MUST happen before plugin preflight runs:
@@ -187,6 +234,20 @@ fi
   [[ -n "${ALIYUN_ACR_NAMESPACE:-}" ]] && echo "ALIYUN_ACR_NAMESPACE=${ALIYUN_ACR_NAMESPACE}"
   [[ -n "${ALIYUN_ACR_USER:-}" ]]      && echo "ALIYUN_ACR_USER=${ALIYUN_ACR_USER}"
   [[ -n "${ALIYUN_ACR_PASSWORD:-}" ]]  && echo "ALIYUN_ACR_PASSWORD=${ALIYUN_ACR_PASSWORD}"
+  # Phase 9 (test gate + auto-rollback + notifications)
+  echo "TEST_RUNNER=${TEST_RUNNER}"
+  echo "TESTKUBE_MODE=${TESTKUBE_MODE}"
+  [[ -n "${TESTKUBE_CLOUD_API_KEY:-}" ]] && echo "TESTKUBE_CLOUD_API_KEY=${TESTKUBE_CLOUD_API_KEY}"
+  echo "ROLLOUT_PLUGIN=${ROLLOUT_PLUGIN}"
+  echo "ROLLOUTS_DASHBOARD_HOST=${ROLLOUTS_DASHBOARD_HOST}"
+  echo "NOTIFICATION_PROVIDERS=${NOTIFICATION_PROVIDERS}"
+  [[ -n "${DINGTALK_WEBHOOK_URL:-}" ]]   && echo "DINGTALK_WEBHOOK_URL=${DINGTALK_WEBHOOK_URL}"
+  [[ -n "${DINGTALK_SIGN_SECRET:-}" ]]   && echo "DINGTALK_SIGN_SECRET=${DINGTALK_SIGN_SECRET}"
+  [[ -n "${FEISHU_WEBHOOK_URL:-}" ]]     && echo "FEISHU_WEBHOOK_URL=${FEISHU_WEBHOOK_URL}"
+  [[ -n "${FEISHU_SIGN_SECRET:-}" ]]     && echo "FEISHU_SIGN_SECRET=${FEISHU_SIGN_SECRET}"
+  [[ -n "${WECOM_WEBHOOK_URL:-}" ]]      && echo "WECOM_WEBHOOK_URL=${WECOM_WEBHOOK_URL}"
+  [[ -n "${GENERIC_WEBHOOK_URL:-}" ]]    && echo "GENERIC_WEBHOOK_URL=${GENERIC_WEBHOOK_URL}"
+  [[ -n "${GENERIC_WEBHOOK_BEARER:-}" ]] && echo "GENERIC_WEBHOOK_BEARER=${GENERIC_WEBHOOK_BEARER}"
 } > .env
 chmod 600 .env
 
@@ -200,13 +261,24 @@ if [[ "$OUTPOST_MODE" == "full" ]]; then
   log "Running plugin preflight checks..."
   ( set -a; source .env; set +a; bash "plugins/registry/${REGISTRY_PLUGIN}/preflight.sh" )
   ( set -a; source .env; set +a; bash "plugins/git-provider/${GIT_PROVIDER_PLUGIN}/preflight.sh" )
+  ( set -a; source .env; set +a; bash "plugins/test-runner/${TEST_RUNNER}/preflight.sh" )
+  ( set -a; source .env; set +a; bash "plugins/rollout/${ROLLOUT_PLUGIN}/preflight.sh" )
+  if [[ -n "${NOTIFICATION_PROVIDERS}" ]]; then
+    IFS=',' read -ra _np <<< "${NOTIFICATION_PROVIDERS}"
+    for _p in "${_np[@]}"; do
+      _p="${_p// /}"
+      [[ -z "$_p" ]] && continue
+      ( set -a; source .env; set +a; bash "plugins/notification/${_p}/preflight.sh" )
+    done
+    unset _np _p
+  fi
   ok "Plugin preflights passed"
 fi
 
 # =============================================================================
 # Phase 3 — Render INFRA.md
 # =============================================================================
-phase "Phase 3 / 9  Render credential vault"
+phase "Phase 3 / 10 Render credential vault"
 
 # Local mode uses a slimmer template (no public hosts, no GitOps section).
 if [[ "$OUTPOST_MODE" == "local" ]]; then
@@ -232,7 +304,7 @@ ok "Credential vault(s) rendered"
 # =============================================================================
 # Phase 4 — Compose layer
 # =============================================================================
-phase "Phase 4 / 9  Compose data services"
+phase "Phase 4 / 10 Compose data services"
 
 # Always invoke `docker compose` with explicit --env-file and -f so that
 # any caller (this script, the launchd agent, status.sh, reset.sh) gets
@@ -270,7 +342,7 @@ done
 # Phases 5–8 require k3s + GitOps. In local mode we skip directly to summary.
 # =============================================================================
 if [[ "$OUTPOST_MODE" == "local" ]]; then
-  phase "Phase 9 / 9  Summary (local mode)"
+  phase "Phase 10 / 10 Summary (local mode)"
 
   echo ""
   echo "Compose:"
@@ -299,7 +371,7 @@ fi
 # =============================================================================
 # Phase 5 — k3s
 # =============================================================================
-phase "Phase 5 / 9  k3s cluster"
+phase "Phase 5 / 10 k3s cluster"
 
 sk_install_k3s
 sk_setup_autostart
@@ -342,7 +414,7 @@ ok "k3s ready, namespaces created"
 # =============================================================================
 # Phase 6 — sealed-secrets
 # =============================================================================
-phase "Phase 6 / 9  sealed-secrets"
+phase "Phase 6 / 10 sealed-secrets"
 
 kubectl apply -f https://github.com/bitnami-labs/sealed-secrets/releases/latest/download/controller.yaml
 kubectl wait --for=condition=Available --timeout=180s deployment -l name=sealed-secrets-controller -n kube-system 2>/dev/null || true
@@ -381,7 +453,7 @@ ok "sealed-secrets ready"
 # =============================================================================
 # Phase 7 — Plugins (registry only; git-provider needs Tekton CRDs from Phase 8)
 # =============================================================================
-phase "Phase 7 / 9  Plugins (registry)"
+phase "Phase 7 / 10 Plugins (registry)"
 
 log "Applying registry plugin: ${REGISTRY_PLUGIN}"
 render_apply "plugins/registry/${REGISTRY_PLUGIN}/manifest.yaml"
@@ -436,7 +508,7 @@ fi
 # =============================================================================
 # Phase 8 — ArgoCD + Tekton + bridges
 # =============================================================================
-phase "Phase 8 / 9  ArgoCD, Tekton, bridges"
+phase "Phase 8 / 10 ArgoCD, Tekton, bridges"
 
 # -----------------------------------------------------------------------------
 # Cleanup: orphans from earlier bootstrap versions.
@@ -569,9 +641,154 @@ ARGOCD_ADMIN_PASSWORD=$(kubectl -n argocd get secret argocd-initial-admin-secret
 grep -q '^ARGOCD_ADMIN_PASSWORD=' .env || echo "ARGOCD_ADMIN_PASSWORD=${ARGOCD_ADMIN_PASSWORD}" >> .env
 
 # =============================================================================
-# Phase 9 — Health summary
+# Phase 9 — CI/CD test gate + auto-rollback + notifications
+# -----------------------------------------------------------------------------
+# Wires up Gate A (Tekton run-tests Task), Gate B (Argo Rollouts canary +
+# auto-rollback), and multi-channel notifications. Idempotent: safe to re-run.
 # =============================================================================
-phase "Phase 9 / 9  Summary"
+phase "Phase 9 / 10 Test gate, auto-rollback, notifications"
+
+# ---- 9a. Test runner ----
+log "Installing test-runner: ${TEST_RUNNER}"
+case "${TEST_RUNNER}" in
+  testkube)
+    if [[ "${TESTKUBE_MODE}" == "oss" ]]; then
+      # Auto-download helm if missing (matches the kubeseal pattern).
+      if ! command -v helm >/dev/null 2>&1; then
+        log "Downloading helm v3.16..."
+        HELM_VER="3.16.4"
+        case "$SK_OS" in
+          macos) HELM_OS="darwin" ;;
+          *)     HELM_OS="linux" ;;
+        esac
+        if [[ "$(uname -m)" == "arm64" || "$(uname -m)" == "aarch64" ]]; then
+          HELM_ARCH="arm64"
+        else
+          HELM_ARCH="amd64"
+        fi
+        TMP_HELM=$(mktemp -d)
+        curl -sSL "https://get.helm.sh/helm-v${HELM_VER}-${HELM_OS}-${HELM_ARCH}.tar.gz" \
+          | tar -xz -C "$TMP_HELM"
+        sudo mv "$TMP_HELM/${HELM_OS}-${HELM_ARCH}/helm" /usr/local/bin/
+        sudo chmod +x /usr/local/bin/helm
+        rm -rf "$TMP_HELM"
+        ok "helm installed: $(helm version --short)"
+      fi
+      log "Installing Testkube via helm (oss mode)..."
+      helm repo add kubeshop https://kubeshop.github.io/helm-charts >/dev/null 2>&1 || true
+      helm repo update kubeshop >/dev/null 2>&1 || true
+      helm upgrade --install testkube kubeshop/testkube \
+        --namespace testkube \
+        --create-namespace \
+        --wait --timeout 300s \
+        --set global.cloud.uiBaseUrl="" \
+        2>&1 | tail -20 || warn "testkube helm install reported issues — check 'kubectl get pods -n testkube'"
+    else
+      log "TESTKUBE_MODE=cloud — skipping local agent install (configure CLI later)"
+    fi
+    ;;
+  catalog-tasks)
+    log "Installing Tekton Catalog test tasks..."
+    for _task in golang-test pytest jest junit-runner dotnet-test; do
+      kubectl apply -n tekton-pipelines \
+        -f "https://raw.githubusercontent.com/tektoncd/catalog/main/task/${_task}/0.1/${_task}.yaml" \
+        2>/dev/null || warn "  catalog task ${_task} not found at 0.1; check manually"
+    done
+    unset _task
+    ;;
+esac
+render_apply "plugins/test-runner/${TEST_RUNNER}/manifest.yaml"
+
+# Apply the run-tests Task (uses the active runner).
+kubectl apply -f core/k8s/05-tekton/run-tests-task.yaml
+ok "Test runner ready"
+
+# ---- 9b. Rollout plugin (Argo Rollouts) ----
+log "Installing rollout plugin: ${ROLLOUT_PLUGIN}"
+if [[ "${ROLLOUT_PLUGIN}" == "argo-rollouts" ]]; then
+  # Server-side apply — Rollouts CRDs are large, same rationale as ArgoCD/Tekton.
+  kubectl apply --server-side=true --force-conflicts -n argo-rollouts \
+    -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+  kubectl apply --server-side=true --force-conflicts -n argo-rollouts \
+    -f https://github.com/argoproj/argo-rollouts/releases/latest/download/dashboard-install.yaml
+  kubectl wait --for=condition=Available --timeout=180s \
+    deployment/argo-rollouts -n argo-rollouts 2>/dev/null || \
+    warn "argo-rollouts controller still rolling — apply continues"
+
+  render_apply "plugins/rollout/${ROLLOUT_PLUGIN}/manifest.yaml"
+  render_apply "plugins/rollout/${ROLLOUT_PLUGIN}/analysistemplate-default.yaml"
+  if [[ "${TEST_RUNNER}" == "testkube" ]]; then
+    render_apply "plugins/rollout/${ROLLOUT_PLUGIN}/analysistemplate-smoke.yaml"
+  else
+    log "  Skipping smoke AnalysisTemplate (test-runner != testkube)"
+  fi
+  render_apply "plugins/rollout/${ROLLOUT_PLUGIN}/ingressroute.yaml"
+fi
+ok "Rollout plugin ready (https://${ROLLOUTS_DASHBOARD_HOST})"
+
+# ---- 9c. Notifications ----
+# argocd-notifications is shipped as part of ArgoCD core (>=2.3); the controller
+# auto-discovers argocd-notifications-cm + argocd-notifications-secret.
+if [[ -n "${NOTIFICATION_PROVIDERS}" ]]; then
+  log "Wiring notifications: ${NOTIFICATION_PROVIDERS}"
+
+  # Build combined argocd-notifications-cm by concatenating base + per-plugin
+  # fragments. Same pattern for argocd-notifications-secret. Both base files
+  # leave their `data:` / `stringData:` sections empty so plugin fragments
+  # can be appended as indented k:v lines.
+  ARGO_CM_OUT="$(mktemp)"
+  ARGO_SECRET_OUT="$(mktemp)"
+  trap 'rm -f "$ARGO_CM_OUT" "$ARGO_SECRET_OUT"' EXIT
+
+  cp core/k8s/04-argocd/notifications-cm.template.yaml "$ARGO_CM_OUT"
+  cp core/k8s/04-argocd/notifications-secret.template.yaml "$ARGO_SECRET_OUT"
+
+  # Notification manifest.yaml mixes install-time vars (DINGTALK_WEBHOOK_URL etc.)
+  # with runtime vars (${NOTIFY_*}) inside body.tmpl. Use targeted
+  # substitution so the runtime placeholders survive into the ConfigMap.
+  NOTIFY_ALLOWLIST="DINGTALK_WEBHOOK_URL DINGTALK_SIGN_SECRET FEISHU_WEBHOOK_URL FEISHU_SIGN_SECRET WECOM_WEBHOOK_URL GENERIC_WEBHOOK_URL GENERIC_WEBHOOK_BEARER ROOT_DOMAIN"
+
+  IFS=',' read -ra _np <<< "${NOTIFICATION_PROVIDERS}"
+  for _p in "${_np[@]}"; do
+    _p="${_p// /}"
+    [[ -z "$_p" ]] && continue
+    log "  notification plugin: ${_p}"
+    # Per-plugin Tekton-side resources. Targeted substitution preserves
+    # ${NOTIFY_*} runtime placeholders inside body.tmpl.
+    _tmp_manifest=$(mktemp)
+    render_template_only "plugins/notification/${_p}/manifest.yaml" "$_tmp_manifest" "$NOTIFY_ALLOWLIST"
+    kubectl apply -f "$_tmp_manifest"
+    rm -f "$_tmp_manifest"
+    # Append per-plugin argocd fragments (already 2-space-indented to fit
+    # under data: / stringData:).
+    cat "plugins/notification/${_p}/argocd-cm-fragment.yaml" >> "$ARGO_CM_OUT"
+    cat "plugins/notification/${_p}/argocd-secret-fragment.yaml" >> "$ARGO_SECRET_OUT"
+  done
+  unset _np _p _tmp_manifest
+
+  # Render envsubst on the combined files (resolves ${ROOT_DOMAIN} in templates,
+  # ${DINGTALK_WEBHOOK_URL} in secret data, etc.) then apply.
+  render_apply "$ARGO_CM_OUT"
+  render_apply "$ARGO_SECRET_OUT"
+
+  # Apply the shared Tekton notify-task (called from pipeline-build.yaml `finally`).
+  kubectl apply -f core/k8s/05-tekton/notify-task.yaml
+  ok "Notifications ready (${NOTIFICATION_PROVIDERS})"
+else
+  log "NOTIFICATION_PROVIDERS empty — skipping notification wiring"
+  # Apply the notify-task anyway so pipeline-build's finally block resolves;
+  # with no provider Secrets mounted, the fanout step no-ops with [WARN] logs.
+  kubectl apply -f core/k8s/05-tekton/notify-task.yaml
+fi
+
+# Re-render pipeline-build with the now-canonical NOTIFICATION_PROVIDERS so
+# the finally step receives the right provider list.
+render_apply "core/k8s/05-tekton/pipeline-build.yaml"
+
+# =============================================================================
+# Phase 10 — Health summary
+# =============================================================================
+phase "Phase 10 / 10 Summary"
 
 echo ""
 echo "Compose:"
@@ -594,6 +811,12 @@ echo "  password:         ${ARGOCD_ADMIN_PASSWORD}"
 echo ""
 echo "  Tekton Dashboard: https://tekton.${ROOT_DOMAIN}"
 echo "                    (PipelineRuns / TaskRuns / logs UI; no auth — gate via CF Access)"
+echo ""
+echo "  Rollouts UI:      https://${ROLLOUTS_DASHBOARD_HOST}"
+echo "                    (canary progress / abort / promote)"
+echo ""
+echo "  Test runner:      ${TEST_RUNNER}  (mode: ${TESTKUBE_MODE})"
+echo "  Notifications:    ${NOTIFICATION_PROVIDERS:-(none)}"
 echo ""
 echo "  Webhook URL:      https://hooks.${ROOT_DOMAIN}"
 echo "  Webhook secret:   ${GIT_WEBHOOK_SECRET}"
