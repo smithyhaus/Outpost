@@ -10,6 +10,9 @@
 根域名：`${ROOT_DOMAIN}`
 Registry plugin：`${REGISTRY_PLUGIN}`
 Git provider plugin：`${GIT_PROVIDER_PLUGIN}`
+Test runner：`${TEST_RUNNER}`(模式:`${TESTKUBE_MODE}`)
+Rollout plugin：`${ROLLOUT_PLUGIN}`
+通知插件:`${NOTIFICATION_PROVIDERS}`(空 = 未启用)
 
 ---
 
@@ -23,6 +26,8 @@ Git provider plugin：`${GIT_PROVIDER_PLUGIN}`
 | RabbitMQ UI    | `https://mq.${ROOT_DOMAIN}`    | —   | `${RABBITMQ_USER}` | `${RABBITMQ_PASSWORD}`     |
 | Meilisearch    | `https://search.${ROOT_DOMAIN}` | —  | (Bearer)          | `${MEILI_MASTER_KEY}`      |
 | ArgoCD         | `https://argocd.${ROOT_DOMAIN}` | —  | `admin`           | （见 §6）                  |
+| Tekton Dashboard | `https://tekton.${ROOT_DOMAIN}` | — | (集群 RBAC,无独立认证) | — |
+| Argo Rollouts UI | `https://${ROLLOUTS_DASHBOARD_HOST}` | — | (无独立认证 — 建议加 CF Access) | — |
 | Registry       | `https://registry.${ROOT_DOMAIN}` | —| (匿名)            | —                          |
 
 ---
@@ -166,14 +171,67 @@ kubectl logs -n tekton-pipelines -l tekton.dev/pipelineRun=<run> \
 
 ---
 
-## 11. 安全加固清单（建议但不强制）
+## 11. 测试网关、自动回滚、多通道告警
+
+完整设计见 `i18n/zh-CN/docs/proposals/cicd-test-gate.md`。
+快速入门走 `i18n/zh-CN/docs/00-quickstart.md` 的 Phase J 章节。
+
+### 当前启用的 plugin
+
+- 测试运行器:`${TEST_RUNNER}`(模式:`${TESTKUBE_MODE}`)
+- 回滚 plugin:`${ROLLOUT_PLUGIN}`
+- 通知通道:`${NOTIFICATION_PROVIDERS}`
+
+### 端点
+
+- Argo Rollouts Dashboard:`https://${ROLLOUTS_DASHBOARD_HOST}` — 看金丝雀进度,可中止/提升
+- Testkube agent:命名空间 `testkube`(`kubectl get pods -n testkube`)
+- Argo Rollouts controller:命名空间 `argo-rollouts`
+
+### 告警 fan-out
+
+每次 PipelineRun 失败 / ArgoCD sync 失败 / Argo Rollouts 自动回滚都会
+fan-out 到所有启用的通道。改 `.env` 里 `NOTIFICATION_PROVIDERS`(逗号分隔)
+后重跑 `bash bootstrap.sh` 即可调整。
+
+| 通道              | webhook URL 变量          | 加签 secret(可选)         |
+|-------------------|---------------------------|----------------------------|
+| dingtalk          | `DINGTALK_WEBHOOK_URL`    | `DINGTALK_SIGN_SECRET`     |
+| feishu            | `FEISHU_WEBHOOK_URL`      | `FEISHU_SIGN_SECRET`       |
+| wecom             | `WECOM_WEBHOOK_URL`       | (无 — 直接保护 URL 本身)   |
+| webhook-generic   | `GENERIC_WEBHOOK_URL`     | `GENERIC_WEBHOOK_BEARER`   |
+
+### 测试约定(应用仓库根目录)
+
+```yaml
+# outpost.test.yaml
+version: 1
+runner:
+  command: ["sh", "-c", "go test ./..."]   # 或 pytest / npm test / mvn test / dotnet test
+gates:
+  pre-deploy:        { timeout: 5m }
+  post-deploy-smoke: { enabled: true, image: curlimages/curl:8.10.0,
+                       command: ["sh","-c","curl -fsS http://my-app.apps.svc.cluster.local/healthz"],
+                       timeout: 30s }
+```
+
+仓库根没有 `outpost.test.yaml` 也没有 `Dockerfile.test` → Gate A 干净 skip,
+pipeline 照常跑。
+
+### 自动回滚阈值(已锁定)
+
+默认 `AnalysisTemplate`:`failureLimit: 2`、`consecutiveErrorLimit: 3`、
+`successCondition: result == "Passed"`(Job provider)或 `result == 200`
+(Web HTTP probe)。
+
+## 12. 安全加固清单（建议但不强制）
 
 - [ ] 给 `argocd.${ROOT_DOMAIN}` / `mq.${ROOT_DOMAIN}` 加 Cloudflare Access
 - [ ] 给 `registry.${ROOT_DOMAIN}` 加 Basic Auth 或 Cloudflare Access
 - [ ] ArgoCD admin 改密
 - [ ] sealed-secrets 公钥备份至密码管理器
 
-## 12. 复用清单（新项目接入流程）
+## 13. 复用清单（新项目接入流程）
 
 详见 `i18n/zh-CN/docs/05-onboard-project.md`。简略：
 

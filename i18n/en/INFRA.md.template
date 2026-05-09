@@ -10,6 +10,9 @@ Generated: at bootstrap time
 Root domain: `${ROOT_DOMAIN}`
 Registry plugin: `${REGISTRY_PLUGIN}`
 Git provider plugin: `${GIT_PROVIDER_PLUGIN}`
+Test runner: `${TEST_RUNNER}` (mode: `${TESTKUBE_MODE}`)
+Rollout plugin: `${ROLLOUT_PLUGIN}`
+Notification providers: `${NOTIFICATION_PROVIDERS}` (empty = none enabled)
 
 ---
 
@@ -24,6 +27,7 @@ Git provider plugin: `${GIT_PROVIDER_PLUGIN}`
 | Meilisearch    | `https://search.${ROOT_DOMAIN}` | — | (Bearer)          | `${MEILI_MASTER_KEY}`      |
 | ArgoCD         | `https://argocd.${ROOT_DOMAIN}` | — | `admin`           | (see §6)                   |
 | Tekton Dashboard | `https://tekton.${ROOT_DOMAIN}` | — | (cluster RBAC, no auth) | — |
+| Argo Rollouts UI | `https://${ROLLOUTS_DASHBOARD_HOST}` | — | (no auth — gate via CF Access) | — |
 | Registry       | `https://registry.${ROOT_DOMAIN}` | — | (anonymous)       | —                          |
 
 ---
@@ -168,14 +172,69 @@ kubectl logs -n tekton-pipelines -l tekton.dev/pipelineRun=<run-name> \
 
 ---
 
-## 11. Hardening checklist (recommended, not enforced)
+## 11. Test gate, auto-rollback, notifications
+
+Full design: `i18n/en/docs/proposals/cicd-test-gate.md`. Walkthrough in
+`i18n/en/docs/00-quickstart.md` Phase J.
+
+### Active plugins
+
+- Test runner: `${TEST_RUNNER}` (mode: `${TESTKUBE_MODE}`)
+- Rollout plugin: `${ROLLOUT_PLUGIN}`
+- Notification providers: `${NOTIFICATION_PROVIDERS}`
+
+### Endpoints
+
+- Argo Rollouts Dashboard: `https://${ROLLOUTS_DASHBOARD_HOST}` — canary progress, abort, promote
+- Testkube agent: namespace `testkube` (`kubectl get pods -n testkube`)
+- Argo Rollouts controller: namespace `argo-rollouts`
+
+### Notification fan-out
+
+Every PipelineRun failure / ArgoCD sync failure / Argo Rollouts auto-rollback
+fans out to all enabled notification providers. Configure / disable channels
+by editing `NOTIFICATION_PROVIDERS` in `.env` (comma-separated) and re-running
+`bash bootstrap.sh`.
+
+| Provider          | Webhook URL var          | Sign secret var (optional)   |
+|-------------------|--------------------------|------------------------------|
+| dingtalk          | `DINGTALK_WEBHOOK_URL`   | `DINGTALK_SIGN_SECRET`       |
+| feishu            | `FEISHU_WEBHOOK_URL`     | `FEISHU_SIGN_SECRET`         |
+| wecom             | `WECOM_WEBHOOK_URL`      | (none — protect URL itself)  |
+| webhook-generic   | `GENERIC_WEBHOOK_URL`    | `GENERIC_WEBHOOK_BEARER`     |
+
+### Test contract (per application repo)
+
+Drop `outpost.test.yaml` at the repo root:
+
+```yaml
+version: 1
+runner:
+  command: ["sh", "-c", "go test ./..."]   # or pytest, npm test, mvn test, dotnet test
+gates:
+  pre-deploy:        { timeout: 5m }
+  post-deploy-smoke: { enabled: true, image: curlimages/curl:8.10.0,
+                       command: ["sh","-c","curl -fsS http://my-app.apps.svc.cluster.local/healthz"],
+                       timeout: 30s }
+```
+
+Repos without `outpost.test.yaml` (and without `Dockerfile.test`) skip Gate A
+cleanly — pipeline still runs.
+
+### Auto-rollback thresholds (locked)
+
+Default `AnalysisTemplate`: `failureLimit: 2`, `consecutiveErrorLimit: 3`,
+`successCondition: result == "Passed"` (Job provider) or `result == 200`
+(Web HTTP probe).
+
+## 12. Hardening checklist (recommended, not enforced)
 
 - [ ] Add Cloudflare Access (email OTP) in front of `argocd.${ROOT_DOMAIN}` and `mq.${ROOT_DOMAIN}`
 - [ ] Add basic auth or Cloudflare Access in front of `registry.${ROOT_DOMAIN}` if exposing publicly
 - [ ] Change ArgoCD admin password
 - [ ] Backup `secrets-backup/sealed-secrets-pub.pem` to a password manager
 
-## 12. Reuse checklist (when onboarding a new project)
+## 13. Reuse checklist (when onboarding a new project)
 
 See `i18n/en/docs/05-onboard-project.md`. In short:
 
