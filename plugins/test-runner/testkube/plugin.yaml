@@ -21,6 +21,5 @@ provides:
   - cli-image: kubeshop/testkube-cli
   - crds: TestWorkflow, TestTrigger
 caveats:
-  - Each TestWorkflow run spins ≥1 pod. On a small k3d cluster, set tight
-    resource quotas on the `testkube` namespace.
-  - `cloud` mode requires a Testkube Pro account + API key (Phase 2).
+  - "Each TestWorkflow run spins >= 1 pod. On a small k3d cluster, set tight resource quotas on the testkube namespace."
+  - "cloud mode requires a Testkube Pro account + API key (Phase 2)."

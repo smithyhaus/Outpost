@@ -22,6 +22,8 @@ jobs:
         run: |
           set -euo pipefail
           source platform/lib/portable.sh
+
+          # Existing plugin envs
           export ROOT_DOMAIN=smoke.example.test
           export GIT_USER=smoke
           export GIT_TOKEN=smoketoken
@@ -31,13 +33,33 @@ jobs:
           export ALIYUN_ACR_USER=smoke
           export ALIYUN_ACR_PASSWORD=smokepass
 
+          # New plugin envs (test-runner / rollout / notification)
+          export TESTKUBE_MODE=oss
+          export ROLLOUTS_DASHBOARD_HOST=rollouts.smoke.example.test
+          export DINGTALK_WEBHOOK_URL=https://example.dingtalk/test
+          export DINGTALK_SIGN_SECRET=SECsmoke
+          export FEISHU_WEBHOOK_URL=https://example.feishu/test
+          export FEISHU_SIGN_SECRET=SECsmoke
+          export WECOM_WEBHOOK_URL=https://example.wecom/test
+          export GENERIC_WEBHOOK_URL=https://example.generic/test
+          export GENERIC_WEBHOOK_BEARER=bearer-smoke
+
+          # Notification plugin manifests carry runtime ${NOTIFY_*} placeholders
+          # that must survive install-time render (notify-task expands them at
+          # fanout time). For these, use targeted substitution.
+          NOTIFY_ALLOW="DINGTALK_WEBHOOK_URL DINGTALK_SIGN_SECRET FEISHU_WEBHOOK_URL FEISHU_SIGN_SECRET WECOM_WEBHOOK_URL GENERIC_WEBHOOK_URL GENERIC_WEBHOOK_BEARER ROOT_DOMAIN"
+
           mkdir -p /tmp/smoke
           for d in plugins/*/*/; do
             mf="$d/manifest.yaml"
             [ -f "$mf" ] || continue
             out="/tmp/smoke/$(echo "$d" | tr / _)manifest.yaml"
             echo "rendering $mf -> $out"
-            render_template "$mf" "$out"
+            if [[ "$d" == plugins/notification/* ]]; then
+              render_template_only "$mf" "$out" "$NOTIFY_ALLOW"
+            else
+              render_template "$mf" "$out"
+            fi
           done
 
       - name: Install kubeconform

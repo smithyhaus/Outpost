@@ -13,6 +13,6 @@ provides:
   - delivery: HTTPS POST to oapi.dingtalk.com
   - integrates: argocd-notifications-cm + outpost-notify Tekton task
 caveats:
-  - Without DINGTALK_SIGN_SECRET, anyone with the URL can post. Rotate if leaked.
-  - Per-bot rate limit ≈ 20 msg/min — heavy outage may drop messages.
-  - Header is `Content-Type: application/json`. Body is DingTalk's `msgtype: markdown` envelope.
+  - "Without DINGTALK_SIGN_SECRET, anyone with the URL can post. Rotate if leaked."
+  - "Per-bot rate limit ~ 20 msg/min — heavy outage may drop messages."
+  - "Header is Content-Type application/json. Body is DingTalk's msgtype=markdown envelope."
