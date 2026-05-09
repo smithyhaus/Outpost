@@ -32,7 +32,17 @@ spec:
       description: 镜像 tag（短 SHA）
     - name: registry
       type: string
+      description: 公网/外部 host(写进 manifest,K8s containerd 用它拉)
       default: registry.${ROOT_DOMAIN}
+    - name: registry-push
+      type: string
+      description: |
+        kaniko push 用的 host。默认走 in-cluster Service(self-hosted 插件场景),
+        绕开公网/cloudflared 的 HTTP/2 边界 — 大 blob upload 在 Cloudflare 边界
+        容易触发 PROTOCOL_ERROR。registry 后端是同一个,push 与 pull 用不同 host
+        没问题(registry 按 repo path 存,host 只是寻址)。
+        aliyun-acr 等外部 registry 插件场景:让 plugin 覆盖此默认值为公网 host。
+      default: docker-registry.registry.svc.cluster.local:5000
     - name: manifest-repo-url
       type: string
       default: ${MANIFEST_REPO_URL}
@@ -85,7 +95,7 @@ spec:
           workspace: dockerconfig
       params:
         - name: IMAGE
-          value: $(params.registry)/$(params.repo-name):$(params.image-tag)
+          value: $(params.registry-push)/$(params.repo-name):$(params.image-tag)
         - name: DOCKERFILE
           value: ./Dockerfile
         - name: CONTEXT
