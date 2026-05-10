@@ -4,7 +4,8 @@ description: |
   Operating skill for the Outpost dev backend project. Two-layer
   architecture: Docker Compose for stateful data services + k3s for
   applications and GitOps CI/CD, fronted by a single Cloudflare Tunnel.
-  Plugin-driven (registry, git-provider). Targets macOS / Linux / WSL2.
+  Plugin-driven (registry, git-provider, test-runner, rollout, notification).
+  Targets macOS / Linux / WSL2.
 when_to_use: |
   Any operation inside an Outpost checkout — verifying health,
   diagnosing failures, onboarding a new project, modifying configuration,
@@ -161,12 +162,17 @@ When the user says "onboard X" / "add new project X":
 - Don't ask about tech stack — that lives in the user's repo, not here.
 
 ### Plugin authoring
-When asked to add a registry / git-provider / future tunnel plugin:
+Five plugin kinds today: `registry`, `git-provider`, `test-runner`,
+`rollout`, `notification`. Future: `tunnel` (frp / tailscale / ngrok),
+listed in `TODOS.md`.
 - Copy the closest existing plugin under `plugins/<kind>/<name>/` and adapt.
 - Required files per `plugins/README.md` contract: `plugin.yaml`,
   `manifest.yaml` (or `compose.yaml`), `preflight.sh`, `README.md`.
-- Add a smoke test in `tests/plugins/<kind>-<name>.bats`.
-- Update the table in the project root `README.md`.
+- Notification plugins additionally contribute
+  `argocd-cm-fragment.yaml` + `argocd-secret-fragment.yaml` (concatenated
+  by bootstrap into `argocd-notifications-cm` / `-secret`).
+- Add a smoke test in `tests/bats/<kind>-plugins.bats`.
+- Update the matrix in the project root `README.md` AND `README.zh-CN.md`.
 
 ## 6. Verification quick reference
 

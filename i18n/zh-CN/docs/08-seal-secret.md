@@ -26,7 +26,13 @@
 
 - **kubeseal CLI**:`bootstrap.sh` 在本机自动安装(macOS / Linux / WSL2)
 - **集群侧 controller**:`bootstrap.sh` Phase 6 部署到 `kube-system`
-- **公钥备份**:`secrets-backup/sealed-secrets-pub.pem`(本机)
+- **公钥备份**:`secrets-backup/sealed-secrets-pub.pem`
+- **私钥备份(v0.2 起)**:`secrets-backup/sealed-secrets-master.key.yaml`
+  Phase 6 末尾自动备份,**下次 bootstrap Phase 6 开始处自动恢复**。
+  这是 `reset.sh` + `bootstrap.sh` 循环之后,manifest 仓库里已有的
+  SealedSecret 仍能解密的关键。文件在 .gitignore。
+  `reset.sh` 默认保留;`--hard` 才彻底清(强制把所有现有 SealedSecret
+  重 seal 到新密钥对)。
 
 ## 应用怎么用(每个应用各自实现)
 
@@ -75,25 +81,45 @@ kubectl rollout restart -n <app> deploy
 
 ## 控制器灾难恢复
 
-私钥变了(controller 重装、k3s 重做)所有现有 SealedSecret 都解不出。
-预防:
+### 同一台主机(集群 reset / 重建)
+
+`bootstrap.sh` Phase 6 末尾自动把 master key 备份到
+`secrets-backup/sealed-secrets-master.key.yaml`,**下次 bootstrap Phase 6
+开始处自动 restore**。所以最常见的"清掉集群重建"路径:
 
 ```bash
-# bootstrap.sh 自动备份了公钥
-ls $SK_INFRA_DIR/secrets-backup/sealed-secrets-pub.pem
-
-# 完整私钥导出(放进 1Password / Bitwarden,绝对不入 git)
-kubectl get secret -n kube-system \
-  -l sealedsecrets.bitnami.com/sealed-secrets-key \
-  -o yaml > sealed-secrets-keys-backup.yaml
+bash reset.sh                      # 默认保留 secrets-backup/
+bash bootstrap.sh                  # restore master key → 老 SealedSecret 继续解密
 ```
 
-恢复:
+无需重新 seal。验证:
 
 ```bash
-kubectl apply -f sealed-secrets-keys-backup.yaml
-kubectl rollout restart -n kube-system deploy/sealed-secrets-controller
+kubectl -n kube-system get secret -l sealedsecrets.bitnami.com/sealed-secrets-key
+# 跨 reset 同一个 Secret 名,说明密钥对真的保住了。
 ```
+
+### 主机本身丢了(off-host 灾难)
+
+如果整台主机消失(笔记本损坏 / VM 丢),`secrets-backup/` 里的 key 也没了。
+防御办法:**把 master key 复制到密码管理器**。
+
+```bash
+cat secrets-backup/sealed-secrets-master.key.yaml
+# → 整段 YAML 存进 1Password / Bitwarden / Vault 等。
+# 新主机首次 bootstrap **之前**把 YAML 写回到
+# secrets-backup/sealed-secrets-master.key.yaml。
+```
+
+### 强制轮换密钥
+
+```bash
+bash reset.sh --hard               # 彻底清掉 secrets-backup/
+bash bootstrap.sh                  # 生成全新的 master key
+# 把所有 manifest 仓库里的 SealedSecret 用新公钥重 seal 一次。
+```
+
+`--hard` 适用场景:怀疑 master key 已泄露,或想给新环境一个干净起点。
 
 ## 常见问题
 

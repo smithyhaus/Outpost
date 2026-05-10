@@ -101,8 +101,62 @@ rejects the event.
 ### Kaniko build fails
 - Dockerfile missing in the app repo root
 - Push 401 → `registry-credentials` mismatch (self-hosted is anonymous;
-  aliyun-acr needs a real password)
+  aliyun-acr needs a real password). Inspect:
+  `kubectl -n tekton-pipelines get secret registry-credentials -o jsonpath='{.data.config\.json}' | base64 -d`
 - Registry unreachable → `kubectl exec -it <pod> -- wget -O- http://registry.<root>`
+
+### `admission webhook denied: tasks + finally > pipeline`
+You added a Pipeline task (or bumped one's per-task timeout) and the
+sum exceeded `triggertemplate.yaml`'s `timeouts.tasks` /
+`timeouts.finally` budget. Tekton enforces
+`tasks + finally <= pipeline` at run-creation time.
+Fix: bump the appropriate field in
+`core/k8s/05-tekton/triggertemplate.yaml` and re-apply.
+
+### Dashboard returns 401
+Tekton Dashboard + Argo Rollouts UI are sealed behind a shared Traefik
+BasicAuth middleware. Username = `OUTPOST_DASHBOARD_USER` (default
+`outpost`), password = `OUTPOST_DASHBOARD_PASSWORD` — both live in
+`INFRA.md` §0 and `.env`.
+`kubectl -n tekton-pipelines get secret dashboard-auth-secret -o jsonpath='{.data.users}' | base64 -d`
+shows the htpasswd line currently active.
+
+## Phase J — Test gate, auto-rollback, notifications
+
+(Only active if you opted in — see
+[`00-quickstart.md` Phase J](./00-quickstart.md).)
+
+### `run-tests` task is always skipped
+Repo root has no `outpost.test.yaml` and no `Dockerfile.test`. The
+task no-ops cleanly; this is the "your repo isn't using the test gate"
+path. To engage Gate A, add either file.
+
+### `run-tests` task fails with `bash: command not found` / similar
+The task runs in a stock `alpine:3.20` step; `outpost.test.yaml`'s
+`runner.command` must apk-install whatever runtime it needs, e.g.
+`["sh","-c","apk add --no-cache go && go test ./..."]`. Phase 2 swaps
+this for a Testkube TestWorkflow with `content.git`; for now the heavy
+language runtime install is on the application author.
+
+### Rollouts aborts every canary step
+`AnalysisTemplate` thresholds are intentionally tight
+(`failureLimit: 2`, `consecutiveErrorLimit: 3`). Inspect:
+```bash
+kubectl get analysisrun -n apps
+kubectl describe analysisrun -n apps <name>
+```
+If the service is healthy but the probe expects a different shape,
+loosen `successCondition` in
+`plugins/rollout/argo-rollouts/analysistemplate-default.yaml`.
+
+### Notifications don't fire
+- `NOTIFICATION_PROVIDERS` empty in `.env` → re-bootstrap with at
+  least one channel listed.
+- `kubectl logs -n tekton-pipelines <pipelinerun-pod> -c step-fanout`
+  shows the per-provider POST attempts. `[WARN] <p> delivery failed`
+  = vendor returned non-2xx; check the webhook URL.
+- DingTalk / Feishu signed webhook: host clock skew breaks the
+  HMAC signature — keep system clock in sync.
 
 ## Network / Cloudflare
 
@@ -125,6 +179,16 @@ Hostname not configured.
 ## Last resort — full reset
 
 ```bash
-./reset.sh         # type the confirmation phrase
+./reset.sh         # type the confirmation phrase. preserves secrets-backup/
+./bootstrap.sh     # restores sealed-secrets master key from secrets-backup/
+```
+
+If you suspect the sealed-secrets master key has been compromised, or
+want a totally clean slate (incl. forced re-sealing of every existing
+SealedSecret), use:
+
+```bash
+./reset.sh --hard  # also wipes secrets-backup/ — every SealedSecret
+                   # in your manifest repos must be re-sealed afterward
 ./bootstrap.sh
 ```

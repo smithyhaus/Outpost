@@ -30,25 +30,66 @@ apps/<app>/
 └── ingress.yaml
 ```
 
-**deployment.yaml** 关键点：
+**deployment.yaml** 关键点:
 ```yaml
 spec:
   template:
     spec:
       containers:
         - name: app
-          image: registry.<root>/<app>:latest   # ← Tekton 会自动改 tag
+          image: registry.<root>/<app>:latest   # ← Tekton 每次 push 自动改 tag
+          # 密钥从 SealedSecret 注入(见步骤 2b)。**绝对不要**把明文连接串
+          # 直接写到这里入 git。
+          envFrom:
+            - secretRef:
+                name: <app>-secrets
+          # 非 secret 配置可以 inline:
           env:
-            - name: DATABASE_URL
-              value: "postgres://...@postgres.infra-bridges.svc.cluster.local:5432/..."
-            # 连接串从 INFRA.md 复制
+            - name: LOG_LEVEL
+              value: "info"
+          # apps namespace 自带 LimitRange(单容器默认 1cpu/512Mi,
+          # 上限 4cpu/8Gi)。需要不同就显式声明。
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits:   { cpu: 1,    memory: 512Mi }
 ```
 
-**ingress.yaml** 用 `<app>.apps.<root>` 域名（已被 cloudflared 通配符路由覆盖，无需改 CF 配置）。
+**ingress.yaml** 用 `<app>.apps.<root>` 域名(已被 cloudflared 通配符路由覆盖,无需改 CF 配置)。
 
-**密钥(连接串、token 等)**:用 SealedSecret 加密后入库。原理与故障
-排查见 [08-seal-secret.md](./08-seal-secret.md);具体怎么生成由各应用
-自己写脚本,因为每个应用的 secret 字段都不一样。
+**镜像 tag 格式:** Tekton 写 7 字符短 SHA(`registry.<root>/<app>:abc1234`)。
+回滚 = `git revert` manifest 仓库的那次 commit;`kubectl rollout undo` 也行。
+
+#### 2b. 密钥 — 永远不要 inline 明文
+
+Outpost 自带 SealedSecret。完整原理与故障恢复见
+[08-seal-secret.md](./08-seal-secret.md);标准范例在
+[`examples/demo-app/`](../../../examples/demo-app/) — 看其
+`README.md`、`secret.example.yaml`、`sealed-secret.example.yaml`。
+
+最短路径:
+
+```bash
+# 1. 拿集群公钥
+kubeseal --fetch-cert > /tmp/pub.pem
+
+# 2. 明文文件放在 manifest 仓库**外**(seal 完就删)
+cp examples/demo-app/secret.example.yaml ~/secrets/<app>.yaml
+$EDITOR ~/secrets/<app>.yaml          # <REPLACE_*> 用 INFRA.md 的真实值填
+
+# 3. seal 后输出到 manifest 仓库
+kubeseal --cert /tmp/pub.pem -o yaml \
+  < ~/secrets/<app>.yaml \
+  > <manifest-repo>/apps/<app>/sealed-secret.yaml
+
+# 4. **只**入库 SealedSecret。明文绝对不要 commit。
+rm ~/secrets/<app>.yaml
+```
+
+**跨 reset 持久性:** Outpost 自动把 master RSA 密钥对备份到
+`secrets-backup/sealed-secrets-master.key.yaml`,下次 `bootstrap.sh`
+会 restore。普通 `reset.sh` 保留备份;`reset.sh --hard` 才彻底删除
+(强制重新 seal 所有 SealedSecret)。详见
+[08-seal-secret.md "控制器灾难恢复"](./08-seal-secret.md#控制器灾难恢复)。
 
 ### 3. manifest 仓库 — 加 `argocd-apps/<app>.yaml`
 
@@ -89,23 +130,46 @@ ArgoCD 大约 30 秒内会检测到变更，自动创建 Application 与 Deploym
 
 ### 5. Gitee 应用仓库 — 配 Webhook
 
-仓库 → 管理 → WebHooks → 添加：
-- URL：`https://hooks.<root>`
-- 密码：`${GITEE_WEBHOOK_SECRET}`（INFRA.md §7）
-- 触发事件：仅勾 **Push**
-- 状态：启用
+仓库 → 管理 → WebHooks → 添加:
+- URL:`https://hooks.<root>`
+- 密码:`${GIT_WEBHOOK_SECRET}`(INFRA.md §7)
+- 触发事件:仅勾 **Push**
+- 状态:启用
 
-测试一下：再 push 一个 commit 到应用仓库 → 几秒后 Tekton 应当自动起 PipelineRun：
+> ⚠️ **Webhook secret 注意:** 这个密钥 *跨 Outpost 上所有项目共享*。
+> 一旦泄露,要轮换(改 `.env`,重跑 `bash bootstrap.sh`)
+> 并更新**每个**接入仓库的 webhook 配置 — v0.2 没有 per-repo 隔离。
+> (v0.3 计划加 per-repo CEL 白名单作为最便宜的缓解。)
+
+测试:再 push 一个 commit 到应用仓库 → 几秒后 Tekton 应当自动起 PipelineRun:
 
 ```bash
 kubectl get pipelinerun -n tekton-pipelines
 ```
 
+走 dashboard 看的话:
+
+- `https://tekton.<root>` — Tekton Dashboard
+  (BasicAuth:用户 `OUTPOST_DASHBOARD_USER`,密码
+   `OUTPOST_DASHBOARD_PASSWORD`,均见 INFRA.md §0)
+
 ### 6. 观察上线
 
-ArgoCD UI（`https://argocd.<root>`）：找到 `<app>` Application，应当显示 Synced + Healthy。
+ArgoCD UI(`https://argocd.<root>`):找到 `<app>` Application,应当显示 Synced + Healthy。
 
-应用访问：`https://<app>.apps.<root>`
+应用访问:`https://<app>.apps.<root>`
+
+### 7. (可选)接入测试网关 + 自动回滚
+
+在应用仓库根目录放一份 `outpost.test.yaml`,Tekton 会在更新 manifest
+**之前**先跑一遍测试。把 `Deployment` 转成
+`argoproj.io/v1alpha1/Rollout` 后,健康分析失败会**自动回滚**。任何
+失败都 fan-out 到所有启用的通知通道(钉钉 / 飞书 / 企微 / 通用 webhook)。
+
+操作步骤见
+[`00-quickstart.md` Phase J](./00-quickstart.md#phase-j--测试网关自动回滚多通道告警可选推荐)。
+完整设计见
+[`proposals/cicd-test-gate.md`](./proposals/cicd-test-gate.md)。
 
 ## 常见问题
 

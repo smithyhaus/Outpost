@@ -42,21 +42,64 @@ spec:
     spec:
       containers:
         - name: app
-          image: registry.<root>/<app>:latest    # ← Tekton patches this
+          image: registry.<root>/<app>:latest   # ← Tekton patches this on every push
+          # Secrets come from a SealedSecret — see step 2b. NEVER inline
+          # plaintext connection strings here.
+          envFrom:
+            - secretRef:
+                name: <app>-secrets
+          # Non-secret config can stay inline:
           env:
-            - name: DATABASE_URL
-              value: "postgres://...@postgres.infra-bridges.svc.cluster.local:5432/..."
-            # connection strings come from INFRA.md
+            - name: LOG_LEVEL
+              value: "info"
+          # The apps namespace ships with a LimitRange (default 1cpu / 512Mi
+          # per container, max 4cpu / 8Gi). Declare your own only if you need
+          # something different.
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits:   { cpu: 1,    memory: 512Mi }
 ```
 
 `ingress.yaml` should use `<app>.apps.<root>` (already covered by the
 wildcard in your Cloudflare Tunnel config — no CF change needed).
 
-**Secrets (connection strings, tokens, etc.):** seal with SealedSecret
-before committing. See [08-seal-secret.md](./08-seal-secret.md) for the
-mechanism and disaster recovery; the actual `kubeseal` invocation lives
-in each application's own onboard script because every app has different
-fields.
+**Image tag format:** Tekton writes a 7-character short SHA
+(`registry.<root>/<app>:abc1234`). Rollback = revert the manifest repo
+commit; `kubectl rollout undo` also works.
+
+#### 2b. Secrets — never inline plaintext
+
+Outpost provides SealedSecret out of the box. Mechanism +
+disaster-recovery in [08-seal-secret.md](./08-seal-secret.md); the
+canonical example lives at
+[`examples/demo-app/`](../../../examples/demo-app/) — see its
+`README.md`, `secret.example.yaml`, and `sealed-secret.example.yaml`.
+
+Quick path:
+
+```bash
+# 1. Get the cluster's public sealing cert
+kubeseal --fetch-cert > /tmp/pub.pem
+
+# 2. Plaintext OUTSIDE the manifest repo (delete after sealing)
+cp examples/demo-app/secret.example.yaml ~/secrets/<app>.yaml
+$EDITOR ~/secrets/<app>.yaml          # fill <REPLACE_*> from INFRA.md
+
+# 3. Seal — output goes into the manifest repo
+kubeseal --cert /tmp/pub.pem -o yaml \
+  < ~/secrets/<app>.yaml \
+  > <manifest-repo>/apps/<app>/sealed-secret.yaml
+
+# 4. Commit ONLY the SealedSecret. NEVER commit the plaintext.
+rm ~/secrets/<app>.yaml
+```
+
+**Cross-reset survivability:** Outpost auto-backs up the master RSA
+keypair to `secrets-backup/sealed-secrets-master.key.yaml` and restores
+it on the next `bootstrap.sh`. A normal `reset.sh` keeps the file;
+`reset.sh --hard` wipes it (forces every existing SealedSecret to be
+re-sealed). See
+[08-seal-secret.md](./08-seal-secret.md#controller-disaster-recovery).
 
 ### 3. Manifest repo — `argocd-apps/<app>.yaml`
 
@@ -106,13 +149,23 @@ varies by Git provider):
 - **Events:** Push only
 - **Active:** yes
 
+> ⚠️ **Webhook secret hygiene:** the secret is *shared across all
+> projects on this Outpost.* If it leaks, rotate it (regenerate in
+> `.env`, re-run `bash bootstrap.sh`) AND update every onboarded repo's
+> webhook config — there's no per-repo isolation in v0.2. (v0.3 plans a
+> per-repo CEL whitelist as the cheap mitigation.)
+
 Test by pushing a commit. Within seconds:
 
 ```bash
 kubectl get pipelinerun -n tekton-pipelines
 ```
 
-Should show a new run.
+Should show a new run. To inspect via the dashboard:
+
+- `https://tekton.<root>` — Tekton Dashboard
+  (BasicAuth: `OUTPOST_DASHBOARD_USER` / `OUTPOST_DASHBOARD_PASSWORD`
+  in `INFRA.md` §0)
 
 ### 6. Watch the rollout
 
@@ -120,6 +173,19 @@ ArgoCD UI (`https://argocd.<root>`): the `<app>` application should go
 to **Synced + Healthy**.
 
 Application URL: `https://<app>.apps.<root>`.
+
+### 7. (optional) Wire test gate + auto-rollback
+
+Drop `outpost.test.yaml` at your application repo root to make Tekton
+run tests **before** updating the manifest. Convert your `Deployment`
+to an `argoproj.io/v1alpha1/Rollout` to get canary + automatic rollback
+on health degradation. Multi-channel notifications (DingTalk / Feishu /
+WeCom / generic webhook) fan out on every failure.
+
+Walkthrough:
+[`00-quickstart.md` Phase J](./00-quickstart.md#phase-j--test-gate-auto-rollback-notifications-optional-but-recommended).
+Full design:
+[`proposals/cicd-test-gate.md`](./proposals/cicd-test-gate.md).
 
 ## Troubleshooting
 

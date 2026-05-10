@@ -106,8 +106,56 @@ kubectl logs -n tekton-pipelines deploy/el-gitee-listener --tail 200
 
 ### Kaniko build 失败
 - Dockerfile 不存在 → 应用仓库根目录确实没有
-- registry push 401 → `registry-credentials` secret 错；本期 registry 匿名，docker config 给空 auth 即可
+- registry push 401 → `registry-credentials` 跟 active registry plugin 不匹配
+  (self-hosted 匿名;aliyun-acr 需要真实账密)。验证:
+  `kubectl -n tekton-pipelines get secret registry-credentials -o jsonpath='{.data.config\.json}' | base64 -d`
 - registry 不可达 → `kubectl exec -it <pod> -- wget -O- http://registry.<root>` 测试
+
+### `admission webhook denied: tasks + finally > pipeline`
+你给 Pipeline 加了 task(或调大了某个 task 的 timeout),累加之和
+超过 `triggertemplate.yaml` 里 `timeouts.tasks` / `timeouts.finally`
+的预算。Tekton 在创建 PipelineRun 时硬性校验
+`tasks + finally <= pipeline`。
+修法:改 `core/k8s/05-tekton/triggertemplate.yaml` 里对应字段并 re-apply。
+
+### Dashboard 返回 401
+Tekton Dashboard + Argo Rollouts UI 共用一份 Traefik BasicAuth
+中间件。用户 = `OUTPOST_DASHBOARD_USER`(默认 `outpost`),密码 =
+`OUTPOST_DASHBOARD_PASSWORD` — 都在 `INFRA.md` §0 和 `.env` 里。
+查看集群当前生效的 htpasswd:
+`kubectl -n tekton-pipelines get secret dashboard-auth-secret -o jsonpath='{.data.users}' | base64 -d`
+
+## Phase J — 测试网关 / 自动回滚 / 多通道告警
+
+(只在你按 [`00-quickstart.md` Phase J](./00-quickstart.md) 启用了之后才相关。)
+
+### `run-tests` task 总是 skipped
+仓库根目录既没 `outpost.test.yaml` 也没 `Dockerfile.test`。这是
+"该仓库没启用测试网关"的干净路径。要启用,加任一文件即可。
+
+### `run-tests` task 报 `bash: command not found` / 类似
+Task 跑在 alpine:3.20 step 里。`outpost.test.yaml` 的
+`runner.command` 必须自己 apk-install 需要的 runtime,例如
+`["sh","-c","apk add --no-cache go && go test ./..."]`。
+Phase 2 会切到 Testkube TestWorkflow + content.git;现在重 runtime 安装是应用作者负担。
+
+### Rollouts 每次金丝雀都被中止
+`AnalysisTemplate` 阈值故意收紧
+(`failureLimit: 2`、`consecutiveErrorLimit: 3`)。检查:
+```bash
+kubectl get analysisrun -n apps
+kubectl describe analysisrun -n apps <name>
+```
+如果服务健康但探针返回的 shape 不对,把
+`plugins/rollout/argo-rollouts/analysistemplate-default.yaml`
+里的 `successCondition` 放宽。
+
+### 通知不触发
+- `.env` 里 `NOTIFICATION_PROVIDERS` 空 → 加上启用的通道,重跑 bootstrap。
+- `kubectl logs -n tekton-pipelines <pipelinerun-pod> -c step-fanout`
+  看每家 provider 的 POST 结果。`[WARN] <p> delivery failed` 表示
+  对方返回 non-2xx,重点检查 webhook URL。
+- 钉钉 / 飞书加签 webhook:本机时钟漂移会让 HMAC 签名失败,确保 NTP 同步。
 
 ## 网络 / Cloudflare
 
@@ -128,6 +176,15 @@ dig argocd.<root>
 ## 全部重来
 
 ```bash
-~/infra/reset.sh    # 输入确认串
-~/infra/bootstrap.sh
+./reset.sh         # 输入确认串。**默认保留** secrets-backup/
+./bootstrap.sh     # 自动从 secrets-backup/ 恢复 sealed-secrets master key
+```
+
+如果怀疑 sealed-secrets master key 已经泄露,或想要彻底干净的起点
+(强制重新 seal 所有现有 SealedSecret):
+
+```bash
+./reset.sh --hard  # 也清掉 secrets-backup/
+                   # 之后每个 manifest 仓库的 SealedSecret 都得重新 seal
+./bootstrap.sh
 ```

@@ -76,6 +76,58 @@ in en + zh-CN. JSON `summary.mode` field added (schema-additive).
 
 ---
 
+## ✅ Done in v0.2 — CI/CD test gate + auto-rollback + multi-channel notifications
+
+Phase 9 of `bootstrap.sh`. Three new plugin kinds:
+- `test-runner/{testkube,catalog-tasks}` — Gate A in pipeline + Gate B in
+  Argo Rollouts AnalysisTemplate.
+- `rollout/argo-rollouts` — canary + automatic rollback on
+  AnalysisRun failure.
+- `notification/{dingtalk,feishu,wecom,webhook-generic}` — fan-out
+  alerts via shared `outpost-notify` Tekton task + ArgoCD notifications
+  controller; signed webhook for dingtalk/feishu.
+
+Application contract: optional `outpost.test.yaml` at app repo root
+(see `examples/hello-world/<lang>/`). Full design:
+[`i18n/en/docs/proposals/cicd-test-gate.md`](i18n/en/docs/proposals/cicd-test-gate.md).
+
+---
+
+## ✅ Done in v0.2 — sealed-secrets master key persists across resets
+
+`bootstrap.sh` Phase 6 backs up + restores
+`secrets-backup/sealed-secrets-master.key.yaml`. `reset.sh` preserves it
+by default; `--hard` wipes for forced rotation. Eliminates the
+"Sealed-Secrets bankruptcy" failure mode every cluster reset previously
+caused.
+
+---
+
+## ✅ Done in v0.2 — Tekton + Argo Rollouts dashboards behind BasicAuth
+
+Both ship anonymous-with-write-access upstream. Outpost wraps both in a
+single Traefik BasicAuth middleware. Username = `OUTPOST_DASHBOARD_USER`
+(default `outpost`), password = `OUTPOST_DASHBOARD_PASSWORD` (auto-gen
+in `.env`, surfaced in `INFRA.md` §0). `--providers.kubernetescrd.allowCrossNamespace=true`
+enabled in Traefik so the same middleware covers both namespaces.
+
+---
+
+## ✅ Done in v0.2 — aliyun-acr end-to-end + 7-char short SHA + manifest push retry
+
+App-team review fixes (from `i18n/{en,zh-CN}/docs/proposals/cicd-test-gate.md`
+review pass):
+- `REGISTRY_PLUGIN=aliyun-acr` actually pushes to ACR (was previously broken
+  in three places: secret name, hardcoded host, kaniko --insecure flags).
+- Image tags are 7-char short SHA via CEL overlay interceptor.
+- `update-manifest.sh` retries `git push` with `git fetch + rebase` on
+  non-fast-forward — concurrent PipelineRuns no longer silently lose deployments.
+- `examples/demo-app/` switched from inline plaintext env to
+  `envFrom: secretRef:` + sealed-secret pattern.
+- `apps` namespace ships with ResourceQuota + LimitRange.
+
+---
+
 ## Tunnel plugin abstraction (frp / tailscale / ngrok)
 
 **What:** Add a `plugins/tunnel/` kind, with `cloudflare/`, `frp/`,
@@ -259,3 +311,103 @@ ADRs preempt the discussion.
 **Depends on:** none.
 
 **Milestone:** v0.2 if a maintainer has appetite; otherwise community
+
+---
+
+## v0.3 from app-team review
+
+The five items below were raised by the app-team review pass on v0.2
+(see `i18n/en/docs/proposals/cicd-test-gate.md` review thread). Each is
+a real DX gap or hardening opportunity.
+
+### Per-app build params (`outpost.build.yaml`)
+
+**What:** Pipeline currently hardcodes `Dockerfile`, `./` context, no
+`--build-arg`, no `--secret` mount, fixed 5Gi PVC, fixed EXTRA_ARGS.
+Add 6 optional Pipeline params (dockerfile / context / build-args /
+build-secret-name / pvc-size / extra-args), all driven from a repo-root
+`outpost.build.yaml` (same shape as `outpost.test.yaml`). No file → use
+defaults.
+
+**Why:** monorepos can't build sub-paths today; private npm/pypi tokens
+can only get baked into base images; large Maven/.NET projects blow the
+5Gi PVC.
+
+**Milestone:** v0.3
+
+---
+
+### EventListener CEL whitelist of `body.repository.url`
+
+**What:** Today a single `GIT_WEBHOOK_SECRET` covers every project on
+the Outpost. Anyone with the secret can submit ANY `body.repository.url`
+and trigger a kaniko build of arbitrary code (compute / registry abuse;
+manifest update fails because they don't have manifest-repo write).
+
+**Why:** narrow the blast radius without going to per-repo secrets
+(which the user has to update across N repos every rotation).
+
+**Concrete TODO:** add a CEL filter
+`body.repository.git_http_url in ['<repo1>', '<repo2>', ...]` populated
+from `.env`. Expand list per-onboard.
+
+**Milestone:** v0.3
+
+---
+
+### kaniko build cache
+
+**What:** `pipeline-build.yaml`'s kaniko step has no `--cache=true
+--cache-repo=...`. Every push pulls base images and rebuilds every layer.
+Java/.NET on China-network cold-cache routinely hit the 90m timeout
+(observed empirically — that's why the timeout is 90m).
+
+**Concrete TODO:** carve a `cache/` path in the self-hosted registry
+(`docker-registry.registry.svc.cluster.local:5000/cache`); pass
+`--cache=true --cache-repo=<host>/cache` in EXTRA_ARGS for the
+self-hosted plugin. ACR has its own cache; just point at the same path.
+
+**Expected impact:** 30~90 min builds → 5~10 min on warm cache.
+
+**Milestone:** v0.3
+
+---
+
+### `verify.sh --app <name>`
+
+**What:** verify.sh currently only runs platform-level checks. App teams
+need an app-scoped variant: ArgoCD Application status, latest PipelineRun
+status, last webhook delivery (currently not stored anywhere — would need
+EventListener log scraping or a small ring buffer), `apps/<name>` pod
+ready states, last 10 events in `<name>` namespace.
+
+**Why:** an app team onboarded today has to compose 5 kubectl commands
+to know if their app is healthy. Self-service triage matters.
+
+**Milestone:** v0.3
+
+---
+
+### PR / branch preview environments
+
+**What:** Today the gitee CEL filter accepts any non-tag branch push, but
+the pipeline always writes to the same `apps/<repo>/` path in the manifest
+repo. Two PRs on different branches race the manifest repo and silently
+overwrite each other.
+
+**Architecture sketch:** EventListener routes PR/MR events through a
+different TriggerTemplate that creates `PipelineRun`s targeting
+`apps/<repo>-pr<n>/`, served at `<repo>-pr<n>.apps.<root>` via the
+existing wildcard. main-branch path stays unchanged. Lifecycle: clean
+up PR namespaces on PR close (a small Tekton finally task).
+
+**Why:** PR preview is the most-asked DX feature in our user base;
+"open a PR, get a deployment" is competitive table stakes vs Vercel /
+Railway / Coolify.
+
+**Cons:** complexity creep (cleanup, namespace churn, quota conflict
+with main `apps`), wildcard cert (already covered by Cloudflare).
+
+**Milestone:** v0.3 if there's appetite; could be its own RFC.
+
+---

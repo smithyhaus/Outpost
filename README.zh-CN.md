@@ -100,17 +100,28 @@ bash verify.sh             # 应全 PASS
 
 ## Plugins
 
-| 类别        | 内置 plugin                          |
-|-------------|--------------------------------------|
-| Registry    | `self-hosted` (默认), `aliyun-acr`   |
-| Git 提供商  | `gitee` (默认), `github`, `gitlab`   |
+| 类别         | 内置 plugin                                                | `.env` 选择器                            |
+|--------------|------------------------------------------------------------|------------------------------------------|
+| Registry     | `self-hosted` (默认), `aliyun-acr`                         | `REGISTRY_PLUGIN`                        |
+| Git 提供商   | `gitee` (默认), `github`, `gitlab`                         | `GIT_PROVIDER_PLUGIN`                    |
+| 测试运行器   | `testkube` (默认), `catalog-tasks`                         | `TEST_RUNNER`                            |
+| 渐进发布     | `argo-rollouts` (默认 — 金丝雀 + 自动回滚)                  | `ROLLOUT_PLUGIN`                         |
+| 通知通道     | `dingtalk`, `feishu`, `wecom`, `webhook-generic`           | `NOTIFICATION_PROVIDERS` *(逗号分隔)*    |
 
-通过 `.env` 切换：
+通过 `.env` 切换:
 
 ```env
 REGISTRY_PLUGIN=aliyun-acr
 GIT_PROVIDER_PLUGIN=github
+TEST_RUNNER=testkube
+ROLLOUT_PLUGIN=argo-rollouts
+NOTIFICATION_PROVIDERS=dingtalk,feishu        # 任意组合
 ```
+
+**CI/CD 测试网关 + 自动回滚 + 多通道告警** — 完整设计见
+[`i18n/zh-CN/docs/proposals/cicd-test-gate.md`](i18n/zh-CN/docs/proposals/cicd-test-gate.md)
+([English](i18n/en/docs/proposals/cicd-test-gate.md))。
+端到端走法见 quickstart 的 "Phase J" 章节。
 
 Plugin 协议与编写指南见 [`plugins/README.md`](plugins/README.md)。
 

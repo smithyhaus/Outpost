@@ -21,9 +21,13 @@ swappable.
     │                  │    │                  │    │ (k3s Traefik NodePort)│
     │ postgres:5432  ◄─┼────│                  │    │                       │
     │ redis:6379    ◄──┤    │ search.* → meili │    │  ArgoCD              │
-    │ rabbitmq:5672 ◄──┤    │ mq.* → rabbitmq  │    │  Tekton + EventListener
+    │ rabbitmq:5672 ◄──┤    │ mq.* → rabbitmq  │    │  Tekton + Dashboard  │
     │ rabbitmq:15672 ──┤    │                  │    │  Docker Registry     │
-    │ meilisearch:7700 ┘    └──────────────────┘    │  *.apps.* → user apps│
+    │ meilisearch:7700 ┘    └──────────────────┘    │  Sealed-Secrets      │
+    │                                                │  Testkube (Gate A/B) │
+    │                                                │  Argo Rollouts       │
+    │                                                │     + Dashboard      │
+    │                                                │  *.apps.* → user apps│
     │                                                │                       │
     │                       ▲ (k3s pods reach        │                       │
     │                        data layer via         │                       │
@@ -75,7 +79,8 @@ A single `cloudflared` container in Compose carries all ingress:
 | `mq.<domain>`                   | HTTP | `caddy:80` → `rabbitmq:15672`              |
 | `search.<domain>`               | HTTP | `caddy:80` → `meilisearch:7700`            |
 | `argocd.<domain>`               | HTTP | `host.docker.internal:30080` → ArgoCD      |
-| `tekton.<domain>`               | HTTP | `host.docker.internal:30080` → Tekton Dashboard |
+| `tekton.<domain>`               | HTTP | `host.docker.internal:30080` → Tekton Dashboard *(BasicAuth)* |
+| `rollouts.<domain>`             | HTTP | `host.docker.internal:30080` → Argo Rollouts UI *(BasicAuth)* |
 | `hooks.<domain>`                | HTTP | `host.docker.internal:30080` → Tekton EL   |
 | `registry.<domain>`             | HTTP | `host.docker.internal:30080` → Registry    |
 | `*.apps.<domain>`               | HTTP | `host.docker.internal:30080` → user apps   |
@@ -95,40 +100,71 @@ hooks.<domain>  (cloudflared → Traefik → Tekton EventListener)
 Tekton PipelineRun (in tekton-pipelines namespace):
     ① git-clone        — fetch the app repo at the pushed commit
     ② kaniko build     — build a Docker image
-    ③ kaniko push      — push to <REGISTRY>/<repo>:<short-sha>
-    ④ update-manifest  — clone manifest repo, yq-patch image tag, push
-    │
+    ③ kaniko push      — push to <REGISTRY>/<repo>:<short-sha>  (7-char SHA)
+    ④ run-tests        — Gate A: outpost.test.yaml / Dockerfile.test
+                          (no-ops cleanly when neither is present)
+    ⑤ update-manifest  — clone manifest repo, yq-patch image tag, push
+                          (with rebase-on-conflict retry)
+    │ ── on any-task failure → finally:
+    │     notify-on-failure → fan-out to NOTIFICATION_PROVIDERS
+    │     (dingtalk / feishu / wecom / webhook-generic)
     ▼
 ArgoCD watches the manifest repo
     │
     ▼
-ArgoCD sync → kubectl apply → rolling deploy
+ArgoCD sync → kubectl apply
+    │
+    ├─→ Deployment    → rolling deploy (default)
+    │
+    └─→ Rollout (CRD) → canary 10/25/50/100 with AnalysisTemplate gates
+                        (Gate B: Web HTTP probe / Job-running-Testkube)
+                        failure → automatic rollback + notify
     │
     ▼
 App reachable at <app>.apps.<domain>
 ```
 
-Three implications worth understanding:
+Five implications worth understanding:
 
 - **Tekton uses the EventListener** (one webhook URL handles all repos).
-- **Image tag is the commit short-SHA**, not `latest`. Rollback = revert
-  the manifest repo commit.
+- **Image tag is a 7-char commit short-SHA**, not `latest`. Rollback =
+  revert the manifest repo commit; `kubectl rollout undo` also works.
 - **The `apps` namespace is owned by ArgoCD.** Don't `kubectl apply` to
-  it directly — self-heal will revert your change.
+  it directly — self-heal will revert your change. The namespace also
+  carries a `ResourceQuota` (30 pods / 4 req-cpu / 8Gi req-mem) and a
+  `LimitRange` (default 1cpu/512Mi, max 4cpu/8Gi per container) so a
+  runaway app can't pin the host.
+- **Gate A / Gate B are opt-in.** Repos without `outpost.test.yaml` or
+  `Dockerfile.test` skip Gate A cleanly; apps that stay `Deployment`
+  instead of `Rollout` skip Gate B. Either way the pipeline still works.
+- **Tekton + Argo Rollouts dashboards live behind a single Traefik
+  BasicAuth middleware** (`OUTPOST_DASHBOARD_USER` /
+  `OUTPOST_DASHBOARD_PASSWORD`). Upgrade to Cloudflare Access for
+  SSO/IdP at the edge.
 
 ## Plugin model
 
-Two pluggable seams in v0.1:
+Five pluggable seams in v0.2:
 
 ```
 plugins/
-├── registry/
-│   ├── self-hosted/   ← in-cluster Docker Registry v2 (default)
-│   └── aliyun-acr/    ← Alibaba Cloud Container Registry
-└── git-provider/
-    ├── gitee/         ← (default)
-    ├── github/        ← uses Tekton's HMAC interceptor
-    └── gitlab/        ← X-Gitlab-Token plain compare
+├── registry/                 ← image registry
+│   ├── self-hosted/          ← in-cluster Docker Registry v2 (default)
+│   └── aliyun-acr/           ← Alibaba Cloud Container Registry
+├── git-provider/             ← webhook source
+│   ├── gitee/                ← (default)
+│   ├── github/               ← uses Tekton's HMAC interceptor
+│   └── gitlab/               ← X-Gitlab-Token plain compare
+├── test-runner/              ← Phase 9: pre/post-deploy testing
+│   ├── testkube/             ← K8s-native, 30+ engines (default)
+│   └── catalog-tasks/        ← lightweight; per-language Tekton catalog
+├── rollout/                  ← Phase 9: progressive delivery + rollback
+│   └── argo-rollouts/        ← canary + AnalysisTemplate (default)
+└── notification/             ← Phase 9: fan-out failure alerts
+    ├── dingtalk/             ← signed webhook
+    ├── feishu/               ← signed webhook
+    ├── wecom/                ← URL-secret only
+    └── webhook-generic/      ← raw JSON to your collector
 ```
 
 Each plugin contains:
@@ -136,16 +172,23 @@ Each plugin contains:
 - `manifest.yaml` (and/or `compose.yaml`) — what `bootstrap.sh` will apply
 - `preflight.sh` — validates required env before apply
 - `README.md` — what / when / why
+- *(notification only)* `argocd-cm-fragment.yaml` +
+  `argocd-secret-fragment.yaml` — concatenated by bootstrap into
+  `argocd-notifications-cm` / `argocd-notifications-secret`
 
-Switch plugins by editing two lines in `.env`:
+Selectors in `.env` — each kind has its own:
 
 ```env
 REGISTRY_PLUGIN=aliyun-acr
 GIT_PROVIDER_PLUGIN=github
+TEST_RUNNER=testkube
+ROLLOUT_PLUGIN=argo-rollouts
+NOTIFICATION_PROVIDERS=dingtalk,feishu      # comma-list, optional
 ```
 
 Re-run `bash bootstrap.sh`. The plugin contract is documented in
-[`plugins/README.md`](plugins/README.md).
+[`plugins/README.md`](plugins/README.md). Phase 9 design rationale:
+[`i18n/en/docs/proposals/cicd-test-gate.md`](i18n/en/docs/proposals/cicd-test-gate.md).
 
 ## Cross-platform layering
 
