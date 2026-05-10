@@ -451,7 +451,8 @@ fi
 
 kubectl wait --for=condition=Ready nodes --all --timeout=180s
 kubectl apply -f core/k8s/00-namespaces.yaml
-ok "k3s ready, namespaces created"
+kubectl apply -f core/k8s/02-apps-resource-controls.yaml
+ok "k3s ready, namespaces + apps resource controls applied"
 
 # =============================================================================
 # Phase 6 — sealed-secrets

@@ -1,0 +1,51 @@
+# =============================================================================
+# Resource controls on the `apps` namespace.
+# -----------------------------------------------------------------------------
+# **Why this exists:** without quota/limits, a single runaway application
+# (Java OOM-loop, a misconfigured Stream.generate, etc.) can pin every
+# CPU + every byte of memory on the host, evicting ArgoCD/Tekton/the
+# registry along the way. Outpost is positioned as "all my projects on
+# one box"; that's exactly the failure mode this defends against.
+#
+# Numbers are tuned for a 32GB Apple Silicon dev host (the project's
+# current reference platform). Edit per actual host capacity:
+#   8GB  RAM  → halve everything
+#   64GB RAM  → safe to double
+# =============================================================================
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: apps-quota
+  namespace: apps
+spec:
+  hard:
+    pods: "30"
+    requests.cpu: "4"
+    requests.memory: "8Gi"
+    limits.cpu: "8"
+    limits.memory: "16Gi"
+---
+# Default container resources — applied to every Pod that doesn't declare
+# its own. Without a LimitRange, Pods with NO requests at all get scheduled
+# anywhere and quota counts them as 0 — effectively unlimited.
+#
+# Defaults sized so a typical dev app (Go binary, small Python service,
+# Node API) fits without thinking; heavier runtimes (Java/.NET) MUST set
+# their own limits explicitly. `max` caps single-pod blast radius.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: apps-defaults
+  namespace: apps
+spec:
+  limits:
+    - type: Container
+      defaultRequest:
+        cpu: "100m"
+        memory: "128Mi"
+      default:
+        cpu: "1"
+        memory: "512Mi"
+      max:
+        cpu: "4"
+        memory: "8Gi"

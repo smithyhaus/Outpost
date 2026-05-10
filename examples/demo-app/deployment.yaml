@@ -1,10 +1,21 @@
 # =============================================================================
-# Application manifest template — copy this into the manifest repo as
+# Application manifest template — copy into the manifest repo as
 #   apps/<app-name>/deployment.yaml
-# Tekton's update-manifest task will rewrite spec.template.spec.containers[0].image
+# Tekton's update-manifest task rewrites .spec.template.spec.containers[0].image
 # on every successful build.
 #
-# Replace every <REPLACE_*> placeholder with real values from INFRA.md.
+# **Secrets pattern (do NOT inline plaintext passwords):**
+#   1. Copy `secret.example.yaml` to your manifest repo as
+#        apps/<app-name>/secret.yaml
+#   2. Fill in real values from INFRA.md.
+#   3. `kubeseal` it locally → produces a SealedSecret YAML
+#      (see `sealed-secret.example.yaml` and `examples/demo-app/README.md`).
+#   4. Commit the *SealedSecret* (NOT the plaintext) to the manifest repo.
+#   5. ArgoCD applies it; sealed-secrets-controller decrypts in-cluster.
+#
+# This Deployment uses `envFrom: secretRef:` so adding a key in the SealedSecret
+# automatically appears as an env var in every Pod restart — zero deployment
+# changes when secrets rotate.
 # =============================================================================
 apiVersion: apps/v1
 kind: Deployment
@@ -29,19 +40,17 @@ spec:
           image: registry.example.com/demo-app:latest
           ports:
             - containerPort: 8080
+          envFrom:
+            # All app secrets come from the SealedSecret — see
+            # sealed-secret.example.yaml. The decrypted Secret is named
+            # `demo-app-secrets` in the apps namespace.
+            - secretRef:
+                name: demo-app-secrets
           env:
-            # Connection strings target the bridge services in infra-bridges.
-            # Substitute <REPLACE_*> with your real password (see INFRA.md).
-            - name: DATABASE_URL
-              value: "postgres://postgres:<REPLACE_POSTGRES_PASSWORD>@postgres.infra-bridges.svc.cluster.local:5432/postgres"
-            - name: REDIS_URL
-              value: "redis://:<REPLACE_REDIS_PASSWORD>@redis.infra-bridges.svc.cluster.local:6379/0"
-            - name: RABBITMQ_URL
-              value: "amqp://admin:<REPLACE_RABBITMQ_PASSWORD>@rabbitmq.infra-bridges.svc.cluster.local:5672/"
+            # Non-secret config can stay inline. Example: service URLs that
+            # only point at in-cluster bridges (no creds inside).
             - name: MEILI_URL
               value: "http://meilisearch.infra-bridges.svc.cluster.local:7700"
-            - name: MEILI_KEY
-              value: "<REPLACE_MEILI_MASTER_KEY>"
           resources:
             requests:
               cpu: 100m
