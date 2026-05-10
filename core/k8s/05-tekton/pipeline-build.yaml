@@ -22,6 +22,12 @@ metadata:
   name: build-and-deploy
   namespace: tekton-pipelines
 spec:
+  # NOTE on timeouts: Pipeline v1beta1 does NOT carry spec.timeouts —
+  # that field only lives on v1 Pipeline and on PipelineRun (both APIs).
+  # Per-task timeouts are set inside spec.tasks[].timeout below.
+  # The PipelineRun-level overall timeout is set in triggertemplate.yaml,
+  # which is what gets created on every webhook hit. Constraint enforced
+  # at run creation: tasks + finally <= pipeline.
   params:
     - name: repo-url
       type: string
