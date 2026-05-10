@@ -146,6 +146,11 @@ render_template() {
   #
   # Only enforce on the ${VAR}/${ VAR } braced form. Bare $VAR is too easy
   # to mistake for shell text inside YAML; force authors to use ${VAR}.
+  #
+  # Skip whole-line comments: comments may carry illustrative placeholders
+  # like `${XXX}` or `${YOUR_VAR}` that aren't real env references — but
+  # `foo: ${BAR}  # using ${BAR}` keeps both occurrences (the inline comment
+  # case is rare in YAML and the real var still has to be set).
   local missing=()
   local v
   while IFS= read -r v; do
@@ -153,7 +158,7 @@ render_template() {
     if [[ -z "${!v+x}" ]]; then
       missing+=("$v")
     fi
-  done < <(grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*\}' "$src" | sed 's/^\${//; s/}$//' | sort -u)
+  done < <(grep -v '^[[:space:]]*#' "$src" | grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*\}' | sed 's/^\${//; s/}$//' | sort -u)
 
   if (( ${#missing[@]} > 0 )); then
     err "render_template: unresolved placeholders in $src: \${${missing[*]}}"

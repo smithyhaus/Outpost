@@ -501,6 +501,14 @@ EOF
       printf '%s\n' "$DESIRED" | docker exec -i "$K3D_NODE" sh -c 'cat > /etc/rancher/k3s/registries.yaml'
       log "  registries.yaml updated; restarting k3d node to reload containerd..."
       docker restart "$K3D_NODE" >/dev/null
+      # Wait for kube-apiserver to come back before asking it for node status —
+      # otherwise kubectl wait gets ServiceUnavailable from the LB and exits
+      # immediately (set -e then aborts the whole bootstrap).
+      log "  waiting for kube-apiserver to come back..."
+      for _ in {1..60}; do
+        kubectl get --raw=/readyz >/dev/null 2>&1 && break
+        sleep 2
+      done
       kubectl wait --for=condition=Ready nodes --all --timeout=180s >/dev/null
       ok "containerd mirror set: registry.${ROOT_DOMAIN} -> ${REG_IP}:5000"
     else
@@ -678,25 +686,32 @@ log "Installing test-runner: ${TEST_RUNNER}"
 case "${TEST_RUNNER}" in
   testkube)
     if [[ "${TESTKUBE_MODE}" == "oss" ]]; then
-      # Auto-download helm if missing (matches the kubeseal pattern).
+      # Auto-install helm if missing.
+      # macOS path: prefer brew (no sudo prompt mid-bootstrap). Otherwise
+      # fall back to the same tarball-and-sudo dance as kubeseal.
       if ! command -v helm >/dev/null 2>&1; then
-        log "Downloading helm v3.16..."
-        HELM_VER="3.16.4"
-        case "$SK_OS" in
-          macos) HELM_OS="darwin" ;;
-          *)     HELM_OS="linux" ;;
-        esac
-        if [[ "$(uname -m)" == "arm64" || "$(uname -m)" == "aarch64" ]]; then
-          HELM_ARCH="arm64"
+        if [[ "$SK_OS" == "macos" ]] && command -v brew >/dev/null 2>&1; then
+          log "Installing helm via brew (macOS)..."
+          brew install helm 2>&1 | tail -3
         else
-          HELM_ARCH="amd64"
+          log "Downloading helm v3.16..."
+          HELM_VER="3.16.4"
+          case "$SK_OS" in
+            macos) HELM_OS="darwin" ;;
+            *)     HELM_OS="linux" ;;
+          esac
+          if [[ "$(uname -m)" == "arm64" || "$(uname -m)" == "aarch64" ]]; then
+            HELM_ARCH="arm64"
+          else
+            HELM_ARCH="amd64"
+          fi
+          TMP_HELM=$(mktemp -d)
+          curl -sSL "https://get.helm.sh/helm-v${HELM_VER}-${HELM_OS}-${HELM_ARCH}.tar.gz" \
+            | tar -xz -C "$TMP_HELM"
+          sudo mv "$TMP_HELM/${HELM_OS}-${HELM_ARCH}/helm" /usr/local/bin/
+          sudo chmod +x /usr/local/bin/helm
+          rm -rf "$TMP_HELM"
         fi
-        TMP_HELM=$(mktemp -d)
-        curl -sSL "https://get.helm.sh/helm-v${HELM_VER}-${HELM_OS}-${HELM_ARCH}.tar.gz" \
-          | tar -xz -C "$TMP_HELM"
-        sudo mv "$TMP_HELM/${HELM_OS}-${HELM_ARCH}/helm" /usr/local/bin/
-        sudo chmod +x /usr/local/bin/helm
-        rm -rf "$TMP_HELM"
         ok "helm installed: $(helm version --short)"
       fi
       log "Installing Testkube via helm (oss mode)..."
