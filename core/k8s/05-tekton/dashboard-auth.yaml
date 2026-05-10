@@ -1,0 +1,34 @@
+# =============================================================================
+# Outpost dashboard BasicAuth — protects Tekton Dashboard + Argo Rollouts UI.
+# -----------------------------------------------------------------------------
+# Both UIs ship with NO authentication and full read+write power
+# (cancel/delete PipelineRuns, abort/promote rollouts). Without this
+# middleware, anyone hitting tekton.<root> or rollouts.<root> can take
+# destructive actions.
+#
+# Implementation:
+#   - The Secret `dashboard-auth-secret` (htpasswd-format `users` key) is
+#     created dynamically by bootstrap.sh from .env's OUTPOST_DASHBOARD_PASSWORD
+#     so we never go through envsubst with an apr1 hash (the hash carries
+#     `$apr1$...` chars that envsubst would mangle).
+#   - This file applies the Middleware that references that Secret.
+#   - The Argo Rollouts IngressRoute references this middleware
+#     cross-namespace via {name, namespace} ref.
+#
+# Hardening upgrade path: replace BasicAuth with Cloudflare Access
+# (Zero Trust) at the edge — set up a self-hosted application policy
+# and gate by email OTP / IdP. CF Access predates the IngressRoute, so
+# this middleware becomes redundant; you can leave it on as defense in depth.
+# =============================================================================
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: dashboard-auth
+  namespace: tekton-pipelines
+spec:
+  basicAuth:
+    secret: dashboard-auth-secret
+    realm: "Outpost Dashboards"
+    # Browser sees the username it sent in the auth response — useful for
+    # audit when multiple operators share the same shared secret.
+    headerField: X-WebAuth-User

@@ -26,8 +26,8 @@ Notification providers: `${NOTIFICATION_PROVIDERS}` (empty = none enabled)
 | RabbitMQ UI    | `https://mq.${ROOT_DOMAIN}`  | —     | `${RABBITMQ_USER}` | `${RABBITMQ_PASSWORD}`     |
 | Meilisearch    | `https://search.${ROOT_DOMAIN}` | — | (Bearer)          | `${MEILI_MASTER_KEY}`      |
 | ArgoCD         | `https://argocd.${ROOT_DOMAIN}` | — | `admin`           | (see §6)                   |
-| Tekton Dashboard | `https://tekton.${ROOT_DOMAIN}` | — | (cluster RBAC, no auth) | — |
-| Argo Rollouts UI | `https://${ROLLOUTS_DASHBOARD_HOST}` | — | (no auth — gate via CF Access) | — |
+| Tekton Dashboard | `https://tekton.${ROOT_DOMAIN}` | — | `${OUTPOST_DASHBOARD_USER}` (BasicAuth) | `${OUTPOST_DASHBOARD_PASSWORD}` |
+| Argo Rollouts UI | `https://${ROLLOUTS_DASHBOARD_HOST}` | — | `${OUTPOST_DASHBOARD_USER}` (BasicAuth) | `${OUTPOST_DASHBOARD_PASSWORD}` |
 | Registry       | `https://registry.${ROOT_DOMAIN}` | — | (anonymous)       | —                          |
 
 ---
@@ -118,8 +118,11 @@ curl -H "Authorization: Bearer ${MEILI_MASTER_KEY}" https://search.${ROOT_DOMAIN
 ## 7. Tekton CI (webhook + pipeline + dashboard)
 
 - Webhook URL: `https://hooks.${ROOT_DOMAIN}`
-- Webhook secret: `${GIT_WEBHOOK_SECRET}`
-- Dashboard UI: `https://tekton.${ROOT_DOMAIN}` (PipelineRun / TaskRun / log viewer; can cancel runs, delete runs from the UI. **No auth — gate it with Cloudflare Access for anything beyond local dev.**)
+- Webhook secret: `${GIT_WEBHOOK_SECRET}` (Tekton EventListener verifies this on every push)
+- Dashboard UI: `https://tekton.${ROOT_DOMAIN}` (PipelineRun / TaskRun / log viewer; can cancel runs, delete runs from the UI)
+  - **BasicAuth user:** `${OUTPOST_DASHBOARD_USER}`
+  - **BasicAuth password:** `${OUTPOST_DASHBOARD_PASSWORD}`
+  - Hardening: replace BasicAuth with Cloudflare Access (Zero Trust) at the edge — gate by email OTP / IdP. The middleware can stay enabled as defense in depth.
 - Active git provider plugin: `${GIT_PROVIDER_PLUGIN}`
 - Configure your repos to send Push events to the URL above with the secret.
 
@@ -186,6 +189,7 @@ Full design: `i18n/en/docs/proposals/cicd-test-gate.md`. Walkthrough in
 ### Endpoints
 
 - Argo Rollouts Dashboard: `https://${ROLLOUTS_DASHBOARD_HOST}` — canary progress, abort, promote
+  - **BasicAuth user:** `${OUTPOST_DASHBOARD_USER}` / **password:** `${OUTPOST_DASHBOARD_PASSWORD}` (shared with Tekton Dashboard — same Traefik middleware)
 - Testkube agent: namespace `testkube` (`kubectl get pods -n testkube`)
 - Argo Rollouts controller: namespace `argo-rollouts`
 
@@ -229,10 +233,11 @@ Default `AnalysisTemplate`: `failureLimit: 2`, `consecutiveErrorLimit: 3`,
 
 ## 12. Hardening checklist (recommended, not enforced)
 
-- [ ] Add Cloudflare Access (email OTP) in front of `argocd.${ROOT_DOMAIN}` and `mq.${ROOT_DOMAIN}`
-- [ ] Add basic auth or Cloudflare Access in front of `registry.${ROOT_DOMAIN}` if exposing publicly
-- [ ] Change ArgoCD admin password
-- [ ] Backup `secrets-backup/sealed-secrets-pub.pem` to a password manager
+- [ ] Add Cloudflare Access (email OTP) in front of `argocd.${ROOT_DOMAIN}`, `mq.${ROOT_DOMAIN}`, `tekton.${ROOT_DOMAIN}`, `${ROLLOUTS_DASHBOARD_HOST}` — replaces / supplements BasicAuth at the edge.
+- [ ] Rotate `OUTPOST_DASHBOARD_PASSWORD` (set blank in `.env`, re-run `bash bootstrap.sh`).
+- [ ] Add basic auth or Cloudflare Access in front of `registry.${ROOT_DOMAIN}` if exposing publicly (currently anonymous).
+- [ ] Change ArgoCD admin password (`argocd account update-password`).
+- [ ] Backup `secrets-backup/sealed-secrets-pub.pem` to a password manager.
 
 ## 13. Reuse checklist (when onboarding a new project)
 

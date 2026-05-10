@@ -155,11 +155,16 @@ GENERIC_WEBHOOK_BEARER="${GENERIC_WEBHOOK_BEARER:-}"
 TESTKUBE_CLOUD_API_KEY="${TESTKUBE_CLOUD_API_KEY:-}"
 
 # Auto-generate any blank passwords (both modes)
-[[ -z "${POSTGRES_PASSWORD:-}" ]]    && POSTGRES_PASSWORD=$(gen_password)
-[[ -z "${REDIS_PASSWORD:-}" ]]       && REDIS_PASSWORD=$(gen_password)
-[[ -z "${RABBITMQ_PASSWORD:-}" ]]    && RABBITMQ_PASSWORD=$(gen_password)
-[[ -z "${MEILI_MASTER_KEY:-}" ]]     && MEILI_MASTER_KEY=$(gen_password)
-[[ -z "${GIT_WEBHOOK_SECRET:-}" ]]   && GIT_WEBHOOK_SECRET=$(gen_password)
+[[ -z "${POSTGRES_PASSWORD:-}" ]]      && POSTGRES_PASSWORD=$(gen_password)
+[[ -z "${REDIS_PASSWORD:-}" ]]         && REDIS_PASSWORD=$(gen_password)
+[[ -z "${RABBITMQ_PASSWORD:-}" ]]      && RABBITMQ_PASSWORD=$(gen_password)
+[[ -z "${MEILI_MASTER_KEY:-}" ]]       && MEILI_MASTER_KEY=$(gen_password)
+[[ -z "${GIT_WEBHOOK_SECRET:-}" ]]     && GIT_WEBHOOK_SECRET=$(gen_password)
+# Dashboard BasicAuth — protects Tekton Dashboard + Argo Rollouts UI.
+# Both ship without built-in auth and grant write access (cancel/delete
+# PipelineRuns, abort/promote rollouts). Auto-generated in full mode.
+[[ -z "${OUTPOST_DASHBOARD_USER:-}" ]]     && OUTPOST_DASHBOARD_USER="outpost"
+[[ -z "${OUTPOST_DASHBOARD_PASSWORD:-}" ]] && OUTPOST_DASHBOARD_PASSWORD=$(gen_password)
 
 # Plugin selection only matters in full mode (existence check is cheap, do it first)
 if [[ "$OUTPOST_MODE" == "full" ]]; then
@@ -226,6 +231,8 @@ fi
   echo "GIT_USER=${GIT_USER}"
   echo "GIT_TOKEN=${GIT_TOKEN}"
   echo "GIT_WEBHOOK_SECRET=${GIT_WEBHOOK_SECRET}"
+  echo "OUTPOST_DASHBOARD_USER=${OUTPOST_DASHBOARD_USER}"
+  echo "OUTPOST_DASHBOARD_PASSWORD=${OUTPOST_DASHBOARD_PASSWORD}"
   echo "MANIFEST_REPO_URL=${MANIFEST_REPO_URL}"
   echo "MANIFEST_REPO_BRANCH=${MANIFEST_REPO_BRANCH}"
   echo "GIT_HOST=${GIT_HOST}"
@@ -628,8 +635,26 @@ kubectl apply --server-side=true --force-conflicts \
 kubectl wait --for=condition=Available --timeout=180s \
   deployment/tekton-dashboard -n tekton-pipelines 2>/dev/null || \
   warn "tekton-dashboard not ready yet — apply continues"
+
+# -----------------------------------------------------------------------------
+# Dashboard BasicAuth — Tekton Dashboard + Argo Rollouts UI both ship
+# anonymous with write access. Without this, anyone hitting tekton.<root>
+# or rollouts.<root> can cancel/delete PipelineRuns or abort/promote
+# rollouts. Wrap them in a Traefik BasicAuth middleware shared across both.
+#
+# Secret is created dynamically (not via render_template) because the
+# apr1 hash carries `$apr1$...` chars envsubst would mangle.
+# -----------------------------------------------------------------------------
+log "Sealing dashboards behind BasicAuth (user=${OUTPOST_DASHBOARD_USER})..."
+DASHBOARD_HTPASSWD=$(openssl passwd -apr1 "$OUTPOST_DASHBOARD_PASSWORD")
+kubectl -n tekton-pipelines create secret generic dashboard-auth-secret \
+  --from-literal=users="${OUTPOST_DASHBOARD_USER}:${DASHBOARD_HTPASSWD}" \
+  --dry-run=client -o yaml | kubectl apply -f -
+unset DASHBOARD_HTPASSWD
+kubectl apply -f core/k8s/05-tekton/dashboard-auth.yaml
+
 render_apply "core/k8s/05-tekton/dashboard-ingress.yaml"
-ok "Tekton Dashboard installed (https://tekton.${ROOT_DOMAIN})"
+ok "Tekton Dashboard installed (https://tekton.${ROOT_DOMAIN}) — auth required"
 
 # Bridges
 kubectl apply -f core/k8s/06-bridges/
@@ -810,10 +835,12 @@ echo "  username:         admin"
 echo "  password:         ${ARGOCD_ADMIN_PASSWORD}"
 echo ""
 echo "  Tekton Dashboard: https://tekton.${ROOT_DOMAIN}"
-echo "                    (PipelineRuns / TaskRuns / logs UI; no auth — gate via CF Access)"
-echo ""
+echo "                    (PipelineRuns / TaskRuns / logs)"
 echo "  Rollouts UI:      https://${ROLLOUTS_DASHBOARD_HOST}"
 echo "                    (canary progress / abort / promote)"
+echo "  Dashboard auth:   user ${OUTPOST_DASHBOARD_USER} / pass ${OUTPOST_DASHBOARD_PASSWORD}"
+echo "                    (shared BasicAuth in front of BOTH dashboards;"
+echo "                     upgrade to Cloudflare Access for SSO/IdP)"
 echo ""
 echo "  Test runner:      ${TEST_RUNNER}  (mode: ${TESTKUBE_MODE})"
 echo "  Notifications:    ${NOTIFICATION_PROVIDERS:-(none)}"

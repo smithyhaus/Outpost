@@ -3,7 +3,11 @@
 # CF 边缘 → cloudflared → Traefik(30080) → tekton-dashboard svc:9097
 #
 # Tekton Dashboard 装的是 release-full.yaml(read+write,可在 UI cancel run、
-# 删 PipelineRun 等)。Service 名 tekton-dashboard,默认端口 9097。
+# 删 PipelineRun 等)。**没有内建认证** — 套一层 Traefik BasicAuth
+# 中间件(dashboard-auth.yaml)挡在前面,凭据存在
+# Secret/dashboard-auth-secret(由 bootstrap.sh 用 OUTPOST_DASHBOARD_PASSWORD
+# 动态创建)。
+# Service 名 tekton-dashboard,默认端口 9097。
 # ============================================================================
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
@@ -16,6 +20,9 @@ spec:
   routes:
     - match: Host(`tekton.${ROOT_DOMAIN}`)
       kind: Rule
+      middlewares:
+        - name: dashboard-auth
+          namespace: tekton-pipelines
       services:
         - name: tekton-dashboard
           port: 9097

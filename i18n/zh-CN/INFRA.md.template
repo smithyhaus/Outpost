@@ -26,8 +26,8 @@ Rollout plugin：`${ROLLOUT_PLUGIN}`
 | RabbitMQ UI    | `https://mq.${ROOT_DOMAIN}`    | —   | `${RABBITMQ_USER}` | `${RABBITMQ_PASSWORD}`     |
 | Meilisearch    | `https://search.${ROOT_DOMAIN}` | —  | (Bearer)          | `${MEILI_MASTER_KEY}`      |
 | ArgoCD         | `https://argocd.${ROOT_DOMAIN}` | —  | `admin`           | （见 §6）                  |
-| Tekton Dashboard | `https://tekton.${ROOT_DOMAIN}` | — | (集群 RBAC,无独立认证) | — |
-| Argo Rollouts UI | `https://${ROLLOUTS_DASHBOARD_HOST}` | — | (无独立认证 — 建议加 CF Access) | — |
+| Tekton Dashboard | `https://tekton.${ROOT_DOMAIN}` | — | `${OUTPOST_DASHBOARD_USER}`(BasicAuth) | `${OUTPOST_DASHBOARD_PASSWORD}` |
+| Argo Rollouts UI | `https://${ROLLOUTS_DASHBOARD_HOST}` | — | `${OUTPOST_DASHBOARD_USER}`(BasicAuth) | `${OUTPOST_DASHBOARD_PASSWORD}` |
 | Registry       | `https://registry.${ROOT_DOMAIN}` | —| (匿名)            | —                          |
 
 ---
@@ -117,10 +117,13 @@ curl -H "Authorization: Bearer ${MEILI_MASTER_KEY}" https://search.${ROOT_DOMAIN
 ## 7. Tekton CI（webhook + pipeline + dashboard）
 
 - Webhook URL：`https://hooks.${ROOT_DOMAIN}`
-- Webhook Secret：`${GIT_WEBHOOK_SECRET}`
-- Dashboard UI：`https://tekton.${ROOT_DOMAIN}` （查看 PipelineRun / TaskRun / 日志,可在界面里 cancel / 删 run。**当前无登录鉴权,生产建议 CF Access 加白名单**。）
-- 当前 git-provider plugin：`${GIT_PROVIDER_PLUGIN}`
-- 在每个应用仓库的 webhook 设置中配上面的 URL 与 secret，仅勾选 Push 事件。
+- Webhook Secret：`${GIT_WEBHOOK_SECRET}`(每次 push,Tekton EventListener 用此 secret 校验)
+- Dashboard UI：`https://tekton.${ROOT_DOMAIN}`(看 PipelineRun / TaskRun / 日志,可在界面里 cancel / 删 run)
+  - **BasicAuth 用户:**`${OUTPOST_DASHBOARD_USER}`
+  - **BasicAuth 密码:**`${OUTPOST_DASHBOARD_PASSWORD}`
+  - 加固路径:在 Cloudflare Zero Trust 那里给该 hostname 配 Access(邮箱 OTP / IdP)。BasicAuth 中间件可保留作为深度防御。
+- 当前 git-provider plugin:`${GIT_PROVIDER_PLUGIN}`
+- 在每个应用仓库的 webhook 设置中配上面的 URL 与 secret,仅勾选 Push 事件。
 
 Pipeline 行为：
 
@@ -185,6 +188,7 @@ kubectl logs -n tekton-pipelines -l tekton.dev/pipelineRun=<run> \
 ### 端点
 
 - Argo Rollouts Dashboard:`https://${ROLLOUTS_DASHBOARD_HOST}` — 看金丝雀进度,可中止/提升
+  - **BasicAuth 用户:**`${OUTPOST_DASHBOARD_USER}` / **密码:**`${OUTPOST_DASHBOARD_PASSWORD}`(与 Tekton Dashboard 共用同一 Traefik 中间件)
 - Testkube agent:命名空间 `testkube`(`kubectl get pods -n testkube`)
 - Argo Rollouts controller:命名空间 `argo-rollouts`
 
@@ -226,9 +230,10 @@ pipeline 照常跑。
 
 ## 12. 安全加固清单（建议但不强制）
 
-- [ ] 给 `argocd.${ROOT_DOMAIN}` / `mq.${ROOT_DOMAIN}` 加 Cloudflare Access
-- [ ] 给 `registry.${ROOT_DOMAIN}` 加 Basic Auth 或 Cloudflare Access
-- [ ] ArgoCD admin 改密
+- [ ] 给 `argocd.${ROOT_DOMAIN}` / `mq.${ROOT_DOMAIN}` / `tekton.${ROOT_DOMAIN}` / `${ROLLOUTS_DASHBOARD_HOST}` 加 Cloudflare Access(邮箱 OTP / IdP)— 取代或叠加 BasicAuth
+- [ ] 轮换 `OUTPOST_DASHBOARD_PASSWORD`(.env 里改成空,重跑 `bash bootstrap.sh` 自动重新生成)
+- [ ] 给 `registry.${ROOT_DOMAIN}` 加 Basic Auth 或 Cloudflare Access(默认匿名)
+- [ ] ArgoCD admin 改密(`argocd account update-password`)
 - [ ] sealed-secrets 公钥备份至密码管理器
 
 ## 13. 复用清单（新项目接入流程）

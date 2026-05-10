@@ -2,6 +2,12 @@
 # Argo Rollouts Dashboard — Web UI for canary progress / abort / promote.
 # Exposed via Traefik. cloudflared 须在 CF Dashboard 手动加
 # Public Hostname: rollouts.<root> → http://host.docker.internal:30080
+#
+# **No built-in auth** — the rollouts-dashboard runs anonymous and lets
+# anyone abort / promote rollouts. Same Traefik BasicAuth middleware
+# protecting Tekton Dashboard is referenced cross-namespace here.
+# Credentials: Secret/dashboard-auth-secret in tekton-pipelines, created
+# dynamically by bootstrap.sh from .env's OUTPOST_DASHBOARD_PASSWORD.
 # =============================================================================
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
@@ -14,6 +20,9 @@ spec:
   routes:
     - match: Host(`${ROLLOUTS_DASHBOARD_HOST}`)
       kind: Rule
+      middlewares:
+        - name: dashboard-auth
+          namespace: tekton-pipelines
       services:
         - name: argo-rollouts-dashboard
           port: 3100

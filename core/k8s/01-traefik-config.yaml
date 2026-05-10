@@ -29,3 +29,7 @@ spec:
       # 允许 Traefik 信任 cloudflared 转发来的真实 IP
       - "--entryPoints.web.forwardedHeaders.trustedIPs=127.0.0.1/32,172.16.0.0/12,10.0.0.0/8"
       - "--entryPoints.web.proxyProtocol.trustedIPs=127.0.0.1/32,172.16.0.0/12,10.0.0.0/8"
+      # IngressRoute 跨命名空间引用 Middleware/Service。
+      # Outpost 用例:argo-rollouts 命名空间的 IngressRoute 引用 tekton-pipelines
+      # 命名空间下的 dashboard-auth 中间件,让两个 dashboard 共用一份 BasicAuth。
+      - "--providers.kubernetescrd.allowCrossNamespace=true"
