@@ -2,21 +2,34 @@
 # Plugin: registry / aliyun-acr
 # -----------------------------------------------------------------------------
 # External managed registry — Alibaba Cloud Container Registry (ACR).
-# This plugin contributes ONLY a Secret holding pull/push credentials.
-# k3s containerd is configured (by bootstrap.sh) to inject this Secret as
-# an image pull credential.
+# Two Secrets:
+#   - registry-credentials (tekton-pipelines): kaniko docker config for
+#     PUSH during build. Pipeline workspace `dockerconfig` mounts this by
+#     fixed name; matching the name with the self-hosted plugin keeps the
+#     Pipeline definition single-source-of-truth across plugins.
+#   - aliyun-acr-pull (apps): imagePullSecret for application Pods.
 # =============================================================================
 apiVersion: v1
 kind: Secret
 metadata:
-  name: aliyun-acr-credentials
+  name: registry-credentials
   namespace: tekton-pipelines
   annotations:
     tekton.dev/docker-0: ${ALIYUN_ACR_REGISTRY}
-type: kubernetes.io/basic-auth
+type: Opaque
 stringData:
-  username: ${ALIYUN_ACR_USER}
-  password: ${ALIYUN_ACR_PASSWORD}
+  # kaniko reads /kaniko/.docker/config.json — Tekton's catalog kaniko
+  # task copies workspace/dockerconfig/* → /kaniko/.docker/. So the file
+  # MUST be named config.json (NOT .dockerconfigjson).
+  config.json: |
+    {
+      "auths": {
+        "${ALIYUN_ACR_REGISTRY}": {
+          "username": "${ALIYUN_ACR_USER}",
+          "password": "${ALIYUN_ACR_PASSWORD}"
+        }
+      }
+    }
 ---
 apiVersion: v1
 kind: Secret

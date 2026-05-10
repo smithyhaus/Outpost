@@ -27,7 +27,10 @@ spec:
     - name: revision
       value: $(body.after)
     - name: short-revision
-      value: $(body.after)
+      # 7-char short SHA produced by the CEL overlay interceptor in
+      # eventlistener.yaml ($(extensions.short_sha) = body.after.substring(0,7)).
+      # Used as image tag — keeps registry tags / kubectl / dashboards readable.
+      value: $(extensions.short_sha)
     - name: pusher
       value: $(body.user_name)
 ---

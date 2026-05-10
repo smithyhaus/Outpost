@@ -1,5 +1,6 @@
 # Secrets — must never be committed
 .env
+.env.*
 .env.local
 *.local
 INFRA.md

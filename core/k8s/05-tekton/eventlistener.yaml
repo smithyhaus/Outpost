@@ -38,6 +38,16 @@ spec:
           params:
             - name: filter
               value: "body.ref.startsWith('refs/heads/') && body.after != '0000000000000000000000000000000000000000'"
+        # 4. CEL overlay — 把 7 字符短 SHA 暴露成 extensions.short_sha,
+        #    image-tag 用它,避免 40 字符全 SHA 把 manifest / dashboard / 日志撑爆。
+        #    TriggerBinding 的 short-revision 引用 $(extensions.short_sha)。
+        - ref:
+            name: cel
+          params:
+            - name: overlays
+              value:
+                - key: short_sha
+                  expression: "body.after.substring(0, 7)"
       bindings:
         - ref: gitee-push-binding
       template:

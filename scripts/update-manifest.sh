@@ -180,4 +180,32 @@ fi
 
 git add "$TARGET"
 git commit -m "$COMMIT_MESSAGE"
-git push origin "$MANIFEST_BRANCH"
+
+# ---- Push with rebase-on-conflict retry -------------------------------------
+# Concurrent PipelineRuns on different apps both touch the manifest repo.
+# Without retry, the second push gets non-fast-forward and exits 1, the
+# Pipeline reports "git push failed" deep in the last step, the user first
+# suspects their own code. Rebase-and-retry collapses the race window.
+attempt=1
+max_attempts=3
+while [ "$attempt" -le "$max_attempts" ]; do
+  if git push origin "$MANIFEST_BRANCH"; then
+    echo "  pushed on attempt $attempt"
+    break
+  fi
+  if [ "$attempt" -eq "$max_attempts" ]; then
+    echo "ERROR: git push failed after $max_attempts attempts" >&2
+    exit 1
+  fi
+  echo "  push attempt $attempt/$max_attempts failed (likely concurrent push); rebasing on remote..."
+  if ! git fetch origin "$MANIFEST_BRANCH"; then
+    echo "ERROR: git fetch failed during retry" >&2
+    exit 1
+  fi
+  if ! git rebase "origin/$MANIFEST_BRANCH"; then
+    echo "ERROR: rebase conflict — manual intervention needed" >&2
+    git rebase --abort 2>/dev/null || true
+    exit 1
+  fi
+  attempt=$((attempt + 1))
+done

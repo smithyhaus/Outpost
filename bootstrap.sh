@@ -178,6 +178,36 @@ if [[ "$OUTPOST_MODE" == "full" ]]; then
     err "Available: $(ls plugins/git-provider)"
     exit 1
   fi
+
+  # Resolve registry-plugin-aware Pipeline params. Pipeline-build.yaml uses
+  # ${REGISTRY_HOST} / ${REGISTRY_PUSH_HOST} / ${KANIKO_EXTRA_ARGS} as defaults
+  # so a single Pipeline definition serves all registry plugins without
+  # per-plugin pipeline overrides.
+  case "$REGISTRY_PLUGIN" in
+    self-hosted)
+      REGISTRY_HOST="registry.${ROOT_DOMAIN}"
+      # Push to the in-cluster Service to bypass cloudflared HTTP/2 limit
+      # on large blob uploads (Java/.NET multi-stage builds OOM at the edge).
+      REGISTRY_PUSH_HOST="docker-registry.registry.svc.cluster.local:5000"
+      # In-cluster registry is plain HTTP, anonymous — kaniko needs both flags.
+      KANIKO_EXTRA_ARGS='["--skip-tls-verify","--insecure"]'
+      ;;
+    aliyun-acr)
+      REGISTRY_HOST="${ALIYUN_ACR_REGISTRY}/${ALIYUN_ACR_NAMESPACE}"
+      # ACR is HTTPS-only with valid certs; pushing through the public
+      # endpoint is fine. registry-push and registry are the same host.
+      REGISTRY_PUSH_HOST="${ALIYUN_ACR_REGISTRY}/${ALIYUN_ACR_NAMESPACE}"
+      # No insecure flags — they would force kaniko to attempt plain HTTP
+      # which ACR refuses.
+      KANIKO_EXTRA_ARGS='[]'
+      ;;
+    *)
+      err "REGISTRY_PLUGIN '$REGISTRY_PLUGIN' lacks a kaniko config block in bootstrap.sh"
+      err "Add a case branch setting REGISTRY_HOST / REGISTRY_PUSH_HOST / KANIKO_EXTRA_ARGS"
+      exit 1
+      ;;
+  esac
+  export REGISTRY_HOST REGISTRY_PUSH_HOST KANIKO_EXTRA_ARGS
   if [[ ! -d "plugins/test-runner/${TEST_RUNNER}" ]]; then
     err "Unknown TEST_RUNNER: ${TEST_RUNNER}"
     err "Available: $(ls plugins/test-runner)"
@@ -236,6 +266,11 @@ fi
   echo "MANIFEST_REPO_URL=${MANIFEST_REPO_URL}"
   echo "MANIFEST_REPO_BRANCH=${MANIFEST_REPO_BRANCH}"
   echo "GIT_HOST=${GIT_HOST}"
+  # Registry-plugin-derived Pipeline defaults (re-derived on each bootstrap,
+  # but persisted so status.sh / verify.sh can show what's active).
+  echo "REGISTRY_HOST=${REGISTRY_HOST:-}"
+  echo "REGISTRY_PUSH_HOST=${REGISTRY_PUSH_HOST:-}"
+  echo "KANIKO_EXTRA_ARGS=${KANIKO_EXTRA_ARGS:-}"
   # ACR specifics carried through if set
   [[ -n "${ALIYUN_ACR_REGISTRY:-}" ]]  && echo "ALIYUN_ACR_REGISTRY=${ALIYUN_ACR_REGISTRY}"
   [[ -n "${ALIYUN_ACR_NAMESPACE:-}" ]] && echo "ALIYUN_ACR_NAMESPACE=${ALIYUN_ACR_NAMESPACE}"

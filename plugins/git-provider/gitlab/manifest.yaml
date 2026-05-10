@@ -26,7 +26,14 @@ spec:
     - name: revision
       value: $(body.after)
     - name: short-revision
-      value: $(body.after)
+      # 7-char short SHA produced by the CEL overlay interceptor (see
+      # eventlistener.yaml). gitlab plugin currently isn't wired into the
+      # active EventListener; when it is, add an interceptor:
+      #   - ref: { name: cel }
+      #     params:
+      #       - name: overlays
+      #         value: [ { key: short_sha, expression: "body.after.substring(0,7)" } ]
+      value: $(extensions.short_sha)
     - name: pusher
       value: $(body.user_username)
 ---
