@@ -77,3 +77,22 @@ spec:
       services:
         - name: docker-registry
           port: 5000
+---
+# ============================================================================
+# kaniko docker config (anonymous — in-cluster registry has no auth).
+# Mounted by Pipeline workspace `dockerconfig` (TriggerTemplate references
+# this Secret by name `registry-credentials`).
+# ============================================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: registry-credentials
+  namespace: tekton-pipelines
+type: Opaque
+stringData:
+  config.json: |
+    {
+      "auths": {
+        "registry.example.test": {}
+      }
+    }
