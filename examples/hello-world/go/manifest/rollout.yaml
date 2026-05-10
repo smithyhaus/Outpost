@@ -1,0 +1,80 @@
+# =============================================================================
+# Argo Rollouts variant of hello-go — uncomment in argocd-application.yaml's
+# directory inclusion (or `cp rollout.yaml deployment.yaml`) to switch.
+# -----------------------------------------------------------------------------
+# Same Pod spec as deployment.yaml, but wrapped in a Rollout CRD with a
+# 4-step canary strategy + analysis between each step. On analysis failure,
+# Argo Rollouts auto-rolls back to the previous stable ReplicaSet.
+#
+# **Use this manifest if you want to demo / verify Phase J auto-rollback.**
+# Both manifests in one directory at the same time confuse ArgoCD — pick one:
+#
+#   # plain Deployment (default — simple rolling update)
+#   git rm rollout.yaml; git add deployment.yaml
+#
+#   # Rollout (canary + auto-rollback)
+#   git rm deployment.yaml; git add rollout.yaml
+# =============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: hello-go
+  namespace: apps
+  labels:
+    app: hello-go
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: hello-go
+  strategy:
+    canary:
+      # 4 steps: 25% → analysis → 50% → analysis → 75% → analysis → 100%
+      # outpost-default = HTTP /healthz probe via Argo Rollouts Web provider.
+      # See plugins/rollout/argo-rollouts/analysistemplate-default.yaml.
+      steps:
+        - setWeight: 25
+        - pause: { duration: 30s }
+        - analysis:
+            templates:
+              - templateName: outpost-default
+                clusterScope: false
+            args:
+              - name: service-name
+                value: hello-go
+              - name: namespace
+                value: apps
+        - setWeight: 50
+        - pause: { duration: 30s }
+        - analysis:
+            templates:
+              - templateName: outpost-default
+                clusterScope: false
+            args:
+              - name: service-name
+                value: hello-go
+              - name: namespace
+                value: apps
+        - setWeight: 75
+        - pause: { duration: 30s }
+  template:
+    metadata:
+      labels:
+        app: hello-go
+    spec:
+      containers:
+        - name: app
+          image: registry.example.com/hello-go:latest
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 1
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          resources:
+            requests: { cpu: 25m, memory: 16Mi }
+            limits:   { cpu: 250m, memory: 64Mi }

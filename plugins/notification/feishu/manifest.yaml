@@ -39,7 +39,7 @@ data:
             "tag": "div",
             "text": {
               "tag": "lark_md",
-              "content": "**${NOTIFY_APP}** \\u0060${NOTIFY_COMMIT}\\u0060 in \\u0060${NOTIFY_ENV}\\u0060\\n\\n- event: ${NOTIFY_EVENT}\\n- ref: ${NOTIFY_REF}\\n- ${NOTIFY_TEXT}"
+              "content": "**${NOTIFY_APP}** \\u0060${NOTIFY_COMMIT}\\u0060 in \\u0060${NOTIFY_ENV}\\u0060\\n\\n- event: ${NOTIFY_EVENT}\\n- ref: ${NOTIFY_REF}\\n- pusher: ${NOTIFY_PUSHER}\\n- ${NOTIFY_TEXT}"
             }
           },
           {

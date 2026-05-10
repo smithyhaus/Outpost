@@ -126,6 +126,31 @@ NOTIFICATION_PROVIDERS=dingtalk,feishu        # any combination
 ([中文版](i18n/zh-CN/docs/proposals/cicd-test-gate.md)). Walkthrough in the
 quickstart's "Phase J" section.
 
+## Daily CLI
+
+`scripts/outpost` is a single-entry CLI that wraps the half-dozen kubectl /
+argocd / kubeseal commands every Outpost user eventually memorises:
+
+```bash
+outpost status                       # full Compose + k8s overview
+outpost verify [--app <name>]        # health checks; --app filters to one app
+outpost open <argocd|tekton|rollouts|search|mq|registry>
+                                     # print URL + creds, open browser
+outpost logs <app> [--build]         # tail container logs / latest PipelineRun
+outpost rollback <app>               # argocd app rollback (with confirm)
+outpost seal <app> KEY=VALUE ...     # wrap kubeseal — produces SealedSecret YAML
+outpost new-app <name> --lang go|... # scaffold from examples/hello-world/<lang>
+outpost decommission <app>           # guided cleanup
+```
+
+Add to PATH:
+
+```bash
+ln -s "$PWD/scripts/outpost" /usr/local/bin/outpost
+```
+
+Or invoke directly: `bash scripts/outpost help`.
+
 See [`plugins/README.md`](plugins/README.md) for the plugin contract and how to author your own.
 
 ## AI-friendly by design

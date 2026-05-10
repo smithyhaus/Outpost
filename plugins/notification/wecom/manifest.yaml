@@ -24,6 +24,6 @@ data:
     {
       "msgtype": "markdown",
       "markdown": {
-        "content": "## <font color=\\"warning\\">[${NOTIFY_LEVEL}] ${NOTIFY_APP} ${NOTIFY_EVENT}</font>\\n>**ref**: \\u0060${NOTIFY_REF}\\u0060\\n>**commit**: \\u0060${NOTIFY_COMMIT}\\u0060\\n>**env**: \\u0060${NOTIFY_ENV}\\u0060\\n>**detail**: [open](${NOTIFY_URL})\\n>${NOTIFY_TEXT}"
+        "content": "## <font color=\\"warning\\">[${NOTIFY_LEVEL}] ${NOTIFY_APP} ${NOTIFY_EVENT}</font>\\n>**ref**: \\u0060${NOTIFY_REF}\\u0060\\n>**commit**: \\u0060${NOTIFY_COMMIT}\\u0060\\n>**pusher**: ${NOTIFY_PUSHER}\\n>**env**: \\u0060${NOTIFY_ENV}\\u0060\\n>**detail**: [open](${NOTIFY_URL})\\n>${NOTIFY_TEXT}"
       }
     }

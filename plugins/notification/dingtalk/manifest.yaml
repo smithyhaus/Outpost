@@ -32,6 +32,6 @@ data:
       "msgtype": "markdown",
       "markdown": {
         "title": "[${NOTIFY_LEVEL}] ${NOTIFY_APP} ${NOTIFY_EVENT}",
-        "text": "### ${NOTIFY_APP} \\u0060${NOTIFY_COMMIT}\\u0060 in \\u0060${NOTIFY_ENV}\\u0060\\n\\n- **event**: ${NOTIFY_EVENT}\\n- **ref**: ${NOTIFY_REF}\\n- **detail**: [open](${NOTIFY_URL})\\n\\n${NOTIFY_TEXT}"
+        "text": "### ${NOTIFY_APP} \\u0060${NOTIFY_COMMIT}\\u0060 in \\u0060${NOTIFY_ENV}\\u0060\\n\\n- **event**: ${NOTIFY_EVENT}\\n- **ref**: ${NOTIFY_REF}\\n- **pusher**: ${NOTIFY_PUSHER}\\n- **detail**: [open](${NOTIFY_URL})\\n\\n${NOTIFY_TEXT}"
       }
     }

@@ -44,6 +44,14 @@ spec:
     - name: image-tag
       type: string
       description: 镜像 tag（短 SHA）
+    - name: pusher
+      type: string
+      default: ""
+      description: |
+        Who pushed (gitee body.user_name / github body.pusher.name /
+        gitlab body.user_username). Surfaced in notifications so the dev who
+        pushed gets routed/mentioned correctly. Empty if the git-provider
+        plugin doesn't expose it.
     - name: registry
       type: string
       description: |
@@ -74,6 +82,22 @@ spec:
     - name: git-creds
 
   tasks:
+    # -------------------------------------------------------------------------
+    # 0. notify-on-start — fan-out a "build started" event with a deep
+    #    link to this PipelineRun. No runAfter — runs in parallel with
+    #    fetch-source so notify hiccups never delay the actual build.
+    # -------------------------------------------------------------------------
+    - name: notify-on-start
+      taskRef:
+        name: outpost-notify
+        kind: Task
+      params:
+        - name: payload
+          value: |
+            {"event":"tekton.pipelinerun.started","level":"info","app":"$(params.repo-name)","env":"dev","commit":"$(params.image-tag)","ref":"$(params.branch)","url":"https://tekton.${ROOT_DOMAIN}/#/namespaces/tekton-pipelines/pipelineruns/$(context.pipelineRun.name)","text":"Build started for $(params.repo-name)@$(params.image-tag)","pusher":"$(params.pusher)"}
+        - name: providers
+          value: "${NOTIFICATION_PROVIDERS}"
+
     # -------------------------------------------------------------------------
     # 1. 拉应用代码
     # -------------------------------------------------------------------------
@@ -203,6 +227,6 @@ spec:
       params:
         - name: payload
           value: |
-            {"event":"tekton.pipelinerun.failed","level":"error","app":"$(params.repo-name)","env":"dev","commit":"$(params.image-tag)","ref":"$(params.branch)","url":"https://tekton.${ROOT_DOMAIN}/#/namespaces/tekton-pipelines/pipelineruns","text":"PipelineRun failed — see Tekton Dashboard for details"}
+            {"event":"tekton.pipelinerun.failed","level":"error","app":"$(params.repo-name)","env":"dev","commit":"$(params.image-tag)","ref":"$(params.branch)","url":"https://tekton.${ROOT_DOMAIN}/#/namespaces/tekton-pipelines/pipelineruns/$(context.pipelineRun.name)","text":"PipelineRun failed — open the link for the failed task's logs","pusher":"$(params.pusher)"}
         - name: providers
           value: "${NOTIFICATION_PROVIDERS}"

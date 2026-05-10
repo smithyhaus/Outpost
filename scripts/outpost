@@ -1,0 +1,326 @@
+#!/usr/bin/env bash
+# =============================================================================
+# outpost — single-entry CLI for app-team daily commands.
+# -----------------------------------------------------------------------------
+# Wraps the half-dozen kubectl/argocd/kubeseal incantations every Outpost user
+# eventually memorizes. Add to PATH:
+#   ln -s "$PWD/scripts/outpost" /usr/local/bin/outpost
+# Or run as `bash scripts/outpost <subcommand>`.
+# =============================================================================
+set -euo pipefail
+
+OUTPOST_HOME="${OUTPOST_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+cd "$OUTPOST_HOME"
+
+# Load .env if present — every subcommand wants ROOT_DOMAIN / dashboard creds /
+# argocd admin pwd. Missing .env is fine for `help` / `version`.
+if [[ -f .env ]]; then
+  set -a; # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+
+# --- helpers -----------------------------------------------------------------
+_red()    { printf '\033[31m%s\033[0m' "$*"; }
+_green()  { printf '\033[32m%s\033[0m' "$*"; }
+_yellow() { printf '\033[33m%s\033[0m' "$*"; }
+_dim()    { printf '\033[2m%s\033[0m' "$*"; }
+_die()    { echo "$(_red ERROR): $*" >&2; exit 1; }
+_need()   { command -v "$1" >/dev/null 2>&1 || _die "missing tool: $1"; }
+_confirm() {
+  local prompt="$1" ans
+  read -r -p "$prompt [y/N] " ans
+  [[ "$ans" =~ ^[Yy]$ ]]
+}
+
+usage() {
+  cat <<EOF
+$(_green outpost) — daily CLI for the Outpost dev backend.
+
+$(_yellow USAGE)
+  outpost <subcommand> [args]
+
+$(_yellow PLATFORM)
+  status                            Compose + k8s overview (= status.sh)
+  verify [--app <name>]             Health checks; --app filters to one app
+  open <argocd|tekton|rollouts|search|mq|registry>
+                                    Print URL + creds (from INFRA.md / .env)
+                                    and open the browser
+
+$(_yellow APPLICATION)
+  new-app <name> --lang <go|python|java|csharp|react|vue>
+                                    Scaffold a new app from examples/hello-world/<lang>
+                                    into ./my-apps/<name>/
+  logs <app> [--build]              Tail container logs
+                                      default: pods in 'apps' namespace
+                                      --build: latest PipelineRun logs
+  rollback <app>                    Roll back to the previous Healthy revision
+                                    via 'argocd app rollback' (with confirmation)
+  seal <app> [<KEY>=<VALUE> ...]    Wrap kubeseal — produces a SealedSecret YAML
+                                    on stdout. Example:
+                                      outpost seal my-app DATABASE_URL=postgres://...
+  decommission <app>                Guided cleanup (confirms then runs)
+
+$(_yellow UTILITY)
+  help [cmd]                        Show this or a subcommand's help
+  version                           Print outpost version (git SHA)
+
+$(_dim Source: scripts/outpost — patch via PR)
+EOF
+}
+
+cmd_version() {
+  local sha
+  sha=$(git -C "$OUTPOST_HOME" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  echo "outpost CLI @ $sha"
+}
+
+# --- platform ---------------------------------------------------------------
+cmd_status() {
+  exec bash "$OUTPOST_HOME/status.sh" "$@"
+}
+
+cmd_verify() {
+  local app=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --app) app="${2:-}"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [[ -n "$app" ]]; then
+    # App-scoped checks — implements review #10 minimal version inline.
+    _need kubectl
+    echo "$(_green '═══') app: $app $(_green '═══')"
+    echo "ArgoCD Application:"
+    kubectl get application -n argocd "$app" \
+      -o jsonpath='  sync:   {.status.sync.status}{"\n  health: "}{.status.health.status}{"\n  rev:    "}{.status.sync.revision}{"\n"}' \
+      2>/dev/null || echo "  (not found in argocd namespace)"
+    echo ""
+    echo "Pods in apps namespace (label app=$app):"
+    kubectl get pod -n apps -l "app=$app" 2>&1 | head -20
+    echo ""
+    echo "Recent PipelineRuns (label app=$app):"
+    kubectl get pipelinerun -n tekton-pipelines \
+      --sort-by=.metadata.creationTimestamp 2>/dev/null | grep -E "^build-${app}-" | tail -3 \
+      || echo "  (none)"
+    echo ""
+    echo "Recent events in $app namespace (if it exists):"
+    kubectl get events -n "$app" --sort-by=.lastTimestamp 2>/dev/null | tail -10 \
+      || echo "  (no $app namespace)"
+  else
+    exec bash "$OUTPOST_HOME/verify.sh" "$@"
+  fi
+}
+
+cmd_open() {
+  local target="${1:-}"
+  [[ -z "$target" ]] && _die "outpost open <argocd|tekton|rollouts|search|mq|registry>"
+  local url user pwd
+  case "$target" in
+    argocd)   url="https://argocd.${ROOT_DOMAIN}";              user="admin"
+              pwd="${ARGOCD_ADMIN_PASSWORD:-(re-fetch via kubectl)}" ;;
+    tekton)   url="https://tekton.${ROOT_DOMAIN}";              user="${OUTPOST_DASHBOARD_USER:-outpost}"
+              pwd="${OUTPOST_DASHBOARD_PASSWORD:-}" ;;
+    rollouts) url="https://${ROLLOUTS_DASHBOARD_HOST:-rollouts.${ROOT_DOMAIN}}"; user="${OUTPOST_DASHBOARD_USER:-outpost}"
+              pwd="${OUTPOST_DASHBOARD_PASSWORD:-}" ;;
+    search)   url="https://search.${ROOT_DOMAIN}";              user="(Bearer)"
+              pwd="${MEILI_MASTER_KEY:-}" ;;
+    mq)       url="https://mq.${ROOT_DOMAIN}";                  user="${RABBITMQ_USER:-admin}"
+              pwd="${RABBITMQ_PASSWORD:-}" ;;
+    registry) url="https://registry.${ROOT_DOMAIN}";            user="(anonymous)"
+              pwd="" ;;
+    *) _die "unknown target: $target (try: argocd|tekton|rollouts|search|mq|registry)" ;;
+  esac
+  echo "$(_green URL):  $url"
+  echo "$(_green User): $user"
+  [[ -n "$pwd" ]] && echo "$(_green Pass): $pwd"
+  echo ""
+  case "$(uname -s)" in
+    Darwin) open "$url" 2>/dev/null || true ;;
+    Linux)  xdg-open "$url" 2>/dev/null || true ;;
+  esac
+}
+
+# --- application -------------------------------------------------------------
+cmd_logs() {
+  local app="${1:-}"; shift || true
+  [[ -z "$app" ]] && _die "outpost logs <app> [--build]"
+  _need kubectl
+  if [[ "${1:-}" == "--build" ]]; then
+    local pr
+    pr=$(kubectl get pipelinerun -n tekton-pipelines \
+           --sort-by=.metadata.creationTimestamp -o name 2>/dev/null | grep "build-${app}-" | tail -1)
+    [[ -z "$pr" ]] && _die "no PipelineRun found for app=$app"
+    echo "$(_dim "→ $pr")"
+    kubectl logs -n tekton-pipelines "$pr" --all-containers --tail=200 -f 2>/dev/null || \
+      kubectl logs -n tekton-pipelines "$pr" --all-containers --tail=200
+  else
+    echo "$(_dim "→ kubectl logs -n apps -l app=$app -f --all-containers")"
+    kubectl logs -n apps -l "app=$app" --all-containers --tail=200 -f
+  fi
+}
+
+cmd_rollback() {
+  local app="${1:-}"
+  [[ -z "$app" ]] && _die "outpost rollback <app>"
+  _need kubectl
+  _need argocd 2>/dev/null || true   # warn but continue — kubectl-only fallback below
+
+  echo "Current state:"
+  kubectl get application -n argocd "$app" \
+    -o jsonpath='  rev: {.status.sync.revision}{"\n"}' 2>/dev/null \
+    || _die "no ArgoCD Application named $app"
+
+  if ! _confirm "Roll back $app to the previous Healthy revision?"; then
+    echo "Cancelled."; exit 0
+  fi
+
+  if command -v argocd >/dev/null 2>&1 && [[ -n "${ARGOCD_ADMIN_PASSWORD:-}" ]]; then
+    argocd login "argocd.${ROOT_DOMAIN}" --username admin --password "$ARGOCD_ADMIN_PASSWORD" --insecure 2>/dev/null || true
+    argocd app rollback "$app" 0 || _die "argocd app rollback failed"
+  else
+    echo "$(_yellow 'no argocd CLI / no ARGOCD_ADMIN_PASSWORD'): use the ArgoCD UI:"
+    echo "  https://argocd.${ROOT_DOMAIN}/applications/$app  → click HISTORY AND ROLLBACK"
+    echo ""
+    echo "Or revert the latest 'chore($app): bump image' commit in the manifest repo."
+  fi
+}
+
+cmd_seal() {
+  local app="${1:-}"; shift || true
+  [[ -z "$app" ]] && _die "outpost seal <app> [<KEY>=<VALUE> ...]"
+  _need kubeseal
+  _need kubectl
+
+  local tmp; tmp=$(mktemp)
+  trap 'rm -f "$tmp"' EXIT
+
+  cat > "$tmp" <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${app}-secrets
+  namespace: apps
+type: Opaque
+stringData:
+EOF
+  if [[ $# -eq 0 ]]; then
+    cat <<EOF >&2
+$(_yellow 'No KEY=VALUE pairs supplied.') Reading stringData from stdin (one per line, KEY=VALUE):
+
+  $(_dim "DATABASE_URL=postgres://...")
+  $(_dim "REDIS_URL=redis://...")
+  $(_dim "(Ctrl-D when done)")
+EOF
+    while IFS= read -r line; do
+      [[ -z "$line" || "$line" =~ ^# ]] && continue
+      [[ "$line" =~ ^([A-Z_][A-Z0-9_]*)=(.*)$ ]] || _die "bad line: $line"
+      printf '  %s: %q\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" >> "$tmp"
+    done
+  else
+    for kv in "$@"; do
+      [[ "$kv" =~ ^([A-Z_][A-Z0-9_]*)=(.*)$ ]] || _die "bad arg: $kv (expect KEY=VALUE)"
+      printf '  %s: %q\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" >> "$tmp"
+    done
+  fi
+
+  echo "$(_dim '→ kubeseal --controller-namespace=kube-system --format=yaml')"
+  kubeseal --controller-namespace=kube-system --format=yaml < "$tmp"
+  echo "" >&2
+  echo "$(_green '✓') Pipe the YAML above into a file and commit it to the manifest repo." >&2
+  echo "  e.g.  outpost seal $app KEY=val | tee apps/$app/sealed-secret.yaml" >&2
+}
+
+cmd_new_app() {
+  local name="${1:-}"
+  [[ -z "$name" ]] && _die "outpost new-app <name> --lang <go|python|java|csharp|react|vue>"
+  shift
+  local lang=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --lang) lang="${2:-}"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  [[ -z "$lang" ]] && _die "--lang is required (one of: go python java csharp react vue)"
+
+  local src="examples/hello-world/$lang"
+  [[ -d "$src" ]] || _die "no template at $src — supported langs: $(ls examples/hello-world/ | grep -v README | tr '\n' ' ')"
+
+  local dst="my-apps/$name"
+  [[ -e "$dst" ]] && _die "$dst already exists"
+  mkdir -p my-apps
+  cp -r "$src" "$dst"
+
+  # Rename inside the copy: hello-<lang> / hello-world-<lang> → <name>
+  find "$dst" -type f \( -name '*.yaml' -o -name '*.md' -o -name 'Dockerfile' -o -name 'main.*' \) | while read -r f; do
+    portable_sed_i="-i"; [[ "$(uname -s)" == "Darwin" ]] && portable_sed_i="-i ''"
+    # shellcheck disable=SC2086
+    sed $portable_sed_i \
+      -e "s|hello-world-${lang}|${name}|g" \
+      -e "s|hello-${lang}|${name}|g" \
+      "$f"
+  done
+
+  echo "$(_green '✓') Scaffolded $dst from $src"
+  echo ""
+  echo "Next steps:"
+  echo "  1. Edit $dst/manifest/*.yaml — set your image, ingress hostname, replicas"
+  echo "  2. Push your application code (with a Dockerfile at the root) to a git repo"
+  echo "  3. Copy $dst/manifest/ into your manifest repo as apps/$name/"
+  echo "  4. Configure the webhook on your application repo (see 05-onboard-project.md §5)"
+  echo "  5. ArgoCD picks up the change within ~30s"
+}
+
+cmd_decommission() {
+  local app="${1:-}"
+  [[ -z "$app" ]] && _die "outpost decommission <app>"
+  _need kubectl
+
+  echo "$(_yellow WARNING): this will:"
+  echo "  - delete ArgoCD Application '$app' (cascades to K8s resources)"
+  echo "  - print git commands for you to run in the manifest repo"
+  echo "  - leave registry images intact (manual cleanup if needed)"
+  echo ""
+  if ! _confirm "Continue?"; then
+    echo "Cancelled."; exit 0
+  fi
+
+  echo ""
+  echo "$(_dim '→') kubectl delete application -n argocd $app --cascade=foreground"
+  kubectl delete application -n argocd "$app" --cascade=foreground 2>&1 | head -5 || true
+
+  echo ""
+  echo "$(_green '✓') ArgoCD Application removed."
+  echo ""
+  echo "Now in your manifest repo:"
+  cat <<EOF
+  cd <manifest-repo>
+  git rm -r apps/$app/
+  git rm argocd-apps/${app}.yaml
+  git commit -m "chore: decommission $app"
+  git push
+EOF
+  echo ""
+  echo "Optional registry image cleanup (self-hosted):"
+  echo "  curl -X DELETE -u .. https://registry.${ROOT_DOMAIN}/v2/$app/manifests/<digest>"
+  echo "  (Aliyun ACR: use the ACR console)"
+}
+
+# --- router ------------------------------------------------------------------
+SUB="${1:-help}"
+shift || true
+case "$SUB" in
+  status)         cmd_status "$@" ;;
+  verify)         cmd_verify "$@" ;;
+  open)           cmd_open "$@" ;;
+  logs)           cmd_logs "$@" ;;
+  rollback)       cmd_rollback "$@" ;;
+  seal)           cmd_seal "$@" ;;
+  new-app)        cmd_new_app "$@" ;;
+  decommission)   cmd_decommission "$@" ;;
+  version|--version|-v) cmd_version ;;
+  help|--help|-h|"") usage ;;
+  *) echo "$(_red unknown): $SUB"; usage; exit 1 ;;
+esac

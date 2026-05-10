@@ -189,8 +189,10 @@ if [[ "$OUTPOST_MODE" == "full" ]]; then
       # Push to the in-cluster Service to bypass cloudflared HTTP/2 limit
       # on large blob uploads (Java/.NET multi-stage builds OOM at the edge).
       REGISTRY_PUSH_HOST="docker-registry.registry.svc.cluster.local:5000"
-      # In-cluster registry is plain HTTP, anonymous — kaniko needs both flags.
-      KANIKO_EXTRA_ARGS='["--skip-tls-verify","--insecure"]'
+      # In-cluster registry is plain HTTP, anonymous — kaniko needs both
+      # insecure flags. --cache=true reuses the same registry under /cache
+      # to warm subsequent builds (Java/.NET cold-cache used to hit 90m).
+      KANIKO_EXTRA_ARGS='["--skip-tls-verify","--insecure","--cache=true","--cache-repo=docker-registry.registry.svc.cluster.local:5000/cache"]'
       ;;
     aliyun-acr)
       REGISTRY_HOST="${ALIYUN_ACR_REGISTRY}/${ALIYUN_ACR_NAMESPACE}"
@@ -198,8 +200,9 @@ if [[ "$OUTPOST_MODE" == "full" ]]; then
       # endpoint is fine. registry-push and registry are the same host.
       REGISTRY_PUSH_HOST="${ALIYUN_ACR_REGISTRY}/${ALIYUN_ACR_NAMESPACE}"
       # No insecure flags — they would force kaniko to attempt plain HTTP
-      # which ACR refuses.
-      KANIKO_EXTRA_ARGS='[]'
+      # which ACR refuses. Cache lives under /cache in the same namespace.
+      # shellcheck disable=SC2089  # literal quotes are intended — value is a JSON-shape string for envsubst
+      KANIKO_EXTRA_ARGS="[\"--cache=true\",\"--cache-repo=${ALIYUN_ACR_REGISTRY}/${ALIYUN_ACR_NAMESPACE}/cache\"]"
       ;;
     *)
       err "REGISTRY_PLUGIN '$REGISTRY_PLUGIN' lacks a kaniko config block in bootstrap.sh"
@@ -207,7 +210,28 @@ if [[ "$OUTPOST_MODE" == "full" ]]; then
       exit 1
       ;;
   esac
+  # shellcheck disable=SC2090  # KANIKO_EXTRA_ARGS holds intentional literal quotes; consumed by envsubst into pipeline-build.yaml
   export REGISTRY_HOST REGISTRY_PUSH_HOST KANIKO_EXTRA_ARGS
+
+  # ---- WEBHOOK_REPO_WHITELIST → CEL list literal ----
+  # Empty (default) → []  → CEL filter `size([]) == 0 || ...` short-circuits
+  #                         to true, accepting any repo.
+  # Set            → ['url1','url2',...] → CEL filter only accepts those.
+  # See eventlistener.yaml's interceptor that consumes ${CEL_WHITELIST_LIST}.
+  if [[ -n "${WEBHOOK_REPO_WHITELIST:-}" ]]; then
+    CEL_WHITELIST_LIST="["
+    IFS=',' read -ra _wl <<< "$WEBHOOK_REPO_WHITELIST"
+    for _r in "${_wl[@]}"; do
+      _r="${_r// /}"
+      [[ -z "$_r" ]] && continue
+      CEL_WHITELIST_LIST+="'$_r',"
+    done
+    CEL_WHITELIST_LIST="${CEL_WHITELIST_LIST%,}]"
+    unset _wl _r
+  else
+    CEL_WHITELIST_LIST="[]"
+  fi
+  export CEL_WHITELIST_LIST
   if [[ ! -d "plugins/test-runner/${TEST_RUNNER}" ]]; then
     err "Unknown TEST_RUNNER: ${TEST_RUNNER}"
     err "Available: $(ls plugins/test-runner)"
@@ -271,6 +295,8 @@ fi
   echo "REGISTRY_HOST=${REGISTRY_HOST:-}"
   echo "REGISTRY_PUSH_HOST=${REGISTRY_PUSH_HOST:-}"
   echo "KANIKO_EXTRA_ARGS=${KANIKO_EXTRA_ARGS:-}"
+  echo "WEBHOOK_REPO_WHITELIST=${WEBHOOK_REPO_WHITELIST:-}"
+  echo "CEL_WHITELIST_LIST=${CEL_WHITELIST_LIST:-[]}"
   # ACR specifics carried through if set
   [[ -n "${ALIYUN_ACR_REGISTRY:-}" ]]  && echo "ALIYUN_ACR_REGISTRY=${ALIYUN_ACR_REGISTRY}"
   [[ -n "${ALIYUN_ACR_NAMESPACE:-}" ]] && echo "ALIYUN_ACR_NAMESPACE=${ALIYUN_ACR_NAMESPACE}"

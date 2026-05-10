@@ -159,8 +159,15 @@ if kubectl_ok; then
   for ns_dep in "argocd:argocd-server" "argocd:argocd-repo-server" \
                 "tekton-pipelines:tekton-pipelines-controller" \
                 "tekton-pipelines:tekton-triggers-controller" \
-                "registry:docker-registry"; do
+                "tekton-pipelines:tekton-dashboard" \
+                "registry:docker-registry" \
+                "argo-rollouts:argo-rollouts" \
+                "argo-rollouts:argo-rollouts-dashboard" \
+                "testkube:testkube-api-server"; do
     ns="${ns_dep%%:*}"; dep="${ns_dep##*:}"
+    # Skip Phase 9 namespaces if not installed (test-runner / rollout plugin
+    # may be intentionally absent on a stripped-down install).
+    kubectl get ns "$ns" >/dev/null 2>&1 || { record WARN "k8s.$ns.$dep" "ns absent — plugin not installed (skip)"; continue; }
     rep=$(kubectl get deployment -n "$ns" "$dep" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "")
     desired=$(kubectl get deployment -n "$ns" "$dep" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "")
     if [[ -z "$rep" ]]; then
@@ -169,6 +176,20 @@ if kubectl_ok; then
       record PASS "k8s.$ns.$dep" "$rep/$desired ready"
     else
       record FAIL "k8s.$ns.$dep" "$rep/$desired ready"
+    fi
+  done
+
+  # Phase 9 marker ConfigMaps + secrets (cheap proof the plugins applied).
+  # Each entry is `ns:kind:name`. We probe by exact (kind,name) since
+  # `kubectl get cm,secret <name>` errors out on the first kind that misses.
+  for entry in "tekton-pipelines:cm:outpost-test-runner" \
+               "tekton-pipelines:cm:outpost-rollout" \
+               "tekton-pipelines:secret:dashboard-auth-secret"; do
+    IFS=":" read -r ns kind name <<< "$entry"
+    if kubectl get -n "$ns" "$kind" "$name" >/dev/null 2>&1; then
+      record PASS "k8s.$ns.$name" "$kind exists"
+    else
+      record WARN "k8s.$ns.$name" "$kind missing — re-run bootstrap if you expected this plugin"
     fi
   done
 

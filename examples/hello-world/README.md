@@ -38,6 +38,26 @@ Every example, identical from the platform's perspective:
 - Container `EXPOSE 8080`
 - Multi-stage Dockerfile so kaniko builds cleanly with no
   Docker-in-Docker tricks
+- **`outpost.test.yaml`** at the repo root — declares the test command
+  Tekton runs at Gate A (between build and manifest update). The MVP
+  shipped command is a placeholder echo; the `tests/` directory holds
+  the *real* unit tests that Phase 2 will wire in. Repos without
+  `outpost.test.yaml` skip Gate A cleanly, so this is purely opt-in.
+
+## Phase J — auto-rollback demo (go only, for now)
+
+`examples/hello-world/go/manifest/` ships **two** alternative shapes:
+
+| File              | What it does                                                           |
+|-------------------|------------------------------------------------------------------------|
+| `deployment.yaml` | Plain `Deployment` — simple rolling update (default for all 6 langs)   |
+| `rollout.yaml`    | `argoproj.io/v1alpha1/Rollout` with canary 25→50→75→100 + analysis     |
+
+Pick one when you copy `manifest/` into your manifest repo. The
+`Rollout` variant is the only working demo of Phase J's auto-rollback
+behaviour today — break the `/healthz` endpoint, push, and watch the
+canary analysis abort the rollout automatically. See
+[`i18n/en/docs/00-quickstart.md`](../../i18n/en/docs/00-quickstart.md) Phase J.
 
 ## Smoke-test walkthrough
 

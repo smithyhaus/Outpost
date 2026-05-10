@@ -25,6 +25,11 @@ code. The root must contain a `Dockerfile`.
 
 ### 2. Manifest repo — `apps/<app>/`
 
+> **Faster path:** `bash scripts/outpost new-app <name> --lang <go|python|java|csharp|react|vue>`
+> scaffolds `my-apps/<name>/` from the matching hello-world template with all
+> the renames done. Edit, copy the `manifest/` directory into your manifest
+> repo. See `outpost help` for all subcommands.
+
 Use `examples/demo-app/` as the template. Add to your manifest repo:
 
 ```

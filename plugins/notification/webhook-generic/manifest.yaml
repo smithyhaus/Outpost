@@ -33,5 +33,6 @@ data:
       "commit": "${NOTIFY_COMMIT}",
       "ref": "${NOTIFY_REF}",
       "url": "${NOTIFY_URL}",
-      "text": "${NOTIFY_TEXT}"
+      "text": "${NOTIFY_TEXT}",
+      "pusher": "${NOTIFY_PUSHER}"
     }

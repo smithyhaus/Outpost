@@ -125,6 +125,30 @@ NOTIFICATION_PROVIDERS=dingtalk,feishu        # 任意组合
 
 Plugin 协议与编写指南见 [`plugins/README.md`](plugins/README.md)。
 
+## 日常 CLI
+
+`scripts/outpost` 把每天用的 kubectl / argocd / kubeseal 命令包成单一入口:
+
+```bash
+outpost status                       # Compose + k8s 总览
+outpost verify [--app <name>]        # 健康检查;--app 只看某个应用
+outpost open <argocd|tekton|rollouts|search|mq|registry>
+                                     # 打印 URL + 凭据并自动开浏览器
+outpost logs <app> [--build]         # tail 容器日志 / 最近一次 PipelineRun 日志
+outpost rollback <app>               # argocd app rollback(有确认)
+outpost seal <app> KEY=VALUE ...     # 封装 kubeseal,直接出 SealedSecret YAML
+outpost new-app <name> --lang go|... # 从 examples/hello-world/<lang> scaffold
+outpost decommission <app>           # 引导式清理
+```
+
+加到 PATH:
+
+```bash
+ln -s "$PWD/scripts/outpost" /usr/local/bin/outpost
+```
+
+或直接 `bash scripts/outpost help`。
+
 ## AI 友好
 
 项目内置面向 AI 编程助手的元数据：

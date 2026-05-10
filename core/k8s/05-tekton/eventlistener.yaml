@@ -32,6 +32,15 @@ spec:
           params:
             - name: filter
               value: "header['X-Gitee-Token'][0] == '${GIT_WEBHOOK_SECRET}'"
+        # 2b. 仓库 URL 白名单(可选)。WEBHOOK_REPO_WHITELIST 空 →
+        #     ${CEL_WHITELIST_LIST}=[],filter 短路为 true,接受任意仓库。
+        #     非空 → 只接受白名单内的 git_http_url。把"webhook secret 泄露
+        #     可触发任意仓库 build"的横向爆炸面收住。
+        - ref:
+            name: cel
+          params:
+            - name: filter
+              value: "size(${CEL_WHITELIST_LIST}) == 0 || body.repository.git_http_url in ${CEL_WHITELIST_LIST}"
         # 3. 排除 tag push、删除分支等
         - ref:
             name: cel

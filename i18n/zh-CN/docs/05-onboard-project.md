@@ -21,7 +21,12 @@
 
 ### 2. manifest 仓库 — 加 `apps/<app>/`
 
-参考 `~/infra/k8s/examples/demo-app/` 模板，在 manifest 仓库新建：
+> **更快路径:** `bash scripts/outpost new-app <name> --lang <go|python|java|csharp|react|vue>`
+> 会从对应的 hello-world 模板 scaffold 出 `my-apps/<name>/`,所有重命名都做好。
+> 改完后把 `manifest/` 目录拷进你的 manifest 仓库即可。
+> 完整子命令清单看 `outpost help`。
+
+参考 `examples/demo-app/` 模板,在 manifest 仓库新建:
 
 ```
 apps/<app>/

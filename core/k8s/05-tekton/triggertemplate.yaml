@@ -51,6 +51,8 @@ spec:
             value: $(tt.params.revision)
           - name: image-tag
             value: $(tt.params.short-revision)
+          - name: pusher
+            value: $(tt.params.pusher)
         workspaces:
           - name: shared-workspace
             volumeClaimTemplate:

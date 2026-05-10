@@ -10,6 +10,12 @@ Plain `net/http` for smoke-testing the Outpost CI/CD pipeline.
   rewrites `.images[name=registry.<root>/hello-go].newTag` rather than
   patching `deployment.yaml` directly. To try the legacy mode instead,
   delete `manifest/kustomization.yaml` before copying.
+- **`manifest/rollout.yaml` is an Argo Rollouts variant** — same Pod
+  spec, wrapped in a Rollout CRD with a canary + auto-rollback strategy.
+  Use it to demo / verify Phase J. Pick one:
+  - `git rm rollout.yaml` → keep the simple `Deployment` (default)
+  - `git rm deployment.yaml` → use the canary `Rollout` (analysis fails →
+    automatic traffic restore to the previous stable ReplicaSet)
 
 ## Local sanity check
 

@@ -61,7 +61,8 @@ spec:
         NOTIFY_REF=$(echo "$PAYLOAD"     | jq -r '.ref     // ""')
         NOTIFY_URL=$(echo "$PAYLOAD"     | jq -r '.url     // ""')
         NOTIFY_TEXT=$(echo "$PAYLOAD"    | jq -r '.text    // ""')
-        export NOTIFY_EVENT NOTIFY_LEVEL NOTIFY_APP NOTIFY_ENV NOTIFY_COMMIT NOTIFY_REF NOTIFY_URL NOTIFY_TEXT
+        NOTIFY_PUSHER=$(echo "$PAYLOAD"  | jq -r '.pusher  // ""')
+        export NOTIFY_EVENT NOTIFY_LEVEL NOTIFY_APP NOTIFY_ENV NOTIFY_COMMIT NOTIFY_REF NOTIFY_URL NOTIFY_TEXT NOTIFY_PUSHER
 
         IFS=','; for p in $PROVIDERS; do
           p=$(echo "$p" | tr -d ' ')
