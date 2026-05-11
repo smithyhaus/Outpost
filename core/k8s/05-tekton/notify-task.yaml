@@ -9,8 +9,14 @@
 #   4. POSTs to the webhook (with HMAC sig for dingtalk/feishu if sign-secret set)
 #
 # Used by:
+#   - pipeline-build.yaml `notify-on-start` (build-started)
 #   - pipeline-build.yaml `finally` task on PipelineRun failure
 #   - argocd-notifications controller (via webhook services it defines itself)
+#
+# **HMAC signing math is mirrored from platform/lib/sign-webhook.sh** — the
+# Tekton Task can't easily source that file at runtime, so the 3-line
+# openssl pipeline is duplicated below. tests/bats/sign-webhook.bats has
+# fixture-locked tests on the helper; if you change one, change the other.
 #
 # Idempotent: a delivery failure to one provider does NOT block the others.
 # =============================================================================

@@ -267,3 +267,104 @@ spec:
   [ "$status" -eq 2 ]
   [[ "$output" == *":tag"* ]] || [[ "$output" == *"must contain"* ]]
 }
+
+# ---------- Push retry / rebase (regression coverage for review #2) ----------
+#
+# update-manifest.sh wraps `git push` in a 3-attempt loop with `git fetch +
+# git rebase origin/main` between failures. The fix lives at the end of the
+# script — concurrent PipelineRuns on different apps used to lose deployments
+# because the second push got non-fast-forward and exited 1 silently.
+#
+# We can't reliably race two scripts in bats, so we inject a `git` wrapper on
+# PATH that fails the first N pushes (or all of them) and verify the retry
+# code path. Real `git fetch + rebase + push` is exercised on the success
+# path, so we also confirm the final commit really lands in the bare remote.
+# -----------------------------------------------------------------------------
+
+# Build a git wrapper that fails the first N pushes; passes everything else
+# through to the real git. Writes the wrapper script to "$1/git" and returns
+# the directory path on stdout for prepending to PATH.
+_build_failing_push_wrapper() {
+  local wrap="$1"
+  mkdir -p "$wrap"
+  cat > "$wrap/git" <<'WRAP_EOF'
+#!/usr/bin/env bash
+REAL_GIT="${REAL_GIT:?REAL_GIT not set by test setup}"
+if [ "$1" = "push" ]; then
+  count_file="${MOCK_COUNT_FILE:?MOCK_COUNT_FILE not set by test setup}"
+  count=$(cat "$count_file" 2>/dev/null || echo 0)
+  count=$((count + 1))
+  echo "$count" > "$count_file"
+  if [ "$count" -le "${MOCK_PUSH_FAIL_COUNT:-0}" ]; then
+    echo " ! [rejected]        main -> main (mock non-fast-forward attempt $count)" >&2
+    exit 1
+  fi
+fi
+exec "$REAL_GIT" "$@"
+WRAP_EOF
+  chmod +x "$wrap/git"
+}
+
+@test "push retry: first push fails → rebase + retry → succeeds" {
+  seed_file "apps/hello-go/kustomization.yaml" 'resources:
+  - deployment.yaml
+images:
+  - name: registry.example.com/hello-go
+    newName: registry.example.com/hello-go
+    newTag: old0000'
+
+  local WRAP="$TMP/wrap-1"
+  _build_failing_push_wrapper "$WRAP"
+  export REAL_GIT="$(command -v git)"
+  export MOCK_PUSH_FAIL_COUNT=1
+  export MOCK_COUNT_FILE="$TMP/.push-count-1"
+
+  PATH="$WRAP:$PATH" run "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"push attempt 1/3 failed"* ]] || [[ "$output" == *"pushed on attempt 2"* ]]
+
+  # Final commit really landed in the bare remote.
+  local INSPECT
+  INSPECT=$(inspect_repo)
+  yq -e '.images[0].newTag == "abc1234"' \
+    "$INSPECT/apps/hello-go/kustomization.yaml" >/dev/null
+}
+
+@test "push retry: all 3 pushes fail → script exits non-zero with clear error" {
+  seed_file "apps/hello-go/kustomization.yaml" 'resources:
+  - deployment.yaml
+images:
+  - name: registry.example.com/hello-go
+    newName: registry.example.com/hello-go
+    newTag: old0000'
+
+  local WRAP="$TMP/wrap-2"
+  _build_failing_push_wrapper "$WRAP"
+  export REAL_GIT="$(command -v git)"
+  export MOCK_PUSH_FAIL_COUNT=99   # always fail
+  export MOCK_COUNT_FILE="$TMP/.push-count-2"
+
+  PATH="$WRAP:$PATH" run "$SCRIPT"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"after 3 attempts"* ]] || [[ "$output" == *"all"* ]]
+
+  # Verify NO bump commit landed in remote (every push was rejected).
+  local INSPECT
+  INSPECT=$(inspect_repo)
+  yq -e '.images[0].newTag == "old0000"' \
+    "$INSPECT/apps/hello-go/kustomization.yaml" >/dev/null
+}
+
+@test "push retry: success on first try (no wrapper) — happy path still clean" {
+  # No wrapper at all — real git, real push, no retries needed.
+  seed_file "apps/hello-go/kustomization.yaml" 'resources:
+  - deployment.yaml
+images:
+  - name: registry.example.com/hello-go
+    newName: registry.example.com/hello-go
+    newTag: old0000'
+
+  run "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pushed on attempt 1"* ]]
+}
