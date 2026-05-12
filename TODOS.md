@@ -411,3 +411,110 @@ with main `apps`), wildcard cert (already covered by Cloudflare).
 **Milestone:** v0.3 if there's appetite; could be its own RFC.
 
 ---
+
+## Bake an `outpost/notify-runner` image (kill runtime apk-install in notify-task)
+
+**What:** `core/k8s/05-tekton/notify-task.yaml`'s fanout step is 80+
+lines of inline bash inside the Task spec, and runs
+`apk add --no-cache jq curl gettext openssl coreutils` every single
+PipelineRun. Replace the apk install with a pre-baked image
+`outpost/notify-runner:v1` that ships those binaries.
+
+**Why:**
+- **Performance:** every notification fanout adds 5–10 s. With
+  build-started + finally fanouts, that's 10–20 s per PipelineRun
+  spent on apk-install. Real time when a build storm hits.
+- **Supply chain:** every apk-install reaches out to
+  `dl-cdn.alpinelinux.org` with root privileges in our pipeline pods.
+  Bake the deps once, lock the digest, stop reaching out.
+- **Editability:** the 80-line bash script lives in YAML — no shellcheck,
+  no syntax highlighting, no easy unit testing. Move it to a `.sh` file
+  in the image (or a mounted ConfigMap as an interim step).
+
+**Sketch:**
+- `core/images/notify-runner/Dockerfile` based on `alpine:3.20`,
+  pre-apk-installs `jq curl gettext openssl coreutils bash`, `COPY
+  fanout.sh /usr/local/bin/`.
+- `bootstrap.sh` Phase 9: build + push to the active registry plugin's
+  host (self-hosted → in-cluster, ACR → ACR). Or publish to GHCR
+  directly and skip the build step.
+- `notify-task.yaml` step replaces `image: alpine:3.20` + inline
+  `apk add` with `image: outpost/notify-runner:v1`; the inline script
+  `exec`s the baked `fanout.sh`.
+- Update `tests/bats/sign-webhook.bats` and `notify-task.yaml`'s
+  in-sync comment to point at the new helper file once moved.
+
+**Today's user-visible cost:** ~5–10 s per Pipeline fanout + a tiny
+supply-chain liability. Nothing breaks.
+
+**Depends on:** decide registry-publish strategy (in-cluster vs GHCR).
+
+**Milestone:** v0.3
+
+---
+
+## Per-kind plugin contract enforcement (notification fragments)
+
+**What:** `tests/bats/plugin-contract.bats` enforces the universal
+plugin contract (`plugin.yaml` + `manifest.yaml` + `preflight.sh` +
+`README.md`). But `notification/<provider>/` plugins MUST also ship
+`argocd-cm-fragment.yaml` + `argocd-secret-fragment.yaml`, and that
+extra requirement is enforced ONLY by the dedicated
+`notification-plugins.bats`. A new contributor scaffolding
+`notification/feishu-v2/` by copying `git-provider/gitee/` will have a
+passing `plugin-contract.bats` but a silently broken notification
+wiring at bootstrap time.
+
+**Why:** the plugin model is the strongest part of Outpost's
+architecture (5 kinds, 0 forked deps). Its contract honesty is
+load-bearing for contributor velocity.
+
+**Sketch:**
+- Add `tests/bats/plugin-contract-per-kind.bats` that dispatches on
+  `kind:` from each plugin's `plugin.yaml` and asserts the required
+  per-kind extras. Map today: `notification` → 2 extras; everything
+  else → 0.
+- Or fold the per-kind logic into the existing `plugin-contract.bats`
+  with a kind→required-files dict.
+- Cross-reference from `plugins/README.md` "Authoring a new plugin".
+
+**Today's user-visible cost:** none directly — just a contributor
+footgun.
+
+**Depends on:** none.
+
+**Milestone:** v0.3
+
+---
+
+## `outpost` CLI install pipeline
+
+**What:** `scripts/outpost` is the app-team DX entry point but its
+"install" instructions are a manual
+`ln -s "$PWD/scripts/outpost" /usr/local/bin/outpost` in the README.
+No `make install`, no Homebrew formula, no `outpost upgrade`. App
+teams who get the Outpost-host operator's instructions for the CLI
+have to symlink manually each upgrade.
+
+**Why:** the CLI is the most user-facing artifact we've shipped. Every
+unnecessary install step is a real friction point for the people we
+just spent a wave optimising for.
+
+**Three phases (recommended cadence):**
+1. **`Makefile` target** — `make install` symlinks + path-checks +
+   `make uninstall`. Closest to today's README, lowest cost.
+   Effort: ~15 min CC.
+2. **Homebrew formula** — push a `homebrew-outpost` tap with an
+   `outpost.rb` formula. `brew install smithyhaus/outpost/outpost`.
+   Effort: ~1 h CC, needs a tap repo.
+3. **GitHub Release artifact** — tag-cut a release with a self-contained
+   `outpost` shell binary (no dependency on the repo checkout).
+   Curl-installable. Effort: ~2 h CC, needs a CI workflow.
+
+Recommend 1 → 2 → 3 as adoption grows. 1 is enough for near term.
+
+**Depends on:** none.
+
+**Milestone:** v0.3 phase 1 (`make install`); 2/3 community.
+
+---
