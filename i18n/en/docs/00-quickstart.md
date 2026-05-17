@@ -16,13 +16,18 @@
 > set `OUTPOST_MODE=full` in `.env` and re-run `bootstrap.sh`. Existing
 > data volumes and generated passwords are reused.
 
-> ⚠️ **v0.1 limitation**: `full` mode is fully wired only for **Gitee**
-> (the default). `GIT_PROVIDER_PLUGIN=github` / `gitlab` ship plugin
-> scaffolding but `core/k8s/05-tekton/eventlistener.yaml` does not yet
-> merge the plugin's trigger fragment (see "Multi-provider EventListener
-> wiring" in `TODOS.md`). To use GitHub / GitLab today you'd need to
-> hand-edit the EventListener's CEL filter and binding ref, or wait for
-> v0.2.
+> ℹ️ **Git providers**: as of v0.3, all three git-provider plugins are
+> wired end-to-end. Bootstrap assembles the EventListener from a
+> provider-agnostic envelope (`core/k8s/05-tekton/eventlistener-base.yaml`)
+> plus the active plugin's sibling `trigger.yaml`. Pick one in `.env`:
+>
+> ```env
+> GIT_PROVIDER_PLUGIN=gitee     # default — plain X-Gitee-Token compare
+> # GIT_PROVIDER_PLUGIN=github  # HMAC-SHA256 via Tekton's github interceptor
+> # GIT_PROVIDER_PLUGIN=gitlab  # plain X-Gitlab-Token compare
+> ```
+>
+> The single webhook URL is the same on all three: `https://hooks.<ROOT_DOMAIN>`.
 
 ---
 

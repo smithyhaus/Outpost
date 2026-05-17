@@ -126,7 +126,7 @@ Common: `ComparisonError` → manifest yaml invalid or repo unreachable;
 
 ### `tekton.eventlistener`
 ```bash
-kubectl logs -n tekton-pipelines deploy/el-<provider>-listener --tail 200
+kubectl logs -n tekton-pipelines deploy/el-build-listener --tail 200
 ```
 
 ### `tekton.run.<name>`

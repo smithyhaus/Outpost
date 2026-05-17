@@ -111,6 +111,13 @@ After it finishes:
 | Rollout       | `argo-rollouts` (default — canary + auto-rollback)            | `ROLLOUT_PLUGIN`           |
 | Notification  | `dingtalk`, `feishu`, `wecom`, `webhook-generic`              | `NOTIFICATION_PROVIDERS` *(comma-list)* |
 
+All three git providers are wired end-to-end in v0.3+: the EventListener
+is assembled from a provider-agnostic envelope + the active plugin's
+sibling `trigger.yaml`, so switching `GIT_PROVIDER_PLUGIN` actually
+re-routes webhook handling. GitHub uses Tekton's built-in HMAC
+interceptor (X-Hub-Signature-256); Gitee / GitLab use plain-token
+compare against `GIT_WEBHOOK_SECRET`.
+
 Switch by editing `.env`:
 
 ```env
@@ -181,10 +188,16 @@ Drop Outpost into a Claude Code session and ask "is the stack healthy?" — it w
 
 ## Status
 
-Outpost is **v0.1.0** — initial public release. The v0.1 scope is feature-
-complete; real-world end-to-end verification on macOS / Linux / WSL2 is
-pending. Roadmap items (validated MVP → tunnel plugins, AI ecosystem,
-Helm packaging) live in [`TODOS.md`](TODOS.md).
+Outpost is **v0.2.0** — see [`CHANGELOG.md`](CHANGELOG.md) for what landed
+since v0.1 (zero-friction `local` mode, CI/CD test gate + auto-rollback +
+multi-channel notifications, `outpost` CLI, kaniko build cache,
+EventListener CEL whitelist, sealed-key persistence, dashboard BasicAuth).
+
+End-to-end verification on macOS / Linux / WSL2 is ongoing; roadmap items
+(multi-provider EventListener wiring, tunnel plugin abstraction, Helm
+packaging, app-team DX features) live in [`TODOS.md`](TODOS.md).
+The current version is also in [`VERSION`](VERSION); `outpost version`
+prints `v<VERSION> (commit <sha>)`.
 
 ## Contributing
 

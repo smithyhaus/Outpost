@@ -38,6 +38,27 @@ for _entry in "tekton-pipelines:gitee-credentials" "argocd:gitee-manifest-repo";
   fi
 done
 
+# (c) Trigger-fragment ConfigMaps removed in v0.3.
+#     Pre-v0.3 plugins shipped <provider>-trigger-fragment ConfigMaps;
+#     v0.3 reads the sibling trigger.yaml file directly, so these CMs
+#     are now dead state in the cluster. Safe to delete (no consumer).
+for _name in gitee-trigger-fragment github-trigger-fragment gitlab-trigger-fragment; do
+  if kubectl get -n tekton-pipelines configmap "$_name" >/dev/null 2>&1; then
+    log "  removing tekton-pipelines/configmap/$_name (replaced by sibling trigger.yaml in v0.3)"
+    kubectl delete -n tekton-pipelines configmap "$_name" --ignore-not-found >/dev/null
+  fi
+done
+
+# (d) EventListener renamed in v0.3.
+#     Pre-v0.3 name was `gitee-listener` (provider-specific). v0.3 uses
+#     `build-listener` (provider-agnostic, populated from the active
+#     GIT_PROVIDER_PLUGIN). Service name follows: el-gitee-listener →
+#     el-build-listener.
+if kubectl get -n tekton-pipelines eventlistener gitee-listener >/dev/null 2>&1; then
+  log "  removing tekton-pipelines/eventlistener/gitee-listener (renamed to build-listener in v0.3)"
+  kubectl delete -n tekton-pipelines eventlistener gitee-listener --ignore-not-found >/dev/null
+fi
+
 unset _t _entry _ns _name
 ok "Orphan cleanup done"
 
@@ -112,7 +133,26 @@ kubectl create configmap update-manifest-script \
 kubectl apply -f core/k8s/05-tekton/task-update-manifest.yaml
 
 render_apply "core/k8s/05-tekton/triggertemplate.yaml"
-render_apply "core/k8s/05-tekton/eventlistener.yaml"
+
+# EventListener — provider-agnostic envelope + active plugin's trigger.yaml.
+# Replaces the v0.1 hardcoded Gitee eventlistener.yaml; GIT_PROVIDER_PLUGIN
+# now actually selects which provider routes webhooks.
+# Inline cleanup (no EXIT trap) because Phase 9 sets its own EXIT trap and
+# would override ours — the EL_OUT temp file would then leak. Apply
+# then delete in the same block.
+log "Assembling EventListener for git-provider: ${GIT_PROVIDER_PLUGIN}"
+EL_OUT=$(mktemp -t outpost-eventlistener.XXXXXX)
+if ! assemble_eventlistener \
+      "plugins/git-provider/${GIT_PROVIDER_PLUGIN}/trigger.yaml" \
+      "core/k8s/05-tekton/eventlistener-base.yaml" \
+      "$EL_OUT"; then
+  rm -f "$EL_OUT"
+  err "EventListener assembly failed"
+  exit 1
+fi
+kubectl apply -f "$EL_OUT"
+rm -f "$EL_OUT"
+ok "EventListener applied (provider=${GIT_PROVIDER_PLUGIN}, service=el-build-listener)"
 
 # Tekton Dashboard — Web UI for PipelineRuns / TaskRuns / logs.
 # release-full.yaml gives read+write (cancel run, delete PR, etc).

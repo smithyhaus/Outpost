@@ -28,35 +28,12 @@ spec:
       value: $(body.after)
     - name: short-revision
       # 7-char short SHA produced by the CEL overlay interceptor in
-      # eventlistener.yaml ($(extensions.short_sha) = body.after.substring(0,7)).
-      # Used as image tag — keeps registry tags / kubectl / dashboards readable.
+      # the assembled EventListener ($(extensions.short_sha) =
+      # body.after.substring(0,7)). Used as image tag — keeps registry
+      # tags / kubectl / dashboards readable.
       value: $(extensions.short_sha)
     - name: pusher
       value: $(body.user_name)
----
-# Trigger fragment — merged into the EventListener by bootstrap.sh
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: gitee-trigger-fragment
-  namespace: tekton-pipelines
-data:
-  trigger.yaml: |
-    name: gitee-push
-    interceptors:
-      - ref: { name: cel }
-        params:
-          - name: filter
-            value: "header.match('X-Git-Oschina-Event', 'Push Hook')"
-      - ref: { name: cel }
-        params:
-          - name: filter
-            value: "header['X-Gitee-Token'][0] == '${GIT_WEBHOOK_SECRET}'"
-      - ref: { name: cel }
-        params:
-          - name: filter
-            value: "body.ref.startsWith('refs/heads/') && body.after != '0000000000000000000000000000000000000000'"
-    bindings:
-      - ref: gitee-push-binding
-    template:
-      ref: build-template
+# NOTE: the Trigger spec spliced into the EventListener lives in the
+# sibling file `trigger.yaml`. bootstrap's assemble_eventlistener reads
+# it directly — no ConfigMap is needed in the cluster.

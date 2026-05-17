@@ -36,39 +36,11 @@ spec:
     - name: revision
       value: $(body.after)
     - name: short-revision
-      # 7-char short SHA produced by the CEL overlay interceptor (see
-      # eventlistener.yaml). github plugin currently isn't wired into the
-      # active EventListener; when it is, add an interceptor:
-      #   - ref: { name: cel }
-      #     params:
-      #       - name: overlays
-      #         value: [ { key: short_sha, expression: "body.after.substring(0,7)" } ]
+      # 7-char short SHA produced by the CEL overlay interceptor in
+      # the assembled EventListener. See sibling `trigger.yaml`.
       value: $(extensions.short_sha)
     - name: pusher
       value: $(body.pusher.name)
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: github-trigger-fragment
-  namespace: tekton-pipelines
-data:
-  trigger.yaml: |
-    name: github-push
-    interceptors:
-      - ref: { name: github }
-        params:
-          - name: secretRef
-            value:
-              secretName: github-webhook-secret
-              secretKey: secretToken
-          - name: eventTypes
-            value: ["push"]
-      - ref: { name: cel }
-        params:
-          - name: filter
-            value: "body.ref.startsWith('refs/heads/') && body.after != '0000000000000000000000000000000000000000'"
-    bindings:
-      - ref: github-push-binding
-    template:
-      ref: build-template
+# NOTE: the Trigger spec spliced into the EventListener lives in the
+# sibling file `trigger.yaml`. bootstrap's assemble_eventlistener reads
+# it directly — no ConfigMap is needed in the cluster.

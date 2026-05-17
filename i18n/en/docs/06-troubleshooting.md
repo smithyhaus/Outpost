@@ -89,7 +89,7 @@ restart deploy/argocd-server -n argocd`. Or IngressRoute Host typo.
 
 ### Webhook receives but no PipelineRun
 ```bash
-kubectl logs -n tekton-pipelines deploy/el-<provider>-listener --tail 200
+kubectl logs -n tekton-pipelines deploy/el-build-listener --tail 200
 ```
 Common: signature mismatch (wrong secret in repo's webhook), or CEL filter
 rejects the event.

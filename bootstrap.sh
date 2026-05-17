@@ -47,6 +47,8 @@ source "${INFRA_ROOT}/platform/lib/portable.sh"
 source "${INFRA_ROOT}/platform/lib/registry-config.sh"
 # shellcheck source=platform/lib/cel-helpers.sh
 source "${INFRA_ROOT}/platform/lib/cel-helpers.sh"
+# shellcheck source=platform/lib/eventlistener-assemble.sh
+source "${INFRA_ROOT}/platform/lib/eventlistener-assemble.sh"
 
 export SK_INFRA_DIR="$INFRA_ROOT"
 

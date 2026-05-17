@@ -91,7 +91,7 @@ kubectl get ingressroute -n argocd
 
 ### Webhook 收到但 PipelineRun 没起
 ```bash
-kubectl logs -n tekton-pipelines deploy/el-gitee-listener --tail 200
+kubectl logs -n tekton-pipelines deploy/el-build-listener --tail 200
 ```
 常见：
 - CEL filter 失败 → `X-Gitee-Token` 不匹配

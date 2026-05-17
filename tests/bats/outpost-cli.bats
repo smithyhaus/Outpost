@@ -37,10 +37,11 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-@test "outpost version: prints something" {
+@test "outpost version: prints v<VERSION> and commit" {
   run bash "$CLI" version
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "outpost CLI" ]]
+  # Format: "outpost v<VERSION> (commit <sha>)" — sourced from VERSION file + git
+  [[ "$output" =~ ^outpost\ v[0-9]+\.[0-9]+\.[0-9]+\ \(commit\ .+\)$ ]]
 }
 
 @test "outpost <unknown>: exits non-zero with hint" {

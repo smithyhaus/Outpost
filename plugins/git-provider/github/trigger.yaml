@@ -1,0 +1,45 @@
+# ============================================================================
+# GitHub Trigger — spliced into the EventListener envelope by Phase 8.
+#
+# Auth: Tekton's built-in `github` interceptor verifies X-Hub-Signature-256
+# (HMAC-SHA256) using the github-webhook-secret Secret created by this
+# plugin's manifest.yaml. Stronger than plain-token compare.
+#
+# Order matters — each interceptor short-circuits on false:
+#   1. GitHub HMAC + event-type filter (rejects forged or non-push events)
+#   2. Repo whitelist (rejects out-of-scope repos; opt-in via .env)
+#   3. Ref filter (rejects tag pushes + branch deletions)
+#   4. short_sha overlay (computes 7-char SHA used as image tag)
+# ============================================================================
+- name: github-push
+  interceptors:
+    - ref:
+        name: github
+      params:
+        - name: secretRef
+          value:
+            secretName: github-webhook-secret
+            secretKey: secretToken
+        - name: eventTypes
+          value: ["push"]
+    - ref:
+        name: cel
+      params:
+        - name: filter
+          value: "size(${CEL_WHITELIST_LIST}) == 0 || body.repository.clone_url in ${CEL_WHITELIST_LIST}"
+    - ref:
+        name: cel
+      params:
+        - name: filter
+          value: "body.ref.startsWith('refs/heads/') && body.after != '0000000000000000000000000000000000000000'"
+    - ref:
+        name: cel
+      params:
+        - name: overlays
+          value:
+            - key: short_sha
+              expression: "body.after.substring(0, 7)"
+  bindings:
+    - ref: github-push-binding
+  template:
+    ref: build-template

@@ -31,38 +31,22 @@ Task functions correctly. Just be aware upstream may eventually delete it.
 
 ---
 
-## Multi-provider EventListener wiring (Gitee-only today)
+## ✅ Done in v0.3 — multi-provider EventListener wiring
 
-**What:** The git-provider plugins (`plugins/git-provider/{gitee,github,gitlab}`)
-each emit a `<provider>-trigger-fragment` ConfigMap describing how the
-EventListener's `triggers:` block should be assembled for that provider.
-But `core/k8s/05-tekton/eventlistener.yaml` is currently a **hardcoded
-Gitee** EventListener — it ignores those fragments. Result: today
-`GIT_PROVIDER_PLUGIN=github` and `GIT_PROVIDER_PLUGIN=gitlab` apply the
-plugin's TriggerBinding + ConfigMap, but the EventListener still routes
-through `gitee-push-binding` and the `X-Gitee-Token` CEL filter.
-
-**Concrete TODO:** in `bootstrap.sh` Phase 8, instead of applying the
-hardcoded `eventlistener.yaml`, read the active plugin's
-`<provider>-trigger-fragment` ConfigMap, splice its `trigger.yaml` block
-into a generic EventListener template, and apply the result. Drop the
-hardcoded `eventlistener.yaml`. Move webhook-secret-substitution into
-the plugin layer (each plugin already has the right CEL filter).
-
-**Pros:** `GIT_PROVIDER_PLUGIN` actually means something for github /
-gitlab. Plugin model is honest.
-
-**Cons:** small Bash YAML manipulation (yq dependency).
-
-**Today's user-visible workaround:** keep `GIT_PROVIDER_PLUGIN=gitee`
-(the default) — the only fully wired path in v0.1. The provider-agnostic
-Secret rename (`gitee-credentials` → `git-credentials`,
-`gitee-manifest-repo` → `git-manifest-repo`) and `${GIT_HOST}` parameter
-make the eventual github/gitlab cutover purely local to this file.
-
-**Depends on:** none.
-
-**Milestone:** v0.2
+`bootstrap.sh` Phase 8 now assembles the EventListener from a
+provider-agnostic envelope (`core/k8s/05-tekton/eventlistener-base.yaml`)
+plus the active plugin's sibling `trigger.yaml` file via
+`platform/lib/eventlistener-assemble.sh`. Hardcoded
+`core/k8s/05-tekton/eventlistener.yaml` deleted; service name unified
+to `el-build-listener`. EventListener renamed `gitee-listener` →
+`build-listener` (orphan cleanup in Phase 8 deletes the old name on
+upgrade). Each plugin's stale `<provider>-trigger-fragment` ConfigMap
+also removed (orphan cleanup deletes existing in-cluster copies).
+No yq dependency added — pure bash + awk splice with a strict
+single-marker check (`# OUTPOST_TRIGGERS_HERE`). 10 new bats tests in
+`tests/bats/eventlistener-assemble.bats` cover the 3 providers + bad
+inputs + envsubst residue. `GIT_PROVIDER_PLUGIN={gitee,github,gitlab}`
+now actually selects which provider routes webhooks.
 
 ---
 
@@ -516,5 +500,242 @@ Recommend 1 → 2 → 3 as adoption grows. 1 is enough for near term.
 **Depends on:** none.
 
 **Milestone:** v0.3 phase 1 (`make install`); 2/3 community.
+
+---
+
+## `outpost doctor` — ex-ante diagnostic
+
+**What:** A new subcommand `outpost doctor` (and `bash scripts/outpost doctor`)
+that runs *before* `bootstrap.sh` to surface the failure modes that today
+only show up halfway through phase 4–8 — when the error is a confusing
+Docker / kubectl message rather than a clear "your port 5432 is taken by
+the Homebrew postgres service."
+
+**Why:** `verify.sh` is ex-post (it tells you what's broken after
+bootstrap). `doctor` is ex-ante (it tells you what *will* break before
+you start). The two cheapest failure modes today have no good error:
+host port conflicts (5432/6379/5672/7700/15672) and Docker daemon down.
+On WSL2 a third one — host.docker.internal DNS — only surfaces when
+bridge ExternalName Services fail to resolve in phase 8.
+
+**Concrete checks (v0.3 minimum):**
+- Host ports 5432 / 6379 / 5672 / 15672 / 7700 free (Compose binds them
+  via `ports:`). Use `lsof -iTCP:<port> -sTCP:LISTEN` (Linux/macOS).
+- Docker daemon reachable + Compose v2 plugin present.
+- `host.docker.internal` resolvable from inside a throwaway container
+  (full-mode only). On Linux/WSL2 this requires the `--add-host` shim
+  Compose already applies; verify it actually works.
+- Disk free in `/var/lib/docker` (PG/Meili eat space fast).
+- For full mode: `ROOT_DOMAIN` resolves via DNS, `CF_TUNNEL_TOKEN`
+  format looks right (base64 length).
+- macOS / arm64 specifics: kaniko `executor:v1.5.1` multi-arch
+  available (linked from existing kaniko TODO).
+
+**Pros:**
+- Cuts first-run failure rate without code changes to bootstrap itself.
+- Single binary for "Outpost won't start, what's wrong?" — currently
+  triages live in `docs/06-troubleshooting.md` only.
+- Output is JSON-friendly (same `--json` mode as `verify.sh`) so AI
+  agents can act on it.
+
+**Cons:**
+- Adds a 3rd health-check entry point next to `verify.sh` + `status.sh`.
+  Mitigate: keep `doctor` tightly scoped to *pre-bootstrap* checks;
+  `verify.sh` stays the post-bootstrap canonical.
+
+**Context:** today users hit a port conflict, get a Compose error like
+`Bind for 0.0.0.0:5432 failed: port is already allocated`, then have
+to grep `docs/06-troubleshooting.md`. `doctor` short-circuits that.
+
+**Depends on:** none. Slots into `outpost` CLI router + new
+`scripts/outpost-doctor.sh` (or inline in the router).
+
+**Milestone:** v0.3
+
+---
+
+## CHANGELOG.md + Conventional-Commits → release-notes automation
+
+**What:** Today the repo has no `CHANGELOG.md` and no `VERSION` file.
+`README.md` says "v0.1.0" while `TODOS.md` has 5 entries marked
+"✅ Done in v0.2", and `scripts/outpost version` only prints the git
+SHA. There's no single place a user can read "what landed between
+v0.1 and v0.2."
+
+**Concrete TODO (v0.3, two layers):**
+1. **Static (this PR):** Create `CHANGELOG.md` following
+   [Keep a Changelog](https://keepachangelog.com/). Backfill v0.2
+   from the existing `## ✅ Done in v0.2 — …` headings in `TODOS.md`
+   (they're already written prose; just lift). Create a top-level
+   `VERSION` file (`0.2.0`). Wire `scripts/outpost version` to read
+   `VERSION` *and* git SHA.
+2. **Automated (later):** Adopt Conventional Commits (already mostly
+   in use — `feat:` / `fix:` / `docs:` / `refactor:`). Add a
+   `.github/workflows/release.yml` that on tag push generates release
+   notes from `git log` between the previous tag and this tag,
+   grouped by type.
+
+**Why:**
+- README's current "v0.1.0" claim is false (5 features shipped in v0.2).
+  New users open the repo, see v0.1.0, can't reconcile with the
+  `bootstrap.d/` refactor or the Phase 9 plugins.
+- Without a CHANGELOG, every release requires hand-summarizing the
+  diff — already a friction point on the v0.2 cut.
+- Issue template (`.github/ISSUE_TEMPLATE/bug.yml`) hardcodes
+  `"v0.1.0 / commit abc1234"` as the version placeholder. Either
+  pin a version that gets bumped, or just say `"see VERSION"`.
+
+**Pros:** Cheap; clears a real onboarding confusion; future releases
+write themselves.
+
+**Cons:** Conventional-commit enforcement (PR-time hook) is a separate
+optional layer; without it the release-notes quality depends on
+contributors writing good messages. Suggest: enforce in CI only on
+the v0.4 cycle, give v0.3 time to settle the convention.
+
+**Context:** existing commits already follow `feat: / fix: / docs: /
+refactor: / chore: / test:` — the convention exists in practice,
+just not in writing. `CONTRIBUTING.md` does NOT currently document
+this; add a short section.
+
+**Depends on:** none. The static piece (CHANGELOG + VERSION + outpost
+version + bug.yml placeholder) is < 30 min CC.
+
+**Milestone:** v0.3 (static); v0.4 (automation)
+
+---
+
+## Make `upgrade.sh` actually work in full mode
+
+**What:** `upgrade.sh` today is 5 lines: `docker compose pull && up -d`.
+That covers the Compose layer (PG / Redis / RabbitMQ / Meili /
+cloudflared / caddy) but does *nothing* for the full-mode k3s layer:
+ArgoCD, Tekton, Sealed-Secrets controller, Testkube, Argo Rollouts,
+or the in-cluster Docker Registry.
+
+**Why this is a silent-failure-grade bug:** a full-mode user running
+`bash upgrade.sh` after a Tekton CVE announcement *thinks* they upgraded
+but actually only refreshed the data layer. The k8s layer is silently
+unchanged. No warning, no exit code, no log line.
+
+**Concrete TODO:**
+- **`upgrade.sh` becomes mode-aware** (same pattern as `bootstrap.sh`):
+  in `local` mode keep the current Compose-only behavior; in `full`
+  mode also:
+  - `kubectl apply --server-side -f` re-apply the pinned ArgoCD /
+    Tekton / Sealed-Secrets manifests (the same URLs bootstrap.d/06
+    and 08 use). Image tags are already pinned via the upstream
+    `stable/install.yaml`-style URLs, so re-apply is a controlled bump
+    to whatever the pinned URL resolves to.
+  - `helm upgrade testkube` / `helm upgrade argo-rollouts` for the
+    helm-installed pieces (matches what 09-test-gate.sh installs).
+  - Print a final diff/summary: "ArgoCD: X.Y.Z → A.B.C" etc.
+- **Or:** explicitly pin every upstream URL to a version (e.g.
+  `argo-cd/v2.13.0/manifests/install.yaml`) and have `upgrade.sh`
+  bump those pins in-repo, commit, then re-apply. Less magic, more
+  auditable.
+
+**Pros:** closes a real security-relevant silent failure. Aligns with
+the bootstrap.d/ refactor (per-phase scripts are easy to call from
+upgrade.sh too).
+
+**Cons:** k8s component upgrades occasionally need pre-/post-migration
+hooks (ArgoCD has had a few of these). Mitigate: pin specific known-
+good versions, document the upgrade matrix in `docs/`. Don't chase
+`latest`.
+
+**Context:** every existing user has been promised "re-running
+bootstrap.sh is idempotent" (README). That covers re-install but
+doesn't address version drift. `upgrade.sh` is the right surface to
+fix.
+
+**Depends on:** decision on pin strategy (pin-in-repo vs upstream
+floating). Recommend: pin in repo, bump via PR.
+
+**Milestone:** v0.3
+
+---
+
+## README demo — asciinema or animated GIF
+
+**What:** README is currently 250+ lines of prose tables. No motion
+asset. New users hitting the GitHub page in 2026 expect a 20–40s
+visual showing `bash bootstrap.sh` going from empty box to live
+`INFRA.md` with connection strings (local mode is perfect for this —
+no Cloudflare setup needed in the demo).
+
+**Concrete TODO:**
+- Record a local-mode bootstrap with asciinema (`asciinema rec`) on a
+  fresh Docker-installed VM, edit out the dead time, embed in README
+  above the existing "Quick start" section.
+- Or: a GIF (smaller, plays inline in GitHub README). Trade-off:
+  asciinema embeds via SVG and stays text-selectable; GIF is universal.
+- Suggested copy: "0 → working Postgres + Redis + RabbitMQ + Meilisearch
+  in 90s" with the timestamps visible.
+
+**Why:** the local-mode value prop is hard to convey in text. The
+demo is the highest-ROI single doc change for adoption.
+
+**Pros:** Cheap (~30 min CC + the actual recording), no code change.
+Lives in `docs/assets/` so it can be regenerated per release.
+
+**Cons:** Assets bloat git history. Mitigate: keep under 1 MB; use
+git LFS if you go GIF + record at multiple breakpoints.
+
+**Context:** existing README has good information density but no
+visual hook. Compare to projects like `supabase/cli`, `tilt-dev/tilt`,
+`vercel/turbo` — all lead with a 20-second visual.
+
+**Depends on:** none.
+
+**Milestone:** v0.3
+
+---
+
+## Opt-in anonymous telemetry
+
+**What:** Add a single optional env var `OUTPOST_TELEMETRY=anonymous`
+(default: unset = off) that pings a one-line JSON event on
+`bootstrap.sh` success and on each `outpost <subcommand>` invocation.
+Payload: `{plugin_set, os, mode, outpost_version, run_id_random}`.
+**Never** sends domain, repo URL, tokens, paths, or anything identifying.
+
+**Why:** today there's no way to know which `REGISTRY_PLUGIN` /
+`GIT_PROVIDER_PLUGIN` / notification provider combinations are actually
+used in the wild. v0.4 prioritization is therefore guesswork. A simple
+opt-in counter is enough to decide whether `gitlab` plugin gets
+investment vs `aliyun-acr`.
+
+**Pros:** data-driven roadmap; cheap to implement (~1h CC); fully
+opt-in so privacy posture stays clean.
+
+**Cons:**
+- Even opt-in telemetry has a trust cost. Mitigate: ship with default
+  off, document exactly what's sent, link to the (open-source) ingest
+  endpoint, support `OUTPOST_TELEMETRY=off` as an explicit no.
+- Requires an ingest endpoint someone has to operate. Options:
+  - Self-hosted on the same Outpost (eat your own dog food) — visible
+    in `verify.sh`.
+  - GitHub Issues API: post a one-line comment to a "telemetry"
+    issue. Cheap, no infra to run, but throttled.
+  - Cloudflare Workers free tier — already a Cloudflare-shop project.
+
+**Context:** ECC has the broader `~/.gstack/analytics/skill-usage.jsonl`
+pattern (local-only telemetry; user can read & opt out by deleting
+the file). Could adopt the same local-only pattern as v0.3 and only
+add a remote-sink option in v0.4 once the schema is stable.
+
+**Sketch:**
+- `platform/lib/telemetry.sh` exports `emit_telemetry "event_name" k=v ...`
+- Honor `OUTPOST_TELEMETRY={off|local|anonymous}` (default: off; local
+  writes to `~/.outpost/usage.jsonl`; anonymous additionally posts to
+  the ingest endpoint).
+- Document in `README.md` §Privacy.
+
+**Depends on:** decision on ingest strategy (none / local-only /
+hosted). Recommend: start with `local` mode in v0.3, `anonymous`
+remote in v0.4 after dogfooding the schema.
+
+**Milestone:** v0.3 (local mode); v0.4 (anonymous remote)
 
 ---

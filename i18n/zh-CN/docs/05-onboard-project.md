@@ -203,8 +203,5 @@ kubectl logs -n tekton-pipelines -l tekton.dev/pipelineRun=<run> --all-container
 
 如果某个项目代码在 GitLab 或 GitHub：
 - Webhook 配置方式相同，URL 都是 `https://hooks.<root>`
-- 但 EventListener 当前的 CEL filter 只接 Gitee（`X-Git-Oschina-Event`）
-- 需要在 `k8s/05-tekton/eventlistener.yaml` 加新的 trigger（不同 interceptor + binding）
-- 见 `k8s/05-tekton/triggerbinding-gitee.yaml` 仿写一份 GitLab/GitHub 版本
-
-本期模板只覆盖 Gitee，其他平台后续按需扩展。
+- v0.3+：在 `.env` 改 `GIT_PROVIDER_PLUGIN=github` 或 `gitlab`，重跑 `bash bootstrap.sh` 即可。bootstrap 会用对应 plugin 的 sibling `trigger.yaml` 重新装配 EventListener（GitHub 走 Tekton 内置 HMAC interceptor，GitLab 走明文 `X-Gitlab-Token`）。
+- 要新增第四种 provider：在 `plugins/git-provider/<name>/` 下放 `trigger.yaml`（描述 Trigger spec）、`manifest.yaml`（描述 TriggerBinding）、`plugin.yaml`、`preflight.sh`、`README.md`，参考 gitee/github/gitlab。

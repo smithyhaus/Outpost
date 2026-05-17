@@ -70,9 +70,10 @@ EOF
 }
 
 cmd_version() {
-  local sha
+  local ver="unknown" sha="unknown"
+  [[ -f "$OUTPOST_HOME/VERSION" ]] && ver=$(tr -d '[:space:]' < "$OUTPOST_HOME/VERSION")
   sha=$(git -C "$OUTPOST_HOME" rev-parse --short HEAD 2>/dev/null || echo "unknown")
-  echo "outpost CLI @ $sha"
+  echo "outpost v${ver} (commit ${sha})"
 }
 
 # --- platform ---------------------------------------------------------------

@@ -19,8 +19,8 @@ body:
     id: version
     attributes:
       label: Outpost version
-      description: Output of `git -C <outpost dir> describe --tags --always`
-      placeholder: "v0.1.0 / commit abc1234"
+      description: Output of `bash scripts/outpost version` (e.g. `outpost v0.2.0 (commit abc1234)`)
+      placeholder: "outpost v0.2.0 (commit abc1234)"
     validations:
       required: true
   - type: dropdown

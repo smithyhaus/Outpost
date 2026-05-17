@@ -173,7 +173,7 @@ kubectl get application -n argocd <name> -o yaml | yq '.status.conditions'
 kubectl get eventlistener -n tekton-pipelines
 kubectl get svc -n tekton-pipelines | grep el-
 ```
-**预期**：`gitee-listener` Ready=True，对应 service `el-gitee-listener` 端口 8080。
+**预期**：`build-listener` Ready=True，对应 service `el-build-listener` 端口 8080（v0.3 起名字与 git provider 解耦）。
 
 **测试 webhook 入口**（不发实际 push）：
 ```bash
@@ -184,7 +184,7 @@ curl -sS -o /dev/null -w "%{http_code}\n" \
 
 **EventListener pod 异常**：
 ```bash
-kubectl logs -n tekton-pipelines deploy/el-gitee-listener --tail 100
+kubectl logs -n tekton-pipelines deploy/el-build-listener --tail 100
 ```
 
 ### 1.10 Tekton 最近 PipelineRun

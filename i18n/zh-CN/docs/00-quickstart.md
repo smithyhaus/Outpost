@@ -13,7 +13,15 @@
 
 > 两种模式可随时切换。先 `local`,熟悉后改 `.env` 的 `OUTPOST_MODE=full` 重跑 `bootstrap.sh`,数据卷与已生成的密码会被复用。
 
-> ⚠️ **v0.1 限制**:full 模式当前**只完整支持 Gitee**(默认)。`GIT_PROVIDER_PLUGIN=github` / `gitlab` 的插件框架已就位,但 `core/k8s/05-tekton/eventlistener.yaml` 没合并 plugin 的 trigger fragment(详见 `TODOS.md` 的"Multi-provider EventListener wiring")。短期想用 GitHub / GitLab 的话,你需要手工改 EventListener 的 CEL filter 和 binding,或等 v0.2。
+> ℹ️ **Git providers**：从 v0.3 起，三个 git-provider plugin 都已端到端打通。bootstrap 会用"通用 EventListener 外壳（`core/k8s/05-tekton/eventlistener-base.yaml`）+ 当前选中 plugin 的 sibling `trigger.yaml`"装配 EventListener。在 `.env` 选其一即可：
+>
+> ```env
+> GIT_PROVIDER_PLUGIN=gitee     # 默认 —— 明文 X-Gitee-Token 比对
+> # GIT_PROVIDER_PLUGIN=github  # Tekton 内置 github interceptor 走 HMAC-SHA256
+> # GIT_PROVIDER_PLUGIN=gitlab  # 明文 X-Gitlab-Token 比对
+> ```
+>
+> 三者共用同一个 webhook 地址：`https://hooks.<ROOT_DOMAIN>`。
 
 ---
 

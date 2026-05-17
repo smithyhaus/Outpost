@@ -108,6 +108,12 @@ bash verify.sh             # 应全 PASS
 | 渐进发布     | `argo-rollouts` (默认 — 金丝雀 + 自动回滚)                  | `ROLLOUT_PLUGIN`                         |
 | 通知通道     | `dingtalk`, `feishu`, `wecom`, `webhook-generic`           | `NOTIFICATION_PROVIDERS` *(逗号分隔)*    |
 
+v0.3+ 三个 git provider 都已端到端打通：EventListener 由"通用外壳 +
+当前选中 plugin 的 sibling `trigger.yaml`"装配而成，切换
+`GIT_PROVIDER_PLUGIN` 会真正改变 webhook 路由。GitHub 使用 Tekton 内置
+HMAC interceptor（X-Hub-Signature-256）；Gitee / GitLab 使用
+`GIT_WEBHOOK_SECRET` 做明文 token 比对。
+
 通过 `.env` 切换:
 
 ```env
@@ -178,9 +184,16 @@ ln -s "$PWD/scripts/outpost" /usr/local/bin/outpost
 
 ## 项目状态
 
-Outpost 当前为 **v0.1.0** —— 首次公开发布。v0.1 范围功能完整，但 macOS /
-Linux / WSL2 上的真机端到端验证仍在进行中。路线图（验证后的 MVP → tunnel
-plugin、AI 生态、Helm 打包）见 [`TODOS.md`](TODOS.md)。
+Outpost 当前为 **v0.2.0** —— 自 v0.1 之后新增内容见
+[`CHANGELOG.md`](CHANGELOG.md)：零摩擦的 `local` 模式、CI/CD 测试网关 +
+自动回滚 + 多通道告警、`outpost` CLI、kaniko 构建缓存、EventListener CEL
+白名单、SealedSecret 主密钥跨重置保留、Dashboard BasicAuth 等。
+
+macOS / Linux / WSL2 上的真机端到端验证仍在进行中；路线图
+（多 git provider EventListener 真接入、tunnel plugin 抽象、Helm 打包、
+应用团队 DX 功能）见 [`TODOS.md`](TODOS.md)。
+当前版本号也可在 [`VERSION`](VERSION) 中查到；`outpost version`
+会打印 `v<VERSION> (commit <sha>)`。
 
 ## 贡献
 

@@ -1,0 +1,47 @@
+# ============================================================================
+# GitLab Trigger — spliced into the EventListener envelope by Phase 8.
+#
+# Auth: plain-token compare (X-Gitlab-Token header == GIT_WEBHOOK_SECRET).
+# GitLab does NOT offer HMAC webhooks; this is the only signature mode.
+# Supports both gitlab.com and self-hosted CE/EE.
+#
+# Order matters — each interceptor short-circuits on false:
+#   1. Header type filter (rejects non-push events)
+#   2. Token filter (rejects forged requests)
+#   3. Repo whitelist (rejects out-of-scope repos; opt-in via .env)
+#   4. Ref filter (rejects tag pushes + branch deletions)
+#   5. short_sha overlay (computes 7-char SHA used as image tag)
+# ============================================================================
+- name: gitlab-push
+  interceptors:
+    - ref:
+        name: cel
+      params:
+        - name: filter
+          value: "header.match('X-Gitlab-Event', 'Push Hook')"
+    - ref:
+        name: cel
+      params:
+        - name: filter
+          value: "header['X-Gitlab-Token'][0] == '${GIT_WEBHOOK_SECRET}'"
+    - ref:
+        name: cel
+      params:
+        - name: filter
+          value: "size(${CEL_WHITELIST_LIST}) == 0 || body.repository.git_http_url in ${CEL_WHITELIST_LIST}"
+    - ref:
+        name: cel
+      params:
+        - name: filter
+          value: "body.ref.startsWith('refs/heads/') && body.after != '0000000000000000000000000000000000000000'"
+    - ref:
+        name: cel
+      params:
+        - name: overlays
+          value:
+            - key: short_sha
+              expression: "body.after.substring(0, 7)"
+  bindings:
+    - ref: gitlab-push-binding
+  template:
+    ref: build-template
