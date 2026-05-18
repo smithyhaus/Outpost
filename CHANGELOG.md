@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **AI-agent on-ramp docs** — `AGENTS.md` (top-level, agents.md
+  convention) and `.github/copilot-instructions.md` (GitHub Copilot
+  Workspace). Both are stubs that point at `SKILL.md` as canonical
+  source — no generator, no drift risk.
+- **i18n edit-time drift check** in `tests/lint.sh` — for each EN/zh
+  file pair, compares the most-recent commit timestamps and WARNs when
+  EN is newer than zh. Complements the v0.2 filename-parity check.
+  Wired through `.github/workflows/lint.yml` automatically.
+- **ADR framework** under `docs/decisions/`: Nygard-style template,
+  index, and the first ADR documenting the Compose+k3s two-layer
+  architectural decision.
 - **`make install` / `make uninstall`** for the `outpost` CLI — replaces
   the manual `ln -s` step from v0.2. Idempotent, refuses to clobber
   strangers, refuses to uninstall symlinks it doesn't own, warns when

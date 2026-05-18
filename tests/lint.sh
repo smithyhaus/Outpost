@@ -49,8 +49,10 @@ else
 fi
 
 phase "i18n filename parity"
-en_files=$(find i18n/en -type f -name '*.md' -o -name '*.template' 2>/dev/null | sed 's#^i18n/en/##' | sort)
-zh_files=$(find i18n/zh-CN -type f -name '*.md' -o -name '*.template' 2>/dev/null | sed 's#^i18n/zh-CN/##' | sort)
+# `find -type f \( -name A -o -name B \)` — explicit grouping so -type f
+# applies to both name patterns.
+en_files=$(find i18n/en -type f \( -name '*.md' -o -name '*.template' \) 2>/dev/null | sed 's#^i18n/en/##' | sort)
+zh_files=$(find i18n/zh-CN -type f \( -name '*.md' -o -name '*.template' \) 2>/dev/null | sed 's#^i18n/zh-CN/##' | sort)
 en_only=$(comm -23 <(echo "$en_files") <(echo "$zh_files") | grep -v '^$' || true)
 zh_only=$(comm -13 <(echo "$en_files") <(echo "$zh_files") | grep -v '^$' || true)
 if [[ -n "$en_only$zh_only" ]]; then
@@ -58,6 +60,43 @@ if [[ -n "$en_only$zh_only" ]]; then
   [[ -n "$en_only" ]] && echo "  EN-only: $en_only"
   [[ -n "$zh_only" ]] && echo "  zh-CN-only: $zh_only"
   # WARN, not FAIL — translations may legitimately lag by one PR
+fi
+
+phase "i18n edit-time drift"
+# For each EN file with a zh-CN peer, compare the commit timestamp of the
+# most recent commit touching each. If EN was edited more recently than
+# its peer, the translation is potentially stale — WARN (not FAIL, since a
+# one-PR lag during review is normal). Skips files where one side is
+# missing (already flagged by the filename-parity check above).
+if command -v git >/dev/null && git -C "$INFRA_ROOT" rev-parse >/dev/null 2>&1; then
+  stale_count=0
+  # Iterate over files that exist in BOTH locales.
+  comm -12 <(echo "$en_files") <(echo "$zh_files") | while IFS= read -r rel; do
+    [[ -z "$rel" ]] && continue
+    en_path="i18n/en/$rel"
+    zh_path="i18n/zh-CN/$rel"
+    en_ts=$(git log -1 --format=%ct -- "$en_path" 2>/dev/null || echo 0)
+    zh_ts=$(git log -1 --format=%ct -- "$zh_path" 2>/dev/null || echo 0)
+    # Only flag when EN is strictly newer. Equal timestamps (same commit
+    # touched both) is the in-sync state — that's the goal.
+    if [[ "$en_ts" -gt "$zh_ts" && "$zh_ts" -gt 0 ]]; then
+      delta_days=$(( (en_ts - zh_ts) / 86400 ))
+      warn "  EN newer than zh by ${delta_days}d: $rel"
+      stale_count=$((stale_count + 1))
+    fi
+  done
+  # `wc -l` to count outside the subshell since the loop's vars don't escape.
+  drift=$(comm -12 <(echo "$en_files") <(echo "$zh_files") | while read -r rel; do
+    [[ -z "$rel" ]] && continue
+    en_ts=$(git log -1 --format=%ct -- "i18n/en/$rel" 2>/dev/null || echo 0)
+    zh_ts=$(git log -1 --format=%ct -- "i18n/zh-CN/$rel" 2>/dev/null || echo 0)
+    [[ "$en_ts" -gt "$zh_ts" && "$zh_ts" -gt 0 ]] && echo "$rel"
+  done | wc -l | tr -d ' ')
+  if [[ "$drift" -gt 0 ]]; then
+    warn "i18n edit-time drift: $drift file(s) where EN was edited after zh — translations may be stale"
+  fi
+else
+  warn "git not available or not a repo — skipping edit-time drift check"
 fi
 
 phase "no committed secrets"

@@ -145,36 +145,22 @@ credentials secret).
 
 ---
 
-## AI-tool ecosystem coverage (AGENTS.md / Cursor / Copilot)
+## ✅ Done in v0.3 — AGENTS.md + .github/copilot-instructions.md
 
-**What:** Author additional AI metadata files alongside the existing
-`SKILL.md` (Claude) and `llms.txt`:
-- `AGENTS.md` — Cursor / Cline convention
-- `.github/copilot-instructions.md` — GitHub Copilot Workspace
+Both files added as **stubs that point at SKILL.md as canonical**, not
+generated duplicates. Each file restates the 4 critical facts (two modes,
+plugin model, no-silent-failures, tests-first) inline, summarises the
+repo layout, and lists "what NOT to do" — then links to SKILL.md for
+depth. Zero generator: no drift risk because there's only one
+authoritative source.
 
-Generate them from `SKILL.md` rather than maintain three independent
-sources.
+Trade-off accepted vs the original "generator" proposal: AGENTS.md and
+copilot-instructions.md will lag SKILL.md if its structure changes, but
+the 4 critical facts are stable enough that manual stubs are lower-cost
+than maintaining a generator + its bats coverage.
 
-**Why:** v0.1 chose "SKILL.md + llms.txt only", which trades away ~80% of
-the AI-tool ecosystem. Adding the two formats above is cheap (≤30 min
-CC time) once we have a generator.
-
-**Pros:**
-- Cursor / Cline / Aider users get first-class onboarding.
-- Demonstrates that "AI-friendly by design" is real, not lip service.
-
-**Cons:**
-- Three docs to keep in sync. Mitigation: a generator script that derives
-  the secondary files from `SKILL.md`.
-
-**Context:** `SKILL.md` already follows a structured layout (Identity →
-Architecture → File pointer map → Invariants → Operating principles →
-Verification → Common tasks → Out of scope). A generator can extract
-these sections and reformat per target tool.
-
-**Depends on:** none.
-
-**Milestone:** v0.2
+If a third AI-tool convention emerges in v0.4 and the stub burden grows,
+revisit the generator idea then.
 
 ---
 
@@ -206,29 +192,22 @@ need a small refactor to switch.
 
 ---
 
-## i18n drift detection (CI workflow)
+## ✅ Done in v0.3 — i18n drift detection (filename parity + edit-time)
 
-**What:** A GitHub Actions step that warns if the file set under
-`i18n/<lang>/` diverges between languages, or if a file in one language
-has been edited more recently than its peer.
+`tests/lint.sh` carries two i18n phases (both WARN, never FAIL — a
+translation lag of one PR is normal):
 
-**Why:** Without automation, EN and zh-CN drift over months. Today we rely
-on PR review, which is fragile.
+1. **Filename parity** (already in v0.2) — `find` + `comm` to flag
+   files present in one locale but not the other.
+2. **Edit-time drift** (new in v0.3) — for each file pair, compare the
+   commit timestamp of the most recent commit touching each side via
+   `git log -1 --format=%ct`. If EN is strictly newer than zh, WARN with
+   the day delta. Equal timestamps (same commit touched both, the goal
+   state) → silent.
 
-**Pros:**
-- Cheap to implement.
-- Prevents the most common bilingual-doc decay.
-
-**Cons:**
-- False positives when a translation legitimately lags by one PR.
-- Requires git history analysis (modified time) — not just file presence.
-
-**Context:** `tests/lint.sh` is the natural home for the file-presence
-check. Drift-by-mtime is a separate workflow step.
-
-**Depends on:** none.
-
-**Milestone:** v0.2
+Wired into `.github/workflows/lint.yml` automatically since that
+workflow already runs `bash tests/lint.sh`. No new workflow file
+needed.
 
 ---
 
@@ -276,25 +255,29 @@ runner availability.
 
 ---
 
-## ADR (Architecture Decision Records)
+## ✅ Done in v0.3 — ADR framework + first ADR
 
-**What:** Add `docs/decisions/` containing ADRs for the major
-architectural choices (two-layer split, cloudflared as the only ingress,
-plugin model, etc.).
+`docs/decisions/` directory now contains:
+- `README.md` — explains the why/when/how of ADRs in this repo, and the
+  index table.
+- `0000-template.md` — Michael Nygard format adapted to be light
+  (Context / Decision / Consequences / Alternatives considered /
+  References).
+- `0001-two-layer-split.md` — documents the most-asked architectural
+  question: why Compose for data + k3s for apps, not all-in-one.
 
-**Why:** As contributors arrive, "why not Helm-chart everything" / "why
-not k8s for data services" / "why Cloudflare specifically" will recur.
-ADRs preempt the discussion.
+### ⏳ v0.4 community-driven follow-ups (more ADRs)
 
-**Pros:** durable institutional knowledge.
+The original TODO listed several other decisions worth documenting.
+Pick them up as the questions actually recur:
+- "Why cloudflared as the only ingress (not Tailscale / frp / ngrok)?"
+- "Why a plugin model at all (vs forking deps)?"
+- "Why Argo Rollouts vs Flagger?"
+- "Why Testkube vs catalog Tasks as the default test runner?"
+- "Why kaniko vs buildah vs BuildKit?"
 
-**Cons:** writing burden upfront.
-
-**Context:** [Michael Nygard's ADR format](https://github.com/joelparkerhenderson/architecture-decision-record).
-
-**Depends on:** none.
-
-**Milestone:** v0.2 if a maintainer has appetite; otherwise community
+No need to backfill all at once — write them when someone actually asks
+the question or proposes the alternative.
 
 ---
 
