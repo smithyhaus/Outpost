@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`make install` / `make uninstall`** for the `outpost` CLI — replaces
+  the manual `ln -s` step from v0.2. Idempotent, refuses to clobber
+  strangers, refuses to uninstall symlinks it doesn't own, warns when
+  the install prefix isn't on `$PATH`. Overridable `PREFIX` and
+  `DESTDIR`. 11 bats tests cover happy path + 4 refusal cases.
 - **Per-kind plugin contract enforcement** —
   `tests/bats/plugin-contract-per-kind.bats` dispatches on the `kind:`
   field of each `plugin.yaml` and asserts per-kind required extras

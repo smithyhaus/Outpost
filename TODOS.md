@@ -467,35 +467,29 @@ loudly until a deliberate branch is added.
 
 ---
 
-## `outpost` CLI install pipeline
+## ✅ Done in v0.3 — `outpost` CLI install (phase 1: `make install`)
 
-**What:** `scripts/outpost` is the app-team DX entry point but its
-"install" instructions are a manual
-`ln -s "$PWD/scripts/outpost" /usr/local/bin/outpost` in the README.
-No `make install`, no Homebrew formula, no `outpost upgrade`. App
-teams who get the Outpost-host operator's instructions for the CLI
-have to symlink manually each upgrade.
+Top-level `Makefile` ships `install` / `uninstall` / `version` / `help`.
+`make install` is idempotent (re-run = no-op), validates that
+`scripts/outpost` is executable, mkdir's the PREFIX dir, refuses to
+clobber non-symlink strangers, replaces stale symlinks pointing
+elsewhere, warns when `PREFIX` isn't on `$PATH`. `make uninstall` is
+ownership-aware — only removes a symlink that points at this repo's
+`scripts/outpost` (so the user can't accidentally `make uninstall`
+some other `outpost` binary). 11 bats tests in
+`tests/bats/makefile.bats` cover happy path + idempotency + 4 refusal
+cases. README/zh-CN updated.
 
-**Why:** the CLI is the most user-facing artifact we've shipped. Every
-unnecessary install step is a real friction point for the people we
-just spent a wave optimising for.
+### ⏳ v0.4 follow-ups — phases 2 + 3 (community-driven)
 
-**Three phases (recommended cadence):**
-1. **`Makefile` target** — `make install` symlinks + path-checks +
-   `make uninstall`. Closest to today's README, lowest cost.
-   Effort: ~15 min CC.
-2. **Homebrew formula** — push a `homebrew-outpost` tap with an
-   `outpost.rb` formula. `brew install smithyhaus/outpost/outpost`.
-   Effort: ~1 h CC, needs a tap repo.
-3. **GitHub Release artifact** — tag-cut a release with a self-contained
-   `outpost` shell binary (no dependency on the repo checkout).
-   Curl-installable. Effort: ~2 h CC, needs a CI workflow.
+2. **Homebrew formula** — `brew install smithyhaus/outpost/outpost` via
+   a `homebrew-outpost` tap repo. Effort: ~1h CC, needs a tap repo
+   under the org.
+3. **GitHub Release artifact** — tag-cut a release with a
+   self-contained `outpost` shell binary (no dependency on the repo
+   checkout). Curl-installable. Effort: ~2h CC, needs a CI workflow.
 
-Recommend 1 → 2 → 3 as adoption grows. 1 is enough for near term.
-
-**Depends on:** none.
-
-**Milestone:** v0.3 phase 1 (`make install`); 2/3 community.
+Adoption-gated; phase 1 covers near-term need.
 
 ---
 

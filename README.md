@@ -150,13 +150,15 @@ outpost new-app <name> --lang go|... # scaffold from examples/hello-world/<lang>
 outpost decommission <app>           # guided cleanup
 ```
 
-Add to PATH:
+Install:
 
 ```bash
-ln -s "$PWD/scripts/outpost" /usr/local/bin/outpost
+make install                          # symlinks → /usr/local/bin/outpost (idempotent)
+make install PREFIX=~/.local/bin      # alternate prefix
+make uninstall                        # only removes if symlink points at this repo
 ```
 
-Or invoke directly: `bash scripts/outpost help`.
+Or invoke directly without installing: `bash scripts/outpost help`.
 
 See [`plugins/README.md`](plugins/README.md) for the plugin contract and how to author your own.
 

@@ -147,13 +147,15 @@ outpost new-app <name> --lang go|... # 从 examples/hello-world/<lang> scaffold
 outpost decommission <app>           # 引导式清理
 ```
 
-加到 PATH:
+安装：
 
 ```bash
-ln -s "$PWD/scripts/outpost" /usr/local/bin/outpost
+make install                          # symlink 到 /usr/local/bin/outpost（幂等）
+make install PREFIX=~/.local/bin      # 换一个 prefix
+make uninstall                        # 只移除指向本仓库的 symlink
 ```
 
-或直接 `bash scripts/outpost help`。
+或者不装直接跑：`bash scripts/outpost help`。
 
 ## AI 友好
 
