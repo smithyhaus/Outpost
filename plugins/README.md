@@ -65,19 +65,26 @@ resolve abort the install instead of silently producing broken output.
 5. Add a smoke test entry in `tests/bats/<kind>-plugins.bats`
 6. Open a PR — see `CONTRIBUTING.md`
 
-### Notification plugin extra files
+### Per-kind required extras (beyond the universal contract)
 
-Notification plugins additionally contribute install-time fragments that
-bootstrap merges into ArgoCD's notifications config:
+Some kinds need extra files on top of the universal contract. These
+are enforced by `tests/bats/plugin-contract-per-kind.bats` — copy a
+plugin from another kind to scaffold yours and you'll see this fail
+loudly, by design.
 
-| File                        | Purpose |
-|-----------------------------|---------|
-| `argocd-cm-fragment.yaml`   | Lines under `data:` of `argocd-notifications-cm` (services + templates) |
-| `argocd-secret-fragment.yaml` | Lines under `stringData:` of `argocd-notifications-secret` (URL keys) |
+| Kind          | Extra file(s)                                      | Purpose |
+|---------------|----------------------------------------------------|---------|
+| `notification`| `argocd-cm-fragment.yaml`, `argocd-secret-fragment.yaml` | Concatenated by `bootstrap.d/09` into `argocd-notifications-{cm,secret}` (services + templates + URL keys) |
+| `git-provider`| `trigger.yaml`                                     | Spliced into the EventListener envelope by `platform/lib/eventlistener-assemble.sh` (provider-specific Trigger spec — auth + filters + binding + template ref) |
+| `registry`    | *(none)*                                           | |
+| `test-runner` | *(none)*                                           | |
+| `rollout`     | *(none)*                                           | |
 
-Both fragments are 2-space-indented. bootstrap concatenates them onto a base
-template and applies once, so the resulting CM/Secret carries entries for
-every enabled provider.
+Notification fragments are 2-space-indented; bootstrap concatenates
+them onto a base template once, so the resulting CM/Secret carries
+entries for every enabled provider.
 
 Built-in plugins are the reference implementation. When in doubt, copy
-`plugins/registry/self-hosted/` and modify.
+a plugin **of the same kind** you're authoring (e.g. copy
+`plugins/notification/wecom/` to build a new notification plugin).
+Cross-kind copy-paste trips the per-kind contract.

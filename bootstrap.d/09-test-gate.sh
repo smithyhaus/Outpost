@@ -94,6 +94,21 @@ ok "Rollout plugin ready (https://${ROLLOUTS_DASHBOARD_HOST})"
 # ---- 9c. Notifications ----
 # argocd-notifications is shipped as part of ArgoCD core (>=2.3); the controller
 # auto-discovers argocd-notifications-cm + argocd-notifications-secret.
+
+# Pre-step: ConfigMap for the notify-task's mounted scripts. Carries both
+# scripts/notify-fanout.sh (canonical, replaces v0.2's 80-line inline bash)
+# and platform/lib/sign-webhook.sh (signing math — single source of truth,
+# no more mirroring with the YAML). Apply unconditionally so the notify-task
+# (which is applied in both NOTIFICATION_PROVIDERS branches below) always
+# has its scripts volume populated. v0.4 will bake outpost/notify-runner:v1
+# with these scripts + jq/curl/gettext/openssl pre-installed, eliminating
+# the per-PipelineRun apk-add cost.
+kubectl create configmap notify-runner-scripts \
+  --from-file=notify-fanout.sh=scripts/notify-fanout.sh \
+  --from-file=sign-webhook.sh=platform/lib/sign-webhook.sh \
+  -n tekton-pipelines \
+  --dry-run=client -o yaml | kubectl apply -f -
+
 if [[ -n "${NOTIFICATION_PROVIDERS}" ]]; then
   log "Wiring notifications: ${NOTIFICATION_PROVIDERS}"
 

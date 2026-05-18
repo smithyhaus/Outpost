@@ -412,78 +412,58 @@ with main `apps`), wildcard cert (already covered by Cloudflare).
 
 ---
 
-## Bake an `outpost/notify-runner` image (kill runtime apk-install in notify-task)
+## ✅ Done in v0.3 — notify-runner interim (script extraction + single-source signing)
 
-**What:** `core/k8s/05-tekton/notify-task.yaml`'s fanout step is 80+
-lines of inline bash inside the Task spec, and runs
-`apk add --no-cache jq curl gettext openssl coreutils` every single
-PipelineRun. Replace the apk install with a pre-baked image
-`outpost/notify-runner:v1` that ships those binaries.
+The 80-line inline bash in `core/k8s/05-tekton/notify-task.yaml` is now
+`scripts/notify-fanout.sh` (POSIX sh, shellcheck-clean, 10 bats tests).
+The notify-task shrinks from 144 → 84 lines. `platform/lib/sign-webhook.sh`
+is now the single source of truth for HMAC math — the previously
+mirrored signing logic in the Task YAML is gone. Both scripts are
+mounted via a single `notify-runner-scripts` ConfigMap, created in
+`bootstrap.d/09-test-gate.sh` (same split pattern as
+`update-manifest-task` and `task-read-build-config`).
 
-**Why:**
-- **Performance:** every notification fanout adds 5–10 s. With
-  build-started + finally fanouts, that's 10–20 s per PipelineRun
-  spent on apk-install. Real time when a build storm hits.
-- **Supply chain:** every apk-install reaches out to
-  `dl-cdn.alpinelinux.org` with root privileges in our pipeline pods.
-  Bake the deps once, lock the digest, stop reaching out.
-- **Editability:** the 80-line bash script lives in YAML — no shellcheck,
-  no syntax highlighting, no easy unit testing. Move it to a `.sh` file
-  in the image (or a mounted ConfigMap as an interim step).
+**Editability + Supply-chain + Testability:** all 3 covered. **Performance
+(5-10s apk-add per PipelineRun)** is the one cost remaining — see the v0.4
+follow-up below.
 
-**Sketch:**
-- `core/images/notify-runner/Dockerfile` based on `alpine:3.20`,
-  pre-apk-installs `jq curl gettext openssl coreutils bash`, `COPY
-  fanout.sh /usr/local/bin/`.
-- `bootstrap.sh` Phase 9: build + push to the active registry plugin's
-  host (self-hosted → in-cluster, ACR → ACR). Or publish to GHCR
-  directly and skip the build step.
-- `notify-task.yaml` step replaces `image: alpine:3.20` + inline
-  `apk add` with `image: outpost/notify-runner:v1`; the inline script
-  `exec`s the baked `fanout.sh`.
-- Update `tests/bats/sign-webhook.bats` and `notify-task.yaml`'s
-  in-sync comment to point at the new helper file once moved.
+### ⏳ v0.4 follow-up — bake the actual `outpost/notify-runner` image
 
-**Today's user-visible cost:** ~5–10 s per Pipeline fanout + a tiny
-supply-chain liability. Nothing breaks.
+**What's left:** kill the per-PipelineRun apk-add by baking a tiny image
+with `jq curl gettext openssl coreutils bash` pre-installed.
 
-**Depends on:** decide registry-publish strategy (in-cluster vs GHCR).
+**Concrete sketch:**
+- `core/images/notify-runner/Dockerfile` based on `alpine:3.20`, pinned
+  digest. `COPY scripts/notify-fanout.sh /usr/local/bin/` and
+  `COPY platform/lib/sign-webhook.sh /usr/local/bin/`.
+- Build + push during bootstrap Phase 9 to the active registry plugin's
+  host (self-hosted → in-cluster, ACR → ACR). Or publish to GHCR once
+  and skip the local build step.
+- `notify-task.yaml` step `image:` flips to
+  `<registry>/outpost/notify-runner:<pinned-digest>`. The volumeMounts
+  for the scripts ConfigMap can be dropped (scripts now live in the
+  image). The `apk add` line goes away.
 
-**Milestone:** v0.3
+**Depends on:** decide publish strategy (in-cluster bake vs GHCR
+release). Recommended: GHCR — eliminates per-install build cost.
+
+**Milestone:** v0.4
 
 ---
 
-## Per-kind plugin contract enforcement (notification fragments)
+## ✅ Done in v0.3 — per-kind plugin contract enforcement
 
-**What:** `tests/bats/plugin-contract.bats` enforces the universal
-plugin contract (`plugin.yaml` + `manifest.yaml` + `preflight.sh` +
-`README.md`). But `notification/<provider>/` plugins MUST also ship
-`argocd-cm-fragment.yaml` + `argocd-secret-fragment.yaml`, and that
-extra requirement is enforced ONLY by the dedicated
-`notification-plugins.bats`. A new contributor scaffolding
-`notification/feishu-v2/` by copying `git-provider/gitee/` will have a
-passing `plugin-contract.bats` but a silently broken notification
-wiring at bootstrap time.
+`tests/bats/plugin-contract-per-kind.bats` dispatches on the `kind:`
+field of each `plugin.yaml` and asserts per-kind required extras:
+- `notification` → `argocd-cm-fragment.yaml` + `argocd-secret-fragment.yaml`
+- `git-provider` → `trigger.yaml` (since v0.3 EventListener assembly)
+- `registry` / `test-runner` / `rollout` → none
 
-**Why:** the plugin model is the strongest part of Outpost's
-architecture (5 kinds, 0 forked deps). Its contract honesty is
-load-bearing for contributor velocity.
-
-**Sketch:**
-- Add `tests/bats/plugin-contract-per-kind.bats` that dispatches on
-  `kind:` from each plugin's `plugin.yaml` and asserts the required
-  per-kind extras. Map today: `notification` → 2 extras; everything
-  else → 0.
-- Or fold the per-kind logic into the existing `plugin-contract.bats`
-  with a kind→required-files dict.
-- Cross-reference from `plugins/README.md` "Authoring a new plugin".
-
-**Today's user-visible cost:** none directly — just a contributor
-footgun.
-
-**Depends on:** none.
-
-**Milestone:** v0.3
+Negative test catches accidental copy-paste leftovers (e.g. a
+`git-provider` plugin shipping `argocd-cm-fragment.yaml`).
+`plugins/README.md` "Authoring" section updated with a per-kind
+required-files table. New `kind:` value lands → dispatch test fails
+loudly until a deliberate branch is added.
 
 ---
 

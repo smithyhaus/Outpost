@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Per-kind plugin contract enforcement** —
+  `tests/bats/plugin-contract-per-kind.bats` dispatches on the `kind:`
+  field of each `plugin.yaml` and asserts per-kind required extras
+  (notification → 2 ArgoCD fragments, git-provider → trigger.yaml).
+  Catches the contributor footgun where a copy-pasted plugin scaffold
+  passes the universal contract but produces a silently-broken install.
+- **notify-task script extraction (interim)** — the 80-line inline bash
+  in `core/k8s/05-tekton/notify-task.yaml` is now
+  `scripts/notify-fanout.sh` (POSIX sh, shellcheck-clean, 10 bats tests
+  with stubbed curl). `platform/lib/sign-webhook.sh` becomes the single
+  source of truth for HMAC math; the duplicate inline signing in the
+  Task YAML is gone. Both scripts ConfigMap-mounted at /scripts.
+  notify-task.yaml shrinks 144 → 84 lines. v0.4 will bake an actual
+  `outpost/notify-runner` image to also remove the per-PipelineRun
+  apk-add cost (see TODOS).
 - **Per-app `outpost.build.yaml`** — Tekton's `build-and-push` step now
   consumes 3 results from a new `read-build-config` Task that parses an
   optional `outpost.build.yaml` at the application repo root:
