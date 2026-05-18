@@ -1,0 +1,38 @@
+# outpost.build.yaml — per-app build config consumed by Tekton's
+# read-build-config Task (v0.3+).
+#
+# All keys optional; absence means the platform's v0.2 default behavior.
+# Hello-world Go is a single-binary scratch image, so this file shows the
+# schema mostly for documentation — real apps will override more.
+#
+# When you need this file:
+#   - Monorepo: point dockerfile/context at a subdirectory
+#   - Java/Maven, .NET: pass language-version --build-arg to base image
+#   - Behind a private npm/pypi mirror: pass --build-arg=NPM_REGISTRY=...
+#   - Need a kaniko flag the platform doesn't set (e.g. --single-snapshot)
+#
+# When you don't:
+#   - Single Dockerfile at repo root, public base images, no build secrets.
+#     The platform's defaults already cover this — skip the file.
+
+# Dockerfile path, relative to the cloned source root. Default: ./Dockerfile
+dockerfile: ./Dockerfile
+
+# Build context, relative to the cloned source root. Default: ./
+context: ./
+
+# Optional: each entry becomes `--build-arg=KEY=VALUE`. The Go example
+# doesn't need any — left empty to illustrate the shape.
+buildArgs: []
+# Example for a Java app on a private Maven mirror:
+#   buildArgs:
+#     - MAVEN_MIRROR=https://nexus.example.com/repository/maven-public
+#     - JAVA_VERSION=21
+
+# Optional: kaniko flags appended to the platform defaults (after
+# --cache=true + --cache-repo=... + --insecure for self-hosted registry).
+extraArgs: []
+# Example for a large/slow build:
+#   extraArgs:
+#     - --single-snapshot
+#     - --use-new-run

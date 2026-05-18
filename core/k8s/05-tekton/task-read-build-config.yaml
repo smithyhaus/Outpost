@@ -1,0 +1,96 @@
+# ============================================================================
+# Custom Task: read per-app build config (outpost.build.yaml) from cloned
+# source and emit 3 results consumed by build-and-push (kaniko).
+#
+# Single source of truth: scripts/read-build-config.sh
+#   - bootstrap.sh renders the script into a ConfigMap (read-build-config-script)
+#   - this Task mounts the ConfigMap at /scripts and execs it
+#   - bats tests (tests/bats/read-build-config.bats) hit the script directly
+#
+# Schema of optional outpost.build.yaml (in cloned source root):
+#   dockerfile: "./Dockerfile"          # string, default ./Dockerfile
+#   context:    "./"                    # string, default ./
+#   buildArgs: [ "KEY=val", ... ]       # each becomes --build-arg=KEY=val
+#   extraArgs: [ "--flag", ... ]        # passed through verbatim
+#
+# Behavior when outpost.build.yaml is absent: v0.2 defaults (preserves
+# back-compat for every existing app).
+#
+# Emits Tekton results:
+#   dockerfile (string)
+#   context    (string)
+#   extra-args (array — merged: platform defaults + buildArgs + extraArgs)
+# ============================================================================
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: outpost-read-build-config
+  namespace: tekton-pipelines
+spec:
+  params:
+    - name: source-subdir
+      type: string
+      description: subdirectory under workspace where source was cloned
+      default: source
+    - name: default-extra-args
+      type: string
+      description: |
+        JSON array literal of platform-default kaniko args. Bootstrap
+        passes ${KANIKO_EXTRA_ARGS} from platform/lib/registry-config.sh
+        here (registry-plugin-specific flags such as --cache=true,
+        --cache-repo=..., --insecure for self-hosted).
+      default: "[]"
+
+  workspaces:
+    - name: source
+      description: workspace holding the cloned application source
+
+  results:
+    - name: dockerfile
+      description: kaniko --dockerfile value (relative to context)
+    - name: context
+      description: kaniko build context (relative to source root)
+    - name: extra-args
+      type: array
+      description: |
+        Merged kaniko EXTRA_ARGS. The script writes a JSON array; Tekton
+        parses it as an array result (Tekton ≥ 0.43). The build-and-push
+        Task consumes via $(tasks.read-build-config.results.extra-args[*])
+        — kaniko's catalog EXTRA_ARGS param is type array.
+
+  volumes:
+    - name: read-build-config-script
+      configMap:
+        name: read-build-config-script
+        defaultMode: 0755
+
+  steps:
+    - name: read
+      # mikefarah/yq alpine image: tiny (~15 MB), ships yq + busybox sh.
+      # Pinned digest avoids surprise on every PipelineRun.
+      image: mikefarah/yq:4.44.1
+      env:
+        - name: SRC_DIR
+          value: $(workspaces.source.path)/$(params.source-subdir)
+        - name: DEFAULTS_JSON
+          value: $(params.default-extra-args)
+        - name: OUT_DIR
+          value: /tmp/results
+      volumeMounts:
+        - name: read-build-config-script
+          mountPath: /scripts
+          readOnly: true
+      # mikefarah/yq's ENTRYPOINT is `/usr/bin/yq` — override via command.
+      # The script writes 3 files to $OUT_DIR; we then copy each into the
+      # Tekton result path ($(results.*.path) gets interpolated by Tekton
+      # at run-time into a per-result file under /tekton/results/).
+      command:
+        - /bin/sh
+        - -c
+      args:
+        - |
+          set -eu
+          /scripts/read-build-config.sh "$SRC_DIR" "$DEFAULTS_JSON" "$OUT_DIR"
+          cp "$OUT_DIR/dockerfile"  "$(results.dockerfile.path)"
+          cp "$OUT_DIR/context"     "$(results.context.path)"
+          cp "$OUT_DIR/extra-args"  "$(results.extra-args.path)"

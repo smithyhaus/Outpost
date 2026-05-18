@@ -192,6 +192,28 @@ Walkthrough:
 Full design:
 [`proposals/cicd-test-gate.md`](./proposals/cicd-test-gate.md).
 
+### 8. (optional) Per-app build config — `outpost.build.yaml`
+
+By default Tekton builds `./Dockerfile` at context `./` with the
+registry-plugin-aware kaniko defaults (cache flags + `--insecure` for
+self-hosted). Drop an `outpost.build.yaml` at your application repo
+root to override any of:
+
+```yaml
+dockerfile: ./services/api/Dockerfile     # monorepo / subdir builds
+context: ./services/api
+buildArgs:                                # each becomes --build-arg=KEY=VAL
+  - MAVEN_MIRROR=https://nexus.example.com/repository/maven-public
+  - JAVA_VERSION=21
+extraArgs:                                # passed through verbatim
+  - --single-snapshot
+  - --use-new-run
+```
+
+All keys are optional. Absent file → v0.2 defaults preserved exactly
+(zero-regression). Live example:
+[`../../../examples/hello-world/go/outpost.build.yaml`](../../../examples/hello-world/go/outpost.build.yaml).
+
 ## Troubleshooting
 
 ### Pipeline failed

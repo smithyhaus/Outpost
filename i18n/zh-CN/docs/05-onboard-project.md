@@ -176,6 +176,26 @@ ArgoCD UI(`https://argocd.<root>`):找到 `<app>` Application,应当显示 Synce
 完整设计见
 [`proposals/cicd-test-gate.md`](./proposals/cicd-test-gate.md)。
 
+### 8. (可选)按应用的 build 配置 — `outpost.build.yaml`
+
+默认情况下 Tekton 构建 `./Dockerfile`、context 为 `./`，再叠加
+registry-plugin 自动加的 kaniko 参数（cache flags + self-hosted 的
+`--insecure`）。在应用仓库根目录放一份 `outpost.build.yaml`，可以覆盖：
+
+```yaml
+dockerfile: ./services/api/Dockerfile     # monorepo / 子目录构建
+context: ./services/api
+buildArgs:                                # 每条被转成 --build-arg=KEY=VAL
+  - MAVEN_MIRROR=https://nexus.example.com/repository/maven-public
+  - JAVA_VERSION=21
+extraArgs:                                # 原样追加给 kaniko
+  - --single-snapshot
+  - --use-new-run
+```
+
+所有键都可选。文件不存在时完全等同 v0.2 默认行为（零回归）。示例：
+[`../../../examples/hello-world/go/outpost.build.yaml`](../../../examples/hello-world/go/outpost.build.yaml)。
+
 ## 常见问题
 
 ### Pipeline 跑挂了

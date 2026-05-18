@@ -132,6 +132,16 @@ kubectl create configmap update-manifest-script \
   --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -f core/k8s/05-tekton/task-update-manifest.yaml
 
+# read-build-config Task — same split pattern: scripts/read-build-config.sh
+# is canonical (bats-tested), mounted via ConfigMap into the Task. Reads
+# optional outpost.build.yaml from cloned source and emits per-app kaniko
+# inputs (dockerfile / context / merged extra-args).
+kubectl create configmap read-build-config-script \
+  --from-file=read-build-config.sh=scripts/read-build-config.sh \
+  -n tekton-pipelines \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -f core/k8s/05-tekton/task-read-build-config.yaml
+
 render_apply "core/k8s/05-tekton/triggertemplate.yaml"
 
 # EventListener — provider-agnostic envelope + active plugin's trigger.yaml.

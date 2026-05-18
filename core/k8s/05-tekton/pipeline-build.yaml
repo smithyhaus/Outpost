@@ -124,6 +124,32 @@ spec:
           value: "true"
 
     # -------------------------------------------------------------------------
+    # 1b. Read per-app outpost.build.yaml (optional file in source root).
+    # No file → v0.2 defaults (./Dockerfile + ./ context + platform args).
+    # File present → app overrides dockerfile/context and appends buildArgs +
+    # extraArgs to the platform defaults. Single source of truth:
+    # scripts/read-build-config.sh (bats-tested).
+    # -------------------------------------------------------------------------
+    - name: read-build-config
+      timeout: "2m"
+      runAfter:
+        - fetch-source
+      taskRef:
+        name: outpost-read-build-config
+        kind: Task
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      params:
+        - name: source-subdir
+          value: source
+        # Platform-default kaniko args (registry-plugin-aware: --cache=true +
+        # --cache-repo=... and --insecure/--skip-tls-verify for self-hosted).
+        # The Task merges these with the app's buildArgs/extraArgs.
+        - name: default-extra-args
+          value: '${KANIKO_EXTRA_ARGS}'
+
+    # -------------------------------------------------------------------------
     # 2. Kaniko 构建并推到 registry
     # -------------------------------------------------------------------------
     - name: build-and-push
@@ -131,7 +157,7 @@ spec:
       # easily blow past 60min during base-image pulls. 90min cap.
       timeout: "90m"
       runAfter:
-        - fetch-source
+        - read-build-config
       taskRef:
         name: kaniko
         kind: Task
@@ -144,20 +170,17 @@ spec:
       params:
         - name: IMAGE
           value: $(params.registry-push)/$(params.repo-name):$(params.image-tag)
+        # DOCKERFILE / CONTEXT / EXTRA_ARGS now come from outpost.build.yaml
+        # via the read-build-config Task. Absent file → v0.2 defaults
+        # (./Dockerfile + ./ + platform's KANIKO_EXTRA_ARGS only). Present file
+        # → app's dockerfile/context/buildArgs/extraArgs override/append.
         - name: DOCKERFILE
-          value: ./Dockerfile
+          value: $(tasks.read-build-config.results.dockerfile)
         - name: CONTEXT
-          value: ./
-        # Plugin-aware kaniko flags. Flow-style array because envsubst
-        # injects the literal value at install time:
-        #   self-hosted → ["--skip-tls-verify","--insecure"] (anonymous HTTP)
-        #   aliyun-acr  → []                                 (HTTPS, do NOT
-        #                                                      pass --insecure
-        #                                                      or kaniko tries
-        #                                                      plain HTTP and
-        #                                                      ACR refuses)
+          value: $(tasks.read-build-config.results.context)
         - name: EXTRA_ARGS
-          value: ${KANIKO_EXTRA_ARGS}
+          value:
+            - $(tasks.read-build-config.results.extra-args[*])
 
     # -------------------------------------------------------------------------
     # 3. Gate A — run application tests

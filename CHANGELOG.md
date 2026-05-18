@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Per-app `outpost.build.yaml`** — Tekton's `build-and-push` step now
+  consumes 3 results from a new `read-build-config` Task that parses an
+  optional `outpost.build.yaml` at the application repo root:
+  `dockerfile`, `context`, merged `extra-args`. Monorepos can build
+  sub-paths; apps on private mirrors can pass `buildArgs[]` (each
+  becomes `--build-arg=K=V`); large builds can add `extraArgs[]`
+  (passed through to kaniko verbatim). Absent file → v0.2 defaults
+  preserved exactly (zero-regression). Canonical script:
+  `scripts/read-build-config.sh` with 14 bats tests. Example:
+  `examples/hello-world/go/outpost.build.yaml`.
 - **Multi-provider EventListener wiring** — `GIT_PROVIDER_PLUGIN={gitee,
   github,gitlab}` actually selects which provider routes webhooks now.
   Phase 8 assembles the EventListener from a provider-agnostic envelope

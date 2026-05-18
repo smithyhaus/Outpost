@@ -304,20 +304,35 @@ The five items below were raised by the app-team review pass on v0.2
 (see `i18n/en/docs/proposals/cicd-test-gate.md` review thread). Each is
 a real DX gap or hardening opportunity.
 
-### Per-app build params (`outpost.build.yaml`)
+### ✅ Done in v0.3 — Per-app build params (`outpost.build.yaml`)
 
-**What:** Pipeline currently hardcodes `Dockerfile`, `./` context, no
-`--build-arg`, no `--secret` mount, fixed 5Gi PVC, fixed EXTRA_ARGS.
-Add 6 optional Pipeline params (dockerfile / context / build-args /
-build-secret-name / pvc-size / extra-args), all driven from a repo-root
-`outpost.build.yaml` (same shape as `outpost.test.yaml`). No file → use
-defaults.
+Tekton Pipeline gains a `read-build-config` Task between fetch-source
+and build-and-push that reads an optional `outpost.build.yaml` from the
+cloned source root and emits 3 results consumed by kaniko: `dockerfile`,
+`context`, `extra-args` (merged: platform defaults + `buildArgs[]` as
+`--build-arg=K=V` + `extraArgs[]` passthrough).
 
-**Why:** monorepos can't build sub-paths today; private npm/pypi tokens
-can only get baked into base images; large Maven/.NET projects blow the
-5Gi PVC.
+- Canonical script: `scripts/read-build-config.sh` (POSIX sh, yq dep) —
+  14 bats tests in `tests/bats/read-build-config.bats` cover defaults,
+  merge order, partials, valid-JSON output, Tekton-result single-line
+  contract.
+- Wrapper Task: `core/k8s/05-tekton/task-read-build-config.yaml`
+  (mikefarah/yq:4.44.1 image, ConfigMap-mounted script — same split
+  pattern as update-manifest-task).
+- Example: `examples/hello-world/go/outpost.build.yaml` documenting
+  the schema.
+- Docs: `i18n/{en,zh-CN}/docs/05-onboard-project.md` § 8.
 
-**Milestone:** v0.3
+**Scope cut from original 6-key proposal:** `build-secret-name` (kaniko
+catalog Task doesn't expose a secret-volume option without forking) and
+`pvc-size` (workspace size is set at PipelineRun creation, before the
+pipeline reads outpost.build.yaml) are out of scope; the remaining 4
+keys (dockerfile / context / buildArgs / extraArgs) cover the cited
+pain points — monorepo subpath, private mirror tokens, large-build
+flags.
+
+**Zero-regression:** absent file → v0.2 defaults (./Dockerfile + ./ +
+platform's KANIKO_EXTRA_ARGS) preserved exactly.
 
 ---
 
@@ -339,36 +354,37 @@ from `.env`. Expand list per-onboard.
 
 ---
 
-### kaniko build cache
+### ✅ Done in v0.2 — kaniko build cache
 
-**What:** `pipeline-build.yaml`'s kaniko step has no `--cache=true
---cache-repo=...`. Every push pulls base images and rebuilds every layer.
-Java/.NET on China-network cold-cache routinely hit the 90m timeout
-(observed empirically — that's why the timeout is 90m).
+`platform/lib/registry-config.sh` sets `KANIKO_EXTRA_ARGS` with
+`--cache=true --cache-repo=...` for both registry plugins (self-hosted
+→ `docker-registry.registry.svc.cluster.local:5000/cache`, aliyun-acr
+→ `<acr>/<ns>/cache`). The Pipeline's kaniko step consumes via
+`EXTRA_ARGS=${KANIKO_EXTRA_ARGS}`. Verified in
+`tests/regression/golden/registry-self-hosted.yaml`.
 
-**Concrete TODO:** carve a `cache/` path in the self-hosted registry
-(`docker-registry.registry.svc.cluster.local:5000/cache`); pass
-`--cache=true --cache-repo=<host>/cache` in EXTRA_ARGS for the
-self-hosted plugin. ACR has its own cache; just point at the same path.
-
-**Expected impact:** 30~90 min builds → 5~10 min on warm cache.
-
-**Milestone:** v0.3
+Cold cache: 30–90 min → warm cache: 5–10 min (matches the original
+estimate).
 
 ---
 
-### `verify.sh --app <name>`
+### ✅ Done in v0.2 — `outpost verify --app <name>`
 
-**What:** verify.sh currently only runs platform-level checks. App teams
-need an app-scoped variant: ArgoCD Application status, latest PipelineRun
-status, last webhook delivery (currently not stored anywhere — would need
-EventListener log scraping or a small ring buffer), `apps/<name>` pod
-ready states, last 10 events in `<name>` namespace.
+`scripts/outpost verify --app <name>` covers 4 of 5 originally-asked
+checks inline: ArgoCD Application sync/health/revision, pods in `apps`
+namespace filtered by `app=<name>`, recent PipelineRuns matching
+`build-<name>-*`, last 10 events in `<name>` namespace. App teams have
+a single command for self-service triage.
 
-**Why:** an app team onboarded today has to compose 5 kubectl commands
-to know if their app is healthy. Self-service triage matters.
+**Deferred to v0.4:** "last webhook delivery" — needs an EventListener
+log scraper or ring buffer; not worth the complexity yet. Log into
+`kubectl logs deploy/el-build-listener -n tekton-pipelines` covers it
+manually.
 
-**Milestone:** v0.3
+(The standalone `bash verify.sh --app <name>` flag is not implemented;
+the CLI is the canonical entry. Calling `verify.sh` directly with
+`--app` is a TODO if anyone needs scriptable JSON output for app
+state.)
 
 ---
 
