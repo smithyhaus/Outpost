@@ -43,6 +43,8 @@ $(_yellow USAGE)
 $(_yellow PLATFORM)
   status                            Compose + k8s overview (= status.sh)
   verify [--app <name>]             Health checks; --app filters to one app
+  doctor [--egress h1,h2]           Pre-bootstrap preflight — catch
+                                    port/Docker/DNS/token failures up front
   open <argocd|tekton|rollouts|search|mq|registry>
                                     Print URL + creds (from INFRA.md / .env)
                                     and open the browser
@@ -79,6 +81,10 @@ cmd_version() {
 # --- platform ---------------------------------------------------------------
 cmd_status() {
   exec bash "$OUTPOST_HOME/status.sh" "$@"
+}
+
+cmd_doctor() {
+  exec bash "$OUTPOST_HOME/doctor.sh" "$@"
 }
 
 cmd_verify() {
@@ -315,6 +321,7 @@ shift || true
 case "$SUB" in
   status)         cmd_status "$@" ;;
   verify)         cmd_verify "$@" ;;
+  doctor)         cmd_doctor "$@" ;;
   open)           cmd_open "$@" ;;
   logs)           cmd_logs "$@" ;;
   rollback)       cmd_rollback "$@" ;;
