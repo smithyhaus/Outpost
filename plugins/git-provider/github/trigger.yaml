@@ -8,7 +8,8 @@
 # Order matters — each interceptor short-circuits on false:
 #   1. GitHub HMAC + event-type filter (rejects forged or non-push events)
 #   2. Repo whitelist (rejects out-of-scope repos; opt-in via .env)
-#   3. Ref filter (rejects tag pushes + branch deletions)
+#   3. Ref filter — deploy branch only (OUTPOST_DEPLOY_BRANCH, default main);
+#      also rejects tag pushes + branch deletions
 #   4. short_sha overlay (computes 7-char SHA used as image tag)
 # ============================================================================
 - name: github-push
@@ -31,7 +32,7 @@
         name: cel
       params:
         - name: filter
-          value: "body.ref.startsWith('refs/heads/') && body.after != '0000000000000000000000000000000000000000'"
+          value: "body.ref == 'refs/heads/${OUTPOST_DEPLOY_BRANCH}' && body.after != '0000000000000000000000000000000000000000'"
     - ref:
         name: cel
       params:

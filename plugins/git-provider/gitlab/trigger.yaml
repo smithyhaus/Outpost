@@ -9,7 +9,8 @@
 #   1. Header type filter (rejects non-push events)
 #   2. Token filter (rejects forged requests)
 #   3. Repo whitelist (rejects out-of-scope repos; opt-in via .env)
-#   4. Ref filter (rejects tag pushes + branch deletions)
+#   4. Ref filter — deploy branch only (OUTPOST_DEPLOY_BRANCH, default main);
+#      also rejects tag pushes + branch deletions
 #   5. short_sha overlay (computes 7-char SHA used as image tag)
 # ============================================================================
 - name: gitlab-push
@@ -33,7 +34,7 @@
         name: cel
       params:
         - name: filter
-          value: "body.ref.startsWith('refs/heads/') && body.after != '0000000000000000000000000000000000000000'"
+          value: "body.ref == 'refs/heads/${OUTPOST_DEPLOY_BRANCH}' && body.after != '0000000000000000000000000000000000000000'"
     - ref:
         name: cel
       params:

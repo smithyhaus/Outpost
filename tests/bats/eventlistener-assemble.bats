@@ -19,6 +19,9 @@ setup() {
   # Required env for both render_template passes.
   export ROOT_DOMAIN="bats.example.com"
   export GIT_WEBHOOK_SECRET="batstoken"
+  # trigger.yaml ref filter pins refs/heads/${OUTPOST_DEPLOY_BRANCH} — render_template
+  # aborts on the unresolved placeholder if this is unset.
+  export OUTPOST_DEPLOY_BRANCH="main"
   unset WEBHOOK_REPO_WHITELIST
   build_cel_whitelist          # → CEL_WHITELIST_LIST="[]"
 
@@ -96,6 +99,9 @@ EOF
   grep -q "size(\[\]) == 0" "$OUT"
   # short_sha overlay survived
   grep -q 'key: short_sha' "$OUT"
+  # C3: ref filter pins the deploy branch (no any-branch startsWith)
+  grep -q "refs/heads/main" "$OUT"
+  ! grep -qF "startsWith('refs/heads/')" "$OUT"
 }
 
 @test "assemble github: produces EventListener with github-push trigger + HMAC interceptor" {
@@ -112,6 +118,9 @@ EOF
   # GitHub payload uses clone_url, not git_http_url
   grep -q "body.repository.clone_url" "$OUT"
   grep -q "name: el-build-listener" "$OUT"
+  # C3: ref filter pins the deploy branch (no any-branch startsWith)
+  grep -q "refs/heads/main" "$OUT"
+  ! grep -qF "startsWith('refs/heads/')" "$OUT"
 }
 
 @test "assemble gitlab: produces EventListener with gitlab-push trigger + X-Gitlab-Token compare" {
@@ -125,6 +134,9 @@ EOF
   grep -q "X-Gitlab-Event" "$OUT"
   grep -q "X-Gitlab-Token" "$OUT"
   grep -q "name: el-build-listener" "$OUT"
+  # C3: ref filter pins the deploy branch (no any-branch startsWith)
+  grep -q "refs/heads/main" "$OUT"
+  ! grep -qF "startsWith('refs/heads/')" "$OUT"
 }
 
 # ---- 3. envsubst + whitelist interactions -----------------------------------

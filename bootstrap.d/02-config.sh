@@ -66,6 +66,10 @@ export GIT_HOST
 REGISTRY_PLUGIN="${REGISTRY_PLUGIN:-self-hosted}"
 GIT_PROVIDER_PLUGIN="${GIT_PROVIDER_PLUGIN:-gitee}"
 MANIFEST_REPO_BRANCH="${MANIFEST_REPO_BRANCH:-main}"
+# Branch of an APP repo whose pushes trigger the CI/CD pipeline. The EventListener
+# CEL ref filter pins to refs/heads/${OUTPOST_DEPLOY_BRANCH}; pushes to any other
+# branch are ignored. Distinct from MANIFEST_REPO_BRANCH (the manifests repo).
+OUTPOST_DEPLOY_BRANCH="${OUTPOST_DEPLOY_BRANCH:-main}"
 POSTGRES_USER="${POSTGRES_USER:-postgres}"
 POSTGRES_DB="${POSTGRES_DB:-postgres}"
 RABBITMQ_USER="${RABBITMQ_USER:-admin}"
@@ -174,6 +178,7 @@ fi
   echo "OUTPOST_DASHBOARD_PASSWORD=${OUTPOST_DASHBOARD_PASSWORD}"
   echo "MANIFEST_REPO_URL=${MANIFEST_REPO_URL}"
   echo "MANIFEST_REPO_BRANCH=${MANIFEST_REPO_BRANCH}"
+  echo "OUTPOST_DEPLOY_BRANCH=${OUTPOST_DEPLOY_BRANCH}"
   echo "GIT_HOST=${GIT_HOST}"
   # Registry-plugin-derived Pipeline defaults (re-derived on each bootstrap,
   # but persisted so status.sh / verify.sh can show what's active).

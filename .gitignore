@@ -28,6 +28,9 @@ Thumbs.db
 *.user
 .vs/
 
+# Claude Code local workspace — PRP artifacts are tracked under docs/prp/
+.claude/
+
 # Logs
 *.log
 infra-autostart.log
