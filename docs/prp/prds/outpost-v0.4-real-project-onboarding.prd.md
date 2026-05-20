@@ -229,6 +229,7 @@ Minimum to validate the hypothesis: **all Must-haves above**, validated against 
 - **Report**: `docs/prp/reports/outpost-v0.4-phase2-doctor-preflight-report.md`
 
 **Phase 3: Onboard primitives**
+- **Prerequisite**: ADR [`0002` — Onboarding primitives belong in the platform](../../decisions/0002-onboarding-primitives-in-platform.md) must be Accepted first. It supersedes commit `c1e1050` ("no onboarding logic in infras") and defines the mechanism-vs-content boundary this phase must hold: outpost ships generic mechanism, the app owns its content.
 - **Goal**: Each piece of what `onboard.sh` does today, callable independently and idempotently.
 - **Scope**: `outpost db create <app>` (idempotent `CREATE DATABASE`), `outpost seal-from-template <app> --template <path> --output <path>` (envsubst + strict residue check + kubeseal), `outpost manifest scaffold <app> --lang <lang> --manifests-dir <path>` (write 5 YAML from template tree), each emits structured JSON with `{step, status, written_files[], next_action}`
 - **Success signal**: each subcommand has bats tests proving rerun = no-op when prior state matches, reconcile when drifted
@@ -277,6 +278,7 @@ Minimum to validate the hypothesis: **all Must-haves above**, validated against 
 | Decision | Choice | Alternatives | Rationale |
 |----------|--------|--------------|-----------|
 | Product framing | "Finishing release" — close the gap between v0.2 claims and real-project reality | Feature-additive v0.4 (more plugins, more capabilities) | Real-world evidence (SCM MCP commit cluster) showed the gap, not missing features |
+| Onboarding logic location | Onboarding *primitives* live in the platform; each app owns its *content* (templates + `outpost.app.yaml`) | "No onboarding logic in infras" — commit `c1e1050` (2026-05-08) | `c1e1050`'s minimalist stance was empirically falsified by the SCM MCP onboarding attempt (see Evidence); the reversal + the mechanism-vs-content boundary are recorded in ADR `0002` |
 | CLI language | Keep bash | Rewrite in Go / Rust / .NET (user is .NET-native; `infras.sln` exists) | Smallest body of work; v0.4 is closure, not refactor; revisit at v0.5 if pain returns |
 | Multi-project strategy | Shared substrate (1 PG / 1 Redis / 1 MQ per host, DB / keyspace / vhost isolation) | Per-project independent infra (N PG instances) | v0.2 architecture already chose this; v0.4 doubles down rather than fork — recorded as new ADR in Phase 9 |
 | AI-agent canonical doc | Single `ONBOARDING.md` at repo root | Keep dispersed across SKILL.md / AGENTS.md / docs/05 | AI agent today doesn't know which one to read; user's JTBD ("丢给 AI") demands one entry |

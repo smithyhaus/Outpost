@@ -15,6 +15,7 @@ treatises.
 | #    | Title                                            | Status   |
 |------|--------------------------------------------------|----------|
 | 0001 | [Two-layer split: Compose + k3s](0001-two-layer-split.md) | Accepted |
+| 0002 | [Onboarding primitives belong in the platform](0002-onboarding-primitives-in-platform.md) | Accepted |
 
 ## Authoring a new ADR
 
