@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/smithyhaus/outpost/blob/main/tests/schema/onboard-output.schema.json",
+  "title": "Outpost onboard-primitive command output",
+  "description": "Schema for the --json output of the v0.4 onboard primitives (outpost db create / seal-from-template / manifest scaffold). One object per invocation. Stable across patch and minor versions.",
+  "type": "object",
+  "required": ["step", "status", "detail", "written_files", "next_action"],
+  "additionalProperties": false,
+  "properties": {
+    "step": {
+      "type": "string",
+      "enum": ["db.create", "seal.from-template", "manifest.scaffold"],
+      "description": "Which onboard primitive produced this result."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["created", "exists", "sealed", "scaffolded", "unchanged", "drift", "error"],
+      "description": "Outcome. created/exists (db), sealed (seal), scaffolded/unchanged/drift (manifest), error (any)."
+    },
+    "detail": {
+      "type": "string",
+      "description": "Human-readable one-line summary of the outcome."
+    },
+    "written_files": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Files created or overwritten by this invocation. Empty for db create and for no-op reruns."
+    },
+    "next_action": {
+      "type": "string",
+      "description": "Suggested next step for a human or AI agent."
+    }
+  }
+}

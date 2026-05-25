@@ -9,7 +9,20 @@
 # =============================================================================
 set -euo pipefail
 
-OUTPOST_HOME="${OUTPOST_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# Resolve this script through any symlinks before deriving OUTPOST_HOME —
+# `make install` symlinks it into PREFIX, so ${BASH_SOURCE[0]} is the symlink,
+# not the repo file. Portable (macOS has no `readlink -f`).
+if [[ -z "${OUTPOST_HOME:-}" ]]; then
+  _outpost_self="${BASH_SOURCE[0]}"
+  while [[ -L "$_outpost_self" ]]; do
+    _outpost_link="$(readlink "$_outpost_self")"
+    case "$_outpost_link" in
+      /*) _outpost_self="$_outpost_link" ;;
+      *)  _outpost_self="$(dirname "$_outpost_self")/$_outpost_link" ;;
+    esac
+  done
+  OUTPOST_HOME="$(cd "$(dirname "$_outpost_self")/.." && pwd)"
+fi
 cd "$OUTPOST_HOME"
 
 # Load .env if present — every subcommand wants ROOT_DOMAIN / dashboard creds /
@@ -19,6 +32,13 @@ if [[ -f .env ]]; then
   source .env
   set +a
 fi
+
+# Shared libs: render_template (envsubst + strict ${VAR} residue check) and
+# the onboard-primitive helpers. Both are source-only definition files.
+# shellcheck source=../platform/lib/portable.sh
+source "$OUTPOST_HOME/platform/lib/portable.sh"
+# shellcheck source=../platform/lib/onboard-lib.sh
+source "$OUTPOST_HOME/platform/lib/onboard-lib.sh"
 
 # --- helpers -----------------------------------------------------------------
 _red()    { printf '\033[31m%s\033[0m' "$*"; }
@@ -61,6 +81,14 @@ $(_yellow APPLICATION)
   seal <app> [<KEY>=<VALUE> ...]    Wrap kubeseal — produces a SealedSecret YAML
                                     on stdout. Example:
                                       outpost seal my-app DATABASE_URL=postgres://...
+  seal-from-template <app> --template <path> --output <path>
+                                    Render a plaintext Secret template
+                                    (envsubst) and seal it with kubeseal
+  db create <app>                   Idempotently CREATE the app's Postgres DB
+  manifest scaffold <app> --lang <lang> --manifests-dir <path>
+                                    Scaffold deployment/service/ingress/
+                                    kustomization + argocd-app from templates
+                                    ([--json] machine output on all three)
   decommission <app>                Guided cleanup (confirms then runs)
 
 $(_yellow UTILITY)
@@ -315,6 +343,276 @@ EOF
   echo "  (Aliyun ACR: use the ACR console)"
 }
 
+# --- onboard primitives (v0.4 Phase 3) ---------------------------------------
+# Generic onboarding *mechanism*; app *content* enters only as args / .env
+# (ADR 0002). Each command: human output by default, locked JSON under --json
+# (schema: tests/schema/onboard-output.schema.json), idempotent, exit 0/1/2.
+
+# _onboard_report <json:0|1> <step> <status> <detail> <next_action> [<file>...]
+# json=1 → emit the locked JSON object (stdout only). json=0 → human lines.
+_onboard_report() {
+  local json="$1" step="$2" status="$3" detail="$4" next_action="$5"
+  shift 5
+  if [[ "$json" -eq 1 ]]; then
+    onboard_emit_json "$step" "$status" "$detail" "$next_action" "$@"
+    return 0
+  fi
+  case "$status" in
+    error) err  "$detail" ;;
+    drift) warn "$detail" ;;
+    *)     ok   "$detail" ;;
+  esac
+  local f
+  for f in "$@"; do
+    echo "       $(_dim "· $f")"
+  done
+  [[ -n "$next_action" ]] && echo "       $(_dim "↳ next: $next_action")"
+  return 0
+}
+
+# outpost db create <app> [--json] — idempotent CREATE DATABASE.
+cmd_db() {
+  local sub="${1:-}"; shift || true
+  case "$sub" in
+    create) _db_create "$@" ;;
+    *)      _die "outpost db create <app> [--json]" ;;
+  esac
+}
+
+_db_create() {
+  local app="" json=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json) json=1; shift ;;
+      -*)     _die "unknown flag: $1" ;;
+      *)      [[ -z "$app" ]] && app="$1"; shift ;;
+    esac
+  done
+  [[ -z "$app" ]] && _die "outpost db create <app> [--json]"
+  _need docker
+
+  local db pguser step="db.create" status detail next_action exists
+  db="$(onboard_db_name "$app")"
+  pguser="${POSTGRES_USER:-postgres}"
+  next_action="reference the database in the app's secret template, then: outpost seal-from-template"
+
+  # Existence check — idempotent. Connect to the always-present 'postgres'
+  # maintenance DB. A failed docker exec = the data layer is not up.
+  if ! exists="$(docker exec postgres psql -U "$pguser" -d postgres -tAc \
+       "SELECT 1 FROM pg_database WHERE datname='$db'" 2>/dev/null)"; then
+    _onboard_report "$json" "$step" error \
+      "cannot reach the postgres container — is the data layer running?" \
+      "start it: docker compose -f core/compose/docker-compose.yml up -d postgres"
+    exit 1
+  fi
+
+  if [[ "$exists" == "1" ]]; then
+    status="exists"; detail="database \"$db\" already present"
+  else
+    if ! docker exec postgres psql -U "$pguser" -d postgres \
+         -c "CREATE DATABASE \"$db\"" >/dev/null 2>&1; then
+      _onboard_report "$json" "$step" error \
+        "CREATE DATABASE \"$db\" failed" "inspect postgres logs: docker logs postgres"
+      exit 1
+    fi
+    status="created"; detail="database \"$db\" created"
+  fi
+  _onboard_report "$json" "$step" "$status" "$detail" "$next_action"
+  exit 0
+}
+
+# outpost seal-from-template <app> --template <p> --output <p> [--json]
+# Render a plaintext Secret template (envsubst + strict ${VAR} residue check),
+# then seal it with kubeseal. NOTE: SealedSecret ciphertext is randomised —
+# re-running always (re)writes <output>; idempotency holds at the plaintext
+# level (same template + env → same decrypted Secret), not byte-for-byte.
+cmd_seal_from_template() {
+  local app="" template="" output="" json=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --template) template="${2:-}"; shift 2 ;;
+      --output)   output="${2:-}";   shift 2 ;;
+      --json)     json=1; shift ;;
+      -*)         _die "unknown flag: $1" ;;
+      *)          [[ -z "$app" ]] && app="$1"; shift ;;
+    esac
+  done
+  [[ -z "$app" ]]      && _die "outpost seal-from-template <app> --template <path> --output <path> [--json]"
+  [[ -z "$template" ]] && _die "--template <path> is required"
+  [[ -z "$output" ]]   && _die "--output <path> is required"
+  _need kubeseal
+  _need envsubst
+
+  local step="seal.from-template"
+  if [[ ! -r "$template" ]]; then
+    _onboard_report "$json" "$step" error "template not readable: $template" \
+      "create the plaintext Secret template (\${VAR} placeholders) first"
+    exit 1
+  fi
+
+  local tmp; tmp="$(mktemp)"
+  trap 'rm -f "$tmp"' EXIT
+
+  # render_template aborts (non-zero + stderr detail) on any unresolved
+  # ${VAR} — better an explicit failure than a sealed empty value.
+  if ! render_template "$template" "$tmp"; then
+    _onboard_report "$json" "$step" error \
+      "template has unresolved \${VAR} placeholders (see message above)" \
+      "export the missing variables, then retry"
+    exit 1
+  fi
+
+  mkdir -p "$(dirname "$output")"
+  if ! kubeseal --controller-namespace=kube-system --format=yaml < "$tmp" > "$output" 2>/dev/null; then
+    rm -f "$output"
+    _onboard_report "$json" "$step" error \
+      "kubeseal failed — is the sealed-secrets controller running?" \
+      "check: kubectl -n kube-system get pods -l name=sealed-secrets-controller"
+    exit 1
+  fi
+
+  _onboard_report "$json" "$step" sealed "sealed → $output" \
+    "commit $output to the manifests repo (apps/$app/)" "$output"
+  exit 0
+}
+
+# outpost manifest scaffold <app> --lang <l> --manifests-dir <d> [--json] [--force]
+cmd_manifest() {
+  local sub="${1:-}"; shift || true
+  case "$sub" in
+    scaffold) _manifest_scaffold "$@" ;;
+    *)        _die "outpost manifest scaffold <app> --lang <lang> --manifests-dir <path> [--json] [--force]" ;;
+  esac
+}
+
+# Generic, generated kustomization.yaml (avoids depending on each language
+# example shipping one — only go's does today).
+_scaffold_kustomization() {
+  local app="$1" image="$2"
+  cat <<EOF
+# Kustomize-managed image override. Tekton's update-manifest task rewrites
+# the matching images[] entry's newTag on every successful build.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+
+images:
+  - name: ${image}
+    newName: ${image}
+    newTag: placeholder
+EOF
+}
+
+_manifest_scaffold() {
+  local app="" lang="" mdir="" json=0 force=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --lang)          lang="${2:-}"; shift 2 ;;
+      --manifests-dir) mdir="${2:-}"; shift 2 ;;
+      --json)          json=1; shift ;;
+      --force)         force=1; shift ;;
+      -*)              _die "unknown flag: $1" ;;
+      *)               [[ -z "$app" ]] && app="$1"; shift ;;
+    esac
+  done
+  [[ -z "$app" ]]  && _die "outpost manifest scaffold <app> --lang <lang> --manifests-dir <path> [--json] [--force]"
+  [[ -z "$lang" ]] && _die "--lang <lang> is required"
+  [[ -z "$mdir" ]] && _die "--manifests-dir <path> is required"
+
+  local src="$OUTPOST_HOME/examples/hello-world/$lang/manifest"
+  [[ -d "$src" ]] || _die "unknown --lang '$lang' — supported: $(ls "$OUTPOST_HOME/examples/hello-world" | grep -v README | tr '\n' ' ')"
+  [[ -d "$mdir" ]] || _die "--manifests-dir does not exist: $mdir (clone the manifests repo first)"
+
+  local f
+  for f in deployment.yaml service.yaml ingress.yaml; do
+    [[ -r "$src/$f" ]] || _die "template missing: $src/$f (the $lang example is incomplete)"
+  done
+
+  local step="manifest.scaffold"
+  local appdir="$mdir/apps/$app" argodir="$mdir/argocd-apps"
+  mkdir -p "$appdir" "$argodir"
+
+  local registry domain repo_url repo_branch
+  # The host the build pipeline pushes to — keeps the scaffolded kustomization
+  # images[].name matching what update-manifest rewrites on the first build.
+  registry="${REGISTRY_PUSH_HOST:-${REGISTRY_HOST:-registry.example.com}}"
+  domain="${ROOT_DOMAIN:-example.com}"
+  repo_url="${MANIFEST_REPO_URL:-https://example.com/your/infras-manifests.git}"
+  repo_branch="${MANIFEST_REPO_BRANCH:-main}"
+
+  # Substitutions shared by deployment / service / ingress.
+  local subst=(
+    "s|hello-world-${lang}|${app}|g"
+    "s|hello-${lang}|${app}|g"
+    "s|registry\\.example\\.com|${registry}|g"
+    "s|apps\\.example\\.com|apps.${domain}|g"
+  )
+
+  local tmpdir; tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' EXIT
+
+  onboard_render_subst "$src/deployment.yaml" "$tmpdir/deployment.yaml" "${subst[@]}"
+  onboard_render_subst "$src/service.yaml"    "$tmpdir/service.yaml"    "${subst[@]}"
+  onboard_render_subst "$src/ingress.yaml"    "$tmpdir/ingress.yaml"    "${subst[@]}"
+  _scaffold_kustomization "$app" "${registry}/${app}" > "$tmpdir/kustomization.yaml"
+  onboard_render_subst "$OUTPOST_HOME/examples/demo-app/argocd-application.yaml" \
+    "$tmpdir/argocd-application.yaml" \
+    "s|demo-app|${app}|g" \
+    "s|https://gitee.com/<your-user>/infras-manifests.git|${repo_url}|g" \
+    "s|targetRevision: main|targetRevision: ${repo_branch}|g"
+
+  # Place the 5 files idempotently: absent → write; identical → skip;
+  # drifted → leave untouched (unless --force) so hand edits are never lost.
+  local written=() drifted=0 unchanged=0
+  local pairs=(
+    "$tmpdir/deployment.yaml|$appdir/deployment.yaml"
+    "$tmpdir/service.yaml|$appdir/service.yaml"
+    "$tmpdir/ingress.yaml|$appdir/ingress.yaml"
+    "$tmpdir/kustomization.yaml|$appdir/kustomization.yaml"
+    "$tmpdir/argocd-application.yaml|$argodir/$app.yaml"
+  )
+  local pair tmpf dstf
+  for pair in "${pairs[@]}"; do
+    tmpf="${pair%%|*}"; dstf="${pair#*|}"
+    if [[ ! -e "$dstf" ]]; then
+      cp "$tmpf" "$dstf"; written+=("$dstf")
+    elif onboard_files_identical "$tmpf" "$dstf"; then
+      unchanged=$((unchanged + 1))
+    elif [[ "$force" -eq 1 ]]; then
+      cp "$tmpf" "$dstf"; written+=("$dstf")
+    else
+      drifted=$((drifted + 1))
+    fi
+  done
+
+  local status detail next_action
+  if [[ "$drifted" -gt 0 ]]; then
+    status="drift"
+    detail="$drifted of 5 file(s) differ from the scaffold; not overwritten"
+    next_action="inspect the differing file(s), or re-run with --force to overwrite"
+  elif [[ ${#written[@]} -eq 0 ]]; then
+    status="unchanged"
+    detail="all 5 manifest file(s) already match the scaffold"
+    next_action="nothing to do — manifests are up to date"
+  else
+    status="scaffolded"
+    detail="scaffolded ${#written[@]} file(s) under $mdir"
+    next_action="review the scaffolded file(s), then commit them to the manifests repo"
+  fi
+
+  if [[ ${#written[@]} -gt 0 ]]; then
+    _onboard_report "$json" "$step" "$status" "$detail" "$next_action" "${written[@]}"
+  else
+    _onboard_report "$json" "$step" "$status" "$detail" "$next_action"
+  fi
+  [[ "$status" == "drift" ]] && exit 2
+  exit 0
+}
+
 # --- router ------------------------------------------------------------------
 SUB="${1:-help}"
 shift || true
@@ -326,6 +624,9 @@ case "$SUB" in
   logs)           cmd_logs "$@" ;;
   rollback)       cmd_rollback "$@" ;;
   seal)           cmd_seal "$@" ;;
+  seal-from-template) cmd_seal_from_template "$@" ;;
+  db)             cmd_db "$@" ;;
+  manifest)       cmd_manifest "$@" ;;
   new-app)        cmd_new_app "$@" ;;
   decommission)   cmd_decommission "$@" ;;
   version|--version|-v) cmd_version ;;

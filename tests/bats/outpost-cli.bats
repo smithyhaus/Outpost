@@ -19,7 +19,7 @@ setup() {
   run bash "$CLI" help
   [ "$status" -eq 0 ]
   [[ "$output" =~ "outpost" ]]
-  for sub in status verify doctor open logs rollback seal new-app decommission; do
+  for sub in status verify doctor open logs rollback seal seal-from-template db manifest new-app decommission; do
     [[ "$output" == *"$sub"* ]] || { echo "missing subcommand in help: $sub"; return 1; }
   done
 }
