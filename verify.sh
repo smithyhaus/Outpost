@@ -17,7 +17,7 @@
 #
 # Mode awareness:
 #   In OUTPOST_MODE=local the script only checks the Compose data layer
-#   (postgres / redis / rabbitmq / meilisearch). k3s, ArgoCD, Tekton and
+#   (postgres / redis / rabbitmq / manticore). k3s, ArgoCD, Tekton and
 #   public-edge sections are skipped entirely.
 #
 # JSON schema is locked at tests/schema/verify-output.schema.json — AI tools
@@ -109,9 +109,9 @@ section "2. Compose data services"
 if docker_ok; then
   # Tunnel-profile services only run in full mode.
   if [[ "$OUTPOST_MODE" == "full" ]]; then
-    COMPOSE_SVCS=(cloudflared caddy postgres redis rabbitmq meilisearch)
+    COMPOSE_SVCS=(cloudflared caddy postgres redis rabbitmq manticore)
   else
-    COMPOSE_SVCS=(postgres redis rabbitmq meilisearch)
+    COMPOSE_SVCS=(postgres redis rabbitmq manticore)
   fi
   for svc in "${COMPOSE_SVCS[@]}"; do
     state=$(docker inspect --format '{{.State.Status}}' "$svc" 2>/dev/null) || state=""
@@ -204,7 +204,7 @@ fi
 # ---- 4. Bridge services ----------------------------------------------------
 section "4. Bridge services (k8s → compose)"
 if kubectl_ok; then
-  for svc in postgres redis rabbitmq meilisearch; do
+  for svc in postgres redis rabbitmq manticore; do
     if kubectl get svc -n infra-bridges "$svc" >/dev/null 2>&1; then
       ext=$(kubectl get svc -n infra-bridges "$svc" -o jsonpath='{.spec.externalName}' 2>/dev/null)
       if [[ "$ext" == "host.docker.internal" ]]; then

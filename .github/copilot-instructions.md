@@ -11,7 +11,7 @@ expected to follow; the canonical operating doc is
 Outpost is a self-hosted dev backend in two modes:
 
 - **`local`** (default): Docker Compose data services on `localhost`
-  (Postgres / Redis / RabbitMQ / Meilisearch). Zero required input.
+  (Postgres / Redis / RabbitMQ / Manticore Search). Zero required input.
 - **`full`**: `local` + Cloudflare Tunnel + k3s + ArgoCD + Tekton GitOps.
 
 Built around a 5-kind **plugin model** — `registry`, `git-provider`,

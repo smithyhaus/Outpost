@@ -24,7 +24,7 @@ Notification providers: `${NOTIFICATION_PROVIDERS}` (empty = none enabled)
 | Redis          | `redis.${ROOT_DOMAIN}`       | 6379  | (none)            | `${REDIS_PASSWORD}`        |
 | RabbitMQ AMQP  | `rabbitmq.${ROOT_DOMAIN}`    | 5672  | `${RABBITMQ_USER}` | `${RABBITMQ_PASSWORD}`     |
 | RabbitMQ UI    | `https://mq.${ROOT_DOMAIN}`  | —     | `${RABBITMQ_USER}` | `${RABBITMQ_PASSWORD}`     |
-| Meilisearch    | `https://search.${ROOT_DOMAIN}` | — | (Bearer)          | `${MEILI_MASTER_KEY}`      |
+| Manticore HTTP | `https://search.${ROOT_DOMAIN}` | — | (none)            | — (standalone has no auth) |
 | ArgoCD         | `https://argocd.${ROOT_DOMAIN}` | — | `admin`           | (see §6)                   |
 | Tekton Dashboard | `https://tekton.${ROOT_DOMAIN}` | — | `${OUTPOST_DASHBOARD_USER}` (BasicAuth) | `${OUTPOST_DASHBOARD_PASSWORD}` |
 | Argo Rollouts UI | `https://${ROLLOUTS_DASHBOARD_HOST}` | — | `${OUTPOST_DASHBOARD_USER}` (BasicAuth) | `${OUTPOST_DASHBOARD_PASSWORD}` |
@@ -91,15 +91,20 @@ amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq.infra-bridges.svc.cluster.
 amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@localhost:5672/
 ```
 
-## 5. Meilisearch v1.10
+## 5. Manticore Search 7.4.6
 
-- Public: `https://search.${ROOT_DOMAIN}`
-- From k8s: `http://meilisearch.infra-bridges.svc.cluster.local:7700`
-- Master key: `${MEILI_MASTER_KEY}`
-- Mode: `${MEILI_ENV}` (Authorization header required)
+- Public HTTP: `https://search.${ROOT_DOMAIN}` (JSON API, not a UI)
+- From k8s (HTTP): `http://manticore.infra-bridges.svc.cluster.local:9308`
+- From k8s (MySQL): `mysql -hmanticore.infra-bridges.svc.cluster.local -P9306`
+- Auth: none (standalone mode has no built-in auth)
+- Replication hook: see `core/compose/manticore/README.md` to flip it on
 
 ```bash
-curl -H "Authorization: Bearer ${MEILI_MASTER_KEY}" https://search.${ROOT_DOMAIN}/health
+# Health probe (HTTP)
+curl https://search.${ROOT_DOMAIN}/
+
+# Local SQL access
+mysql -h127.0.0.1 -P9306 -e 'SHOW STATUS'
 ```
 
 ## 6. ArgoCD

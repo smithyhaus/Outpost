@@ -6,7 +6,7 @@
 > dev workstation, just connect to `localhost:5432` and **skip this
 > entire doc**.
 
-HTTP services (ArgoCD UI / RabbitMQ UI / Meilisearch / Registry) work
+HTTP services (ArgoCD UI / RabbitMQ UI / Manticore HTTP / Registry) work
 directly in the browser via `https://...` and do NOT need this doc.
 **TCP services** (PostgreSQL / Redis / RabbitMQ AMQP) need a different
 path because IDE clients can't speak Cloudflare's tunnel protocol — you

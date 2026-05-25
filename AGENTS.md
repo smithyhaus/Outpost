@@ -22,7 +22,7 @@ If anything below contradicts `SKILL.md`, `SKILL.md` wins.
 ## The four facts every agent must know before touching code
 
 1. **Two modes.** `OUTPOST_MODE=local` runs Compose data services only (PG /
-   Redis / RabbitMQ / Meilisearch on `localhost`, zero required input).
+   Redis / RabbitMQ / Manticore on `localhost`, zero required input).
    `OUTPOST_MODE=full` adds Cloudflare Tunnel + k3s + ArgoCD + Tekton GitOps
    and requires `ROOT_DOMAIN`, `CF_TUNNEL_TOKEN`, `GIT_USER`, `GIT_TOKEN`,
    `MANIFEST_REPO_URL`. Don't break the local-mode zero-prompt path.

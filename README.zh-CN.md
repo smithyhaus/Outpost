@@ -1,7 +1,7 @@
 # Outpost
 
 > **一行命令，把一整套自托管开发后端跑在你自己的设备上。**
-> Postgres / Redis / RabbitMQ / Meilisearch + 完整 GitOps CI/CD 流水线，
+> Postgres / Redis / RabbitMQ / Manticore Search + 完整 GitOps CI/CD 流水线，
 > 通过 Cloudflare Tunnel 暴露在你自己的域名上。
 > 支持 macOS / Linux / Windows (WSL2)。Plugin 化设计。AI 友好开箱即用。
 
@@ -27,7 +27,7 @@
             │  + pgvector  │    │  Tekton + Webhook   │
             │  Redis       │    │  Docker Registry    │
             │  RabbitMQ    │    │  你的应用            │
-            │  Meilisearch │    │                     │
+            │  Manticore   │    │                     │
             └──────────────┘    └────────────────────┘
 ```
 
@@ -43,7 +43,7 @@ Outpost 提供两种模式，按当前需求挑一个。
 
 | 模式 | 跑什么 | 必填项 | 适用场景 |
 |------|--------|--------|----------|
-| **`local`** *(默认)* | Compose 数据服务跑在 `localhost`：PG、Redis、RabbitMQ、Meilisearch | 无 —— 全部默认值或自动生成 | 本机当个人开发后端，不需要公网，不需要 CI/CD |
+| **`local`** *(默认)* | Compose 数据服务跑在 `localhost`：PG、Redis、RabbitMQ、Manticore Search | 无 —— 全部默认值或自动生成 | 本机当个人开发后端，不需要公网，不需要 CI/CD |
 | **`full`** | `local` 的全部 + Cloudflare Tunnel + k3s + ArgoCD + Tekton | `ROOT_DOMAIN`、`CF_TUNNEL_TOKEN`、`GIT_USER`、`GIT_TOKEN`、`MANIFEST_REPO_URL` | 需要把服务挂到自己域名上 + push 即部署的 GitOps |
 
 通过修改 `.env` 里的 `OUTPOST_MODE` 切换。重跑 `bash bootstrap.sh` 是幂等的；`.env` 里已有的密码会被复用。

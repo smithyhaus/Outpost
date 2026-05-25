@@ -6,7 +6,7 @@
 #
 # Two modes (set via OUTPOST_MODE in .env):
 #
-#   local : Compose data services only (PG / Redis / RabbitMQ / Meilisearch
+#   local : Compose data services only (PG / Redis / RabbitMQ / Manticore
 #           on localhost). No CF Tunnel, no k3s, no GitOps. Zero required
 #           input — every value either has a sensible default or gets
 #           auto-generated. Phase 1 → 4 → 10-local.
@@ -20,7 +20,7 @@
 #   01-preflight        tools, OS detection, docker daemon
 #   02-config           prompt/load .env, plugin selection, .env persist
 #   03-render-infra     INFRA.md / INFRA.zh-CN.md
-#   04-compose          PG / Redis / RabbitMQ / Meilisearch (+ tunnel)
+#   04-compose          PG / Redis / RabbitMQ / Manticore (+ tunnel)
 #   ──── full mode only below ────
 #   05-k3s              k3s install + namespaces + apps quota
 #   06-sealed-secrets   controller + master-key backup/restore

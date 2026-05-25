@@ -87,7 +87,7 @@ $ # fix it, re-run, then bootstrap.sh — no surprise mid-install
 | P1 | `tests/bats/eventlistener-assemble.bats` | 10-31 | bats pattern for a file that sources a `platform/lib/*.sh` to unit-test its functions |
 | P1 | `tests/bats/outpost-cli.bats` | 18-25 | The help-subcommands assertion to extend with `doctor` |
 | P1 | `bootstrap.d/01-preflight.sh` | all (28) | The existing (in-bootstrap) preflight — doctor supersedes/anticipates it; do not duplicate-wire |
-| P2 | `core/compose/docker-compose.yml` | 88-89, 117-118, 140-141, 164-165 | Authoritative host-bound ports: 5432 / 6379 / 5672 / 7700 (NOT 15672) |
+| P2 | `core/compose/docker-compose.yml` | 88-89, 117-118, 140-141, 164-165 | Authoritative host-bound ports: 5432 / 6379 / 5672 / 9308 (NOT 15672). Note: 9306 + 9312 are also bound by Manticore but doctor only checks 9308 as the load-bearing port. |
 
 ## External Documentation
 
@@ -96,9 +96,9 @@ No external research needed — feature uses only standard tools (`docker`,
 patterns (the `verify.sh` structure, the `platform/lib/*.sh` + bats split).
 
 GOTCHA captured from exploration: TODOS.md listed host port `15672` — that is
-**wrong**. `core/compose/docker-compose.yml` host-binds only `5432/6379/5672/7700`;
-RabbitMQ's `15672` management UI is caddy-proxied, never host-bound. doctor checks
-the 4 real ports.
+**wrong**. `core/compose/docker-compose.yml` host-binds only `5432/6379/5672/9308`
+(plus Manticore's 9306/9312); RabbitMQ's `15672` management UI is caddy-proxied,
+never host-bound. doctor checks the 4 load-bearing ports.
 
 ---
 
@@ -309,7 +309,7 @@ cmd_status() { exec bash "$OUTPOST_HOME/status.sh" "$@"; }
      `docker info` → `docker.daemon` PASS/FAIL (hint: "start Docker Desktop, or
      `sudo systemctl start docker`"). `docker compose version` → `docker.compose_v2`.
      `record PASS platform.os "$SK_OS" ""` and `platform.mode`.
-  5. **Section 2 — Host ports** (both modes): for `p` in `5432 6379 5672 7700`:
+  5. **Section 2 — Host ports** (both modes): for `p` in `5432 6379 5672 9308`:
      `state=$(doctor_port_state "$p")`. `free` → PASS. `busy` → FAIL,
      `holder=$(doctor_port_holder "$p")`, fix_hint
      `"port $p is in use${holder:+ by $holder} — it collides with the <svc> container; stop it before bootstrap"`.
@@ -672,7 +672,7 @@ EXPECT: `schema OK`.
 - **PRD-vs-reality corrections found during exploration** (logged per the
   "verify plan assumptions" practice):
   1. TODOS.md listed host port `15672` — wrong. `core/compose/docker-compose.yml`
-     binds only `5432/6379/5672/7700`; `15672` is caddy-proxied. doctor checks 4 ports.
+     binds only `5432/6379/5672/9308` (plus Manticore 9306/9312); `15672` is caddy-proxied. doctor checks 4 load-bearing ports.
   2. PRD Phase 2 scope listed a `tekton-pipelines` PSA-label check — that label
      is *output* of bootstrap, not a precondition; excluded (already covered by
      `cicd-walls.bats` B6). See NOT Building.

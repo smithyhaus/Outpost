@@ -39,7 +39,6 @@ if command -v docker >/dev/null && docker compose version >/dev/null 2>&1; then
   export ROOT_DOMAIN=lint.example.com CF_TUNNEL_TOKEN=lint
   export POSTGRES_USER=postgres POSTGRES_PASSWORD=lint POSTGRES_DB=postgres
   export REDIS_PASSWORD=lint RABBITMQ_USER=admin RABBITMQ_PASSWORD=lint
-  export MEILI_MASTER_KEY=lintlintlintlintlintlint MEILI_ENV=development
   if ! (cd core/compose && docker compose config -q); then
     FAILED=1
     err "docker compose config failed"

@@ -1,7 +1,7 @@
 # Outpost
 
 > **Spin up a full self-hosted dev backend in one command — anywhere.**
-> Postgres / Redis / RabbitMQ / Meilisearch + a complete GitOps CI/CD pipeline,
+> Postgres / Redis / RabbitMQ / Manticore Search + a complete GitOps CI/CD pipeline,
 > exposed on your own domain via Cloudflare Tunnel. Works on macOS, Linux, and
 > Windows (WSL2). Plugin-driven. AI-friendly out of the box.
 
@@ -27,7 +27,7 @@
               │  + pgvector  │    │  Tekton + webhook          │
               │  Redis       │    │  Registry                  │
               │  RabbitMQ    │    │  Testkube (test gate)      │
-              │  Meilisearch │    │  Argo Rollouts (auto-roll) │
+              │  Manticore   │    │  Argo Rollouts (auto-roll) │
               │              │    │  Your apps                 │
               └──────────────┘    └──────────────────────────┘
 ```
@@ -45,7 +45,7 @@ Outpost ships in two modes; pick the one that matches what you need today.
 
 | Mode | What runs | Required input | Use when |
 |------|-----------|----------------|----------|
-| **`local`** *(default)* | Compose data services on `localhost`: PG, Redis, RabbitMQ, Meilisearch | nothing — every value defaults or auto-generates | You want a personal dev backend on this box, no public hosting, no CI/CD |
+| **`local`** *(default)* | Compose data services on `localhost`: PG, Redis, RabbitMQ, Manticore Search | nothing — every value defaults or auto-generates | You want a personal dev backend on this box, no public hosting, no CI/CD |
 | **`full`** | Everything in `local` + Cloudflare Tunnel + k3s + ArgoCD + Tekton | `ROOT_DOMAIN`, `CF_TUNNEL_TOKEN`, `GIT_USER`, `GIT_TOKEN`, `MANIFEST_REPO_URL` | You want public access on your domain + push-to-deploy GitOps |
 
 Switch by editing `OUTPOST_MODE` in `.env`. Re-running `bash bootstrap.sh` is idempotent; passwords already in `.env` are reused.

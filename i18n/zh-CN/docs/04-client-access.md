@@ -3,7 +3,7 @@
 > ⚠️ **本文档操作的是"开发机"**，即你**写代码、用 DBeaver / Redis Insight / RabbitMQ 客户端**的那台机器。
 > 跟跑 Outpost 的主机**没有关系**。如果你的 Outpost 就跑在开发机本机，直接 `localhost:5432` 即可，**整篇文档跳过**。
 
-HTTP 服务（ArgoCD UI / RabbitMQ UI / Meilisearch / Registry）直接浏览器开 `https://...` 即可，**不需要本节**。
+HTTP 服务（ArgoCD UI / RabbitMQ UI / Manticore HTTP / Registry）直接浏览器开 `https://...` 即可，**不需要本节**。
 **TCP 服务**（PostgreSQL / Redis / RabbitMQ AMQP）由于 IDE 客户端不会说 Cloudflare 隧道协议，需要在开发机装 `cloudflared`，本地起一个 TCP 隧道把远端服务映射到 `localhost:<port>`。
 
 ## 一、装 cloudflared

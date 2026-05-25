@@ -36,7 +36,7 @@ In your tunnel detail page → **Public Hostname** tab → add each row (mind th
 | `redis`   | your root domain | TCP  | `redis:6379` |
 | `rabbitmq`| your root domain | TCP  | `rabbitmq:5672` |
 
-**Why URLs look duplicated**: cloudflared doesn't route — it just hands the request to the next hop. Caddy (`caddy:80`, splits by Host header to meilisearch / rabbitmq UI) and k3s Traefik (`host.docker.internal:30080`, splits by Ingress to ArgoCD / Tekton EL / Registry / user apps) do the second-level routing.
+**Why URLs look duplicated**: cloudflared doesn't route — it just hands the request to the next hop. Caddy (`caddy:80`, splits by Host header to manticore HTTP / rabbitmq UI) and k3s Traefik (`host.docker.internal:30080`, splits by Ingress to ArgoCD / Tekton EL / Registry / user apps) do the second-level routing.
 
 **Why no HTTPS option**: TLS terminates at the Cloudflare edge; the tunnel itself carries plain HTTP. The `Type` column intentionally has no HTTPS — your users still hit `https://argocd.<domain>`, which Cloudflare serves with an auto-issued cert.
 

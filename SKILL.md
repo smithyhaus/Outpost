@@ -56,7 +56,8 @@ cloudflared (Compose container)
 postgres.infra-bridges.svc.cluster.local       → host.docker.internal:5432
 redis.infra-bridges.svc.cluster.local          → host.docker.internal:6379
 rabbitmq.infra-bridges.svc.cluster.local       → host.docker.internal:5672
-meilisearch.infra-bridges.svc.cluster.local    → host.docker.internal:7700
+manticore.infra-bridges.svc.cluster.local      → host.docker.internal:9308 (HTTP)
+manticore.infra-bridges.svc.cluster.local      → host.docker.internal:9306 (SQL)
 ```
 
 Apps reference these bridge DNS names. To migrate to managed cloud services

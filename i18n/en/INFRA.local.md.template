@@ -25,7 +25,8 @@ To upgrade to `full` mode (Cloudflare Tunnel + k3s + ArgoCD + Tekton):
 | Redis         | `localhost`        | 6379  | (none)              | `${REDIS_PASSWORD}`        |
 | RabbitMQ AMQP | `localhost`        | 5672  | `${RABBITMQ_USER}`  | `${RABBITMQ_PASSWORD}`     |
 | RabbitMQ UI   | `http://localhost` | 15672 | `${RABBITMQ_USER}`  | `${RABBITMQ_PASSWORD}`     |
-| Meilisearch   | `http://localhost` | 7700  | (Bearer)            | `${MEILI_MASTER_KEY}`      |
+| Manticore HTTP| `http://localhost` | 9308  | (none)              | — (standalone, no auth)    |
+| Manticore SQL | `localhost`        | 9306  | (none)              | — (MySQL wire protocol)    |
 
 ---
 
@@ -63,14 +64,20 @@ redis://default:${REDIS_PASSWORD}@localhost:6379/0
 amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@localhost:5672/
 ```
 
-## 4. Meilisearch v1.10
+## 4. Manticore Search 7.4.6 (standalone)
 
-- Host: `http://localhost:7700`
-- Master key: `${MEILI_MASTER_KEY}`
-- Mode: `${MEILI_ENV}` (Authorization header required)
+- HTTP/JSON API: `http://localhost:9308`
+- MySQL wire   : `mysql -h127.0.0.1 -P9306`
+- Binary / future replication slot: `localhost:9312`
+- Auth: none (standalone has no built-in auth)
+- Replication hook: see `core/compose/manticore/README.md`
 
 ```bash
-curl -H "Authorization: Bearer ${MEILI_MASTER_KEY}" http://localhost:7700/health
+# Health probe
+curl http://localhost:9308/
+
+# Open a SQL shell
+mysql -h127.0.0.1 -P9306 -e 'SHOW STATUS'
 ```
 
 ## 5. Host / OS

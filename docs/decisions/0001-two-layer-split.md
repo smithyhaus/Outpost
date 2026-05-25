@@ -9,7 +9,7 @@
 Outpost needs to run, on a single machine, both:
 
 - **Stateful infrastructure** that almost every project assumes: Postgres,
-  Redis, RabbitMQ, Meilisearch. These are long-lived; their state is
+  Redis, RabbitMQ, Manticore Search. These are long-lived; their state is
   precious; they're upgraded rarely.
 - **Stateless applications + CI/CD** that drive a GitOps workflow:
   ArgoCD, Tekton, image registry, user app pods. These churn constantly;

@@ -73,7 +73,6 @@ OUTPOST_DEPLOY_BRANCH="${OUTPOST_DEPLOY_BRANCH:-main}"
 POSTGRES_USER="${POSTGRES_USER:-postgres}"
 POSTGRES_DB="${POSTGRES_DB:-postgres}"
 RABBITMQ_USER="${RABBITMQ_USER:-admin}"
-MEILI_ENV="${MEILI_ENV:-production}"
 
 # Phase 9 plugin defaults (full mode only — but read in both so .env is consistent)
 TEST_RUNNER="${TEST_RUNNER:-testkube}"
@@ -94,7 +93,6 @@ TESTKUBE_CLOUD_API_KEY="${TESTKUBE_CLOUD_API_KEY:-}"
 [[ -z "${POSTGRES_PASSWORD:-}" ]]      && POSTGRES_PASSWORD=$(gen_password)
 [[ -z "${REDIS_PASSWORD:-}" ]]         && REDIS_PASSWORD=$(gen_password)
 [[ -z "${RABBITMQ_PASSWORD:-}" ]]      && RABBITMQ_PASSWORD=$(gen_password)
-[[ -z "${MEILI_MASTER_KEY:-}" ]]       && MEILI_MASTER_KEY=$(gen_password)
 [[ -z "${GIT_WEBHOOK_SECRET:-}" ]]     && GIT_WEBHOOK_SECRET=$(gen_password)
 # Dashboard BasicAuth — protects Tekton Dashboard + Argo Rollouts UI.
 # Both ship without built-in auth and grant write access (cancel/delete
@@ -169,8 +167,6 @@ fi
   echo "REDIS_PASSWORD=${REDIS_PASSWORD}"
   echo "RABBITMQ_USER=${RABBITMQ_USER}"
   echo "RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD}"
-  echo "MEILI_MASTER_KEY=${MEILI_MASTER_KEY}"
-  echo "MEILI_ENV=${MEILI_ENV}"
   echo "GIT_USER=${GIT_USER}"
   echo "GIT_TOKEN=${GIT_TOKEN}"
   echo "GIT_WEBHOOK_SECRET=${GIT_WEBHOOK_SECRET}"

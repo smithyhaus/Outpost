@@ -66,7 +66,7 @@ docker compose -f compose/docker-compose.yml ps
 - postgres (healthy)
 - redis (healthy)
 - rabbitmq (healthy)
-- meilisearch (healthy)
+- manticore (healthy)
 
 **单项失败诊断**：
 ```bash

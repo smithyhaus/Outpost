@@ -108,7 +108,7 @@ port_svc() {
     5432) echo "postgres" ;;
     6379) echo "redis" ;;
     5672) echo "rabbitmq" ;;
-    7700) echo "meilisearch" ;;
+    9308) echo "manticore" ;;
     *)    echo "?" ;;
   esac
 }
@@ -148,7 +148,7 @@ record PASS "platform.mode" "OUTPOST_MODE=$OUTPOST_MODE" ""
 # already held by something else makes Phase 4 die with a confusing
 # "Bind for 0.0.0.0:<p> failed" — catch it here instead.
 section "2. Host ports"
-for port in 5432 6379 5672 7700; do
+for port in 5432 6379 5672 9308; do
   svc="$(port_svc "$port")"
   if [[ "$(doctor_port_state "$port")" == "free" ]]; then
     record PASS "port.$port" "free (for the $svc container)" ""
@@ -172,7 +172,7 @@ if docker_ok; then
       record PASS "disk.docker" "${free_gb}G free at $docker_root" ""
     else
       record WARN "disk.docker" "only ${free_gb}G free at $docker_root" \
-        "low disk where Docker stores data — Postgres/Meilisearch fill it fast; run 'docker system prune'"
+        "low disk where Docker stores data — Postgres/Manticore fill it fast; run 'docker system prune'"
     fi
   else
     record WARN "disk.docker" "could not determine Docker disk free space" ""

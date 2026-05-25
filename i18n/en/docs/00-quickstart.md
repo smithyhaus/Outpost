@@ -9,7 +9,7 @@
 
 | Mode | What you get | Required input | When to use |
 |------|--------------|----------------|-------------|
-| **`local`** *(default)* | Compose data services on `localhost` (PG / Redis / RabbitMQ / Meilisearch) | none | personal dev backend on this box, no public hosting, no CI/CD |
+| **`local`** *(default)* | Compose data services on `localhost` (PG / Redis / RabbitMQ / Manticore Search) | none | personal dev backend on this box, no public hosting, no CI/CD |
 | **`full`** | `local` + Cloudflare Tunnel + k3s + ArgoCD + Tekton GitOps | `ROOT_DOMAIN`, `CF_TUNNEL_TOKEN`, `GIT_USER`, `GIT_TOKEN`, `MANIFEST_REPO_URL` | want a public domain + push-to-deploy GitOps |
 
 > You can switch modes at any time. Start in `local`; once comfortable,
@@ -190,7 +190,7 @@ systemd inside WSL is enabled, but **the WSL distro itself doesn't auto-start wi
 
 ⚠️ **Important**: this installs cloudflared on your **dev workstation** (the laptop you write code on) so it can open local TCP tunnels to PG / Redis / RabbitMQ. **Independent of the Outpost host.** If your Outpost host *is* your dev workstation, just use `localhost:5432` directly and **skip this phase**.
 
-HTTP services (ArgoCD UI / RabbitMQ UI / Meilisearch / Registry) work in the browser via `https://...` — they do NOT need this phase.
+HTTP services (ArgoCD UI / RabbitMQ UI / Manticore HTTP / Registry) work in the browser via `https://...` — they do NOT need this phase. Note: Manticore's HTTP endpoint is a JSON API, not a UI — opening it in the browser returns API responses, not a dashboard.
 
 Full instructions in `04-client-access.md`. Short version:
 

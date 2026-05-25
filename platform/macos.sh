@@ -65,7 +65,7 @@ sk_setup_autostart() {
   # infra root, not next to the compose file), every ${VAR} in
   # docker-compose.yml expands to "" and containers get recreated with
   # blank env vars (postgres unhealthy, redis "wrong number of arguments",
-  # meilisearch "--env required", etc.).
+  # manticore healthcheck fails on missing config, etc.).
   cat > "$agent" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>

@@ -20,10 +20,10 @@ swappable.
     │   (data layer)   │    │ HTTP routing     │    │ :30080               │
     │                  │    │                  │    │ (k3s Traefik NodePort)│
     │ postgres:5432  ◄─┼────│                  │    │                       │
-    │ redis:6379    ◄──┤    │ search.* → meili │    │  ArgoCD              │
+    │ redis:6379    ◄──┤    │ search.* → mantic│    │  ArgoCD              │
     │ rabbitmq:5672 ◄──┤    │ mq.* → rabbitmq  │    │  Tekton + Dashboard  │
     │ rabbitmq:15672 ──┤    │                  │    │  Docker Registry     │
-    │ meilisearch:7700 ┘    └──────────────────┘    │  Sealed-Secrets      │
+    │ manticore:9308  ─┘    └──────────────────┘    │  Sealed-Secrets      │
     │                                                │  Testkube (Gate A/B) │
     │                                                │  Argo Rollouts       │
     │                                                │     + Dashboard      │
@@ -60,7 +60,8 @@ The two layers communicate through ExternalName Services in the
 postgres.infra-bridges.svc.cluster.local       → host.docker.internal:5432
 redis.infra-bridges.svc.cluster.local          → host.docker.internal:6379
 rabbitmq.infra-bridges.svc.cluster.local       → host.docker.internal:5672
-meilisearch.infra-bridges.svc.cluster.local    → host.docker.internal:7700
+manticore.infra-bridges.svc.cluster.local      → host.docker.internal:9308 (HTTP)
+manticore.infra-bridges.svc.cluster.local      → host.docker.internal:9306 (SQL)
 ```
 
 Apps reference the K8s DNS names, never `host.docker.internal` directly. To
@@ -77,7 +78,7 @@ A single `cloudflared` container in Compose carries all ingress:
 | `redis.<domain>`                | TCP  | `redis:6379`                               |
 | `rabbitmq.<domain>`             | TCP  | `rabbitmq:5672`                            |
 | `mq.<domain>`                   | HTTP | `caddy:80` → `rabbitmq:15672`              |
-| `search.<domain>`               | HTTP | `caddy:80` → `meilisearch:7700`            |
+| `search.<domain>`               | HTTP | `caddy:80` → `manticore:9308`              |
 | `argocd.<domain>`               | HTTP | `host.docker.internal:30080` → ArgoCD      |
 | `tekton.<domain>`               | HTTP | `host.docker.internal:30080` → Tekton Dashboard *(BasicAuth)* |
 | `rollouts.<domain>`             | HTTP | `host.docker.internal:30080` → Argo Rollouts UI *(BasicAuth)* |

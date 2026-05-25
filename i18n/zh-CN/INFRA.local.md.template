@@ -24,7 +24,8 @@
 | Redis         | `localhost`        | 6379  | (无)                | `${REDIS_PASSWORD}`        |
 | RabbitMQ AMQP | `localhost`        | 5672  | `${RABBITMQ_USER}`  | `${RABBITMQ_PASSWORD}`     |
 | RabbitMQ UI   | `http://localhost` | 15672 | `${RABBITMQ_USER}`  | `${RABBITMQ_PASSWORD}`     |
-| Meilisearch   | `http://localhost` | 7700  | (Bearer)            | `${MEILI_MASTER_KEY}`      |
+| Manticore HTTP| `http://localhost` | 9308  | (无)                | — (standalone 无鉴权)      |
+| Manticore SQL | `localhost`        | 9306  | (无)                | — (MySQL 协议)             |
 
 ---
 
@@ -62,14 +63,20 @@ redis://default:${REDIS_PASSWORD}@localhost:6379/0
 amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@localhost:5672/
 ```
 
-## 4. Meilisearch v1.10
+## 4. Manticore Search 7.4.6（standalone）
 
-- 地址：`http://localhost:7700`
-- Master key：`${MEILI_MASTER_KEY}`
-- 模式：`${MEILI_ENV}`（需要 Authorization 头）
+- HTTP/JSON API：`http://localhost:9308`
+- MySQL 协议   ：`mysql -h127.0.0.1 -P9306`
+- 二进制 / 未来 replication 端口：`localhost:9312`
+- 鉴权：无（standalone 模式无内建鉴权）
+- Replication 钩子：见 `core/compose/manticore/README.md`
 
 ```bash
-curl -H "Authorization: Bearer ${MEILI_MASTER_KEY}" http://localhost:7700/health
+# 健康探测
+curl http://localhost:9308/
+
+# SQL 接入
+mysql -h127.0.0.1 -P9306 -e 'SHOW STATUS'
 ```
 
 ## 5. 主机 / 操作系统

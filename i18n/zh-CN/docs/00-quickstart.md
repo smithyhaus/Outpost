@@ -8,7 +8,7 @@
 
 | 模式 | 你能拿到什么 | 必填项 | 适用 |
 |------|--------------|--------|------|
-| **`local`** *(默认)* | Compose 数据服务跑在 `localhost`(PG / Redis / RabbitMQ / Meilisearch) | 无 | 个人本机开发后端,不需要公网 / GitOps |
+| **`local`** *(默认)* | Compose 数据服务跑在 `localhost`(PG / Redis / RabbitMQ / Manticore Search) | 无 | 个人本机开发后端,不需要公网 / GitOps |
 | **`full`** | `local` + Cloudflare Tunnel + k3s + ArgoCD + Tekton GitOps | `ROOT_DOMAIN`, `CF_TUNNEL_TOKEN`, `GIT_USER`, `GIT_TOKEN`, `MANIFEST_REPO_URL` | 想挂自己域名 + push 即部署 |
 
 > 两种模式可随时切换。先 `local`,熟悉后改 `.env` 的 `OUTPOST_MODE=full` 重跑 `bootstrap.sh`,数据卷与已生成的密码会被复用。
@@ -177,7 +177,7 @@ WSL2 内的 systemd 已由 bootstrap 启用,但 **distro 自身不会随 Win 启
 
 ⚠️ **注意**:这一步装的 cloudflared 是在你的**开发机**上(Mac/Win 笔记本等),用来从远端打 TCP 隧道连 PG/Redis/RabbitMQ。**和 Outpost 主机无关**。如果你的 Outpost 就跑在开发机本机,直接 `localhost:5432` 就行,**跳过本节**。
 
-HTTP 服务(ArgoCD UI / RabbitMQ UI / Meilisearch / Registry)直接浏览器开 `https://...`,**不需要本节**。
+HTTP 服务(ArgoCD UI / RabbitMQ UI / Manticore HTTP / Registry)直接浏览器开 `https://...`,**不需要本节**。注意:Manticore 的 HTTP 端点是 JSON API,不是 UI——浏览器打开返回的是 API 响应,不是控制面板。
 
 完整步骤见 `04-client-access.md`。简版:
 

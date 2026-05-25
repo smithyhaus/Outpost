@@ -16,7 +16,7 @@ fi
 
 cat <<EOF
 WARNING — this will:
-  1. docker compose down -v (drops PG/Redis/RabbitMQ/Meili volumes + cloudflared + caddy)
+  1. docker compose down -v (drops PG/Redis/RabbitMQ/Manticore volumes + cloudflared + caddy)
   2. uninstall k3s / delete the k3d cluster (drops ArgoCD/Tekton/Registry/applications)
   3. delete .env, INFRA.md, INFRA.zh-CN.md, ~/.kube/config
 EOF

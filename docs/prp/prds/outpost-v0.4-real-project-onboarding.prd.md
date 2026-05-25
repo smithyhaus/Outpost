@@ -198,9 +198,9 @@ Minimum to validate the hypothesis: **all Must-haves above**, validated against 
 
 | # | Phase | Description | Status | Parallel | Depends | PRP Plan |
 |---|-------|-------------|--------|----------|---------|----------|
-| 1 | Foundation hardening | Re-scoped 2026-05-20: B1/B2/B3/B5/B6 already fixed in v0.3 cycle. Fix C3 (webhook pin to deploy branch) + add bats regression locks for all 6 walls | complete | - | - | [plan](../plans/completed/outpost-v0.4-phase1-cicd-wall-hardening.plan.md) · [report](../reports/outpost-v0.4-phase1-cicd-wall-hardening-report.md) |
-| 2 | `outpost doctor` ex-ante | Preflight subcommand catching every documented wall before bootstrap or onboard runs; JSON output; idempotent | complete | - | 1 | [plan](../plans/completed/outpost-v0.4-phase2-doctor-preflight.plan.md) · [report](../reports/outpost-v0.4-phase2-doctor-preflight-report.md) |
-| 3 | Onboard primitives | New subcommands `outpost db create`, `outpost seal-from-template`, `outpost manifest scaffold` — extracted/generalized from `SCM MCP/scripts/onboard.sh`; each idempotent + JSON | pending | with 4 | 1 | - |
+| 1 | Foundation hardening | Re-scoped 2026-05-20: B1/B2/B3/B5/B6 already fixed in v0.3 cycle. Fix C3 (webhook pin to deploy branch) + add bats regression locks for all 6 walls | complete | - | - | [plan](../plans/outpost-v0.4-phase1-cicd-wall-hardening.plan.md) · [report](../reports/outpost-v0.4-phase1-cicd-wall-hardening-report.md) |
+| 2 | `outpost doctor` ex-ante | Preflight subcommand catching every documented wall before bootstrap or onboard runs; JSON output; idempotent | complete | - | 1 | [plan](../plans/outpost-v0.4-phase2-doctor-preflight.plan.md) · [report](../reports/outpost-v0.4-phase2-doctor-preflight-report.md) |
+| 3 | Onboard primitives | New subcommands `outpost db create`, `outpost seal-from-template`, `outpost manifest scaffold` — extracted/generalized from `SCM MCP/scripts/onboard.sh`; each idempotent + JSON | complete | with 4 | 1 | [plan](../plans/outpost-v0.4-phase3-onboard-primitives.plan.md) · [report](../reports/outpost-v0.4-phase3-onboard-primitives-report.md) |
 | 4 | Webhook auto-register | `plugins/git-provider/{gitee,github,gitlab}/register-webhook.sh` + graceful manual-fallback path; resolves OQ-2 | pending | with 3 | 1 | - |
 | 5 | `outpost onboard <repo>` orchestration | Top-level command that calls 3+4 in sequence, owns state file under `~/.outpost/state/`, supports `--legacy`, `--dry-run`, `--json`; wait-for-green poll loop | pending | - | 2, 3, 4 | - |
 | 6 | AI-agent contract | Canonical `ONBOARDING.md` at repo root; semantic exit codes; `fix_hint` JSON schema; `SKILL.md` / `AGENTS.md` shrunk to stubs; resolves OQ-1 | pending | with 7 | 5 | - |
@@ -223,7 +223,7 @@ Minimum to validate the hypothesis: **all Must-haves above**, validated against 
 - **Goal**: Catch failure modes before they cost 5 minutes of pipeline time.
 - **Scope**: new `scripts/outpost-doctor.sh` (or inline in router), checks: host ports free, Docker daemon up, `host.docker.internal` resolvable, disk free in `/var/lib/docker`, `ROOT_DOMAIN` resolves, `CF_TUNNEL_TOKEN` looks valid, kaniko multi-arch image reachable, build-pod egress to external services (configurable allow-list), `tekton-pipelines` PSA label set. `--json` output. Idempotent.
 - **Success signal**: synthetic-failure tests — kill Docker → doctor red; bind port 5432 → doctor red; bad CF token → doctor red. All with `fix_hint`.
-- **Scope corrections (2026-05-20, from codebase exploration)**: (a) host ports are `5432/6379/5672/7700` — TODOS' `15672` is caddy-proxied, not host-bound; (b) the `tekton-pipelines` PSA-label check is dropped — that label is bootstrap *output*, not a precondition (already regression-locked by `cicd-walls.bats` B6); (c) `doctor.sh` lives at repo root (sibling of `verify.sh`), not `scripts/`; (d) egress check is `--egress`-flag-driven, not a config var.
+- **Scope corrections (2026-05-20, from codebase exploration)**: (a) host ports are `5432/6379/5672/9308` (Manticore replaced Meilisearch — port was `7700` pre-migration; 9306/9312 also bound but doctor only checks the load-bearing port) — TODOS' `15672` is caddy-proxied, not host-bound; (b) the `tekton-pipelines` PSA-label check is dropped — that label is bootstrap *output*, not a precondition (already regression-locked by `cicd-walls.bats` B6); (c) `doctor.sh` lives at repo root (sibling of `verify.sh`), not `scripts/`; (d) egress check is `--egress`-flag-driven, not a config var.
 - **Plan**: `docs/prp/plans/outpost-v0.4-phase2-doctor-preflight.plan.md`
 - **Status**: ✅ complete 2026-05-20 — `doctor.sh` + `doctor` subcommand shipped; `doctor-checks.bats` 7/7, `doctor.bats` 5/5, full suite 166/166, lint green.
 - **Report**: `docs/prp/reports/outpost-v0.4-phase2-doctor-preflight-report.md`
@@ -233,6 +233,9 @@ Minimum to validate the hypothesis: **all Must-haves above**, validated against 
 - **Goal**: Each piece of what `onboard.sh` does today, callable independently and idempotently.
 - **Scope**: `outpost db create <app>` (idempotent `CREATE DATABASE`), `outpost seal-from-template <app> --template <path> --output <path>` (envsubst + strict residue check + kubeseal), `outpost manifest scaffold <app> --lang <lang> --manifests-dir <path>` (write 5 YAML from template tree), each emits structured JSON with `{step, status, written_files[], next_action}`
 - **Success signal**: each subcommand has bats tests proving rerun = no-op when prior state matches, reconcile when drifted
+- **Plan**: `docs/prp/plans/outpost-v0.4-phase3-onboard-primitives.plan.md`
+- **Status**: ✅ complete 2026-05-21 — `onboard-lib.bats` 15/15, `onboard-primitives.bats` 15/15, full suite 197/197, lint green
+- **Report**: `docs/prp/reports/outpost-v0.4-phase3-onboard-primitives-report.md`
 
 **Phase 4: Webhook auto-register** *(parallel with Phase 3)*
 - **Goal**: Eliminate the manual "go to Gitee UI and configure webhook" step.

@@ -34,7 +34,7 @@
 | `redis` | `<你的根域名>` | TCP | `redis:6379` |
 | `rabbitmq` | `<你的根域名>` | TCP | `rabbitmq:5672` |
 
-**为什么 URL 看起来重复**:cloudflared 自己不路由,只是把流量交给下一跳;再由 Caddy(`caddy:80`,按 Host 头分流给 meilisearch / rabbitmq UI)和 k3s Traefik(`host.docker.internal:30080`,按 Ingress 分流给 ArgoCD / Tekton EL / Registry / 用户应用)做二次路由。
+**为什么 URL 看起来重复**:cloudflared 自己不路由,只是把流量交给下一跳;再由 Caddy(`caddy:80`,按 Host 头分流给 manticore HTTP / rabbitmq UI)和 k3s Traefik(`host.docker.internal:30080`,按 Ingress 分流给 ArgoCD / Tekton EL / Registry / 用户应用)做二次路由。
 
 **HTTPS 怎么没有**:TLS 在 Cloudflare 边缘终结,隧道内部全是明文 HTTP。Public Hostname 的 `Type` 没有 HTTPS 选项是有意的;用户访问的 `https://argocd.<域名>` 由 CF 自动签发证书。
 

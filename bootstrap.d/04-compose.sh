@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # =============================================================================
-# Phase 4 — Compose data services (PG / Redis / RabbitMQ / Meilisearch).
+# Phase 4 — Compose data services (PG / Redis / RabbitMQ / Manticore).
 # In full mode also brings up cloudflared + caddy via the `tunnel` profile.
 # =============================================================================
 phase "Phase 4 / 10 Compose data services"
@@ -10,7 +10,7 @@ phase "Phase 4 / 10 Compose data services"
 # the same canonical view, regardless of CWD or shell environment.
 # The .env file lives at the infra root, not next to docker-compose.yml.
 COMPOSE_ARGS=(--env-file "${INFRA_ROOT}/.env" -f "${INFRA_ROOT}/core/compose/docker-compose.yml")
-HEALTH_SERVICES=("postgres" "redis" "rabbitmq" "meilisearch")
+HEALTH_SERVICES=("postgres" "redis" "rabbitmq" "manticore")
 if [[ "$OUTPOST_MODE" == "full" ]]; then
   COMPOSE_ARGS+=(--profile tunnel)
 fi

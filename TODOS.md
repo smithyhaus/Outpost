@@ -487,18 +487,18 @@ the Homebrew postgres service."
 **Why:** `verify.sh` is ex-post (it tells you what's broken after
 bootstrap). `doctor` is ex-ante (it tells you what *will* break before
 you start). The two cheapest failure modes today have no good error:
-host port conflicts (5432/6379/5672/7700/15672) and Docker daemon down.
+host port conflicts (5432/6379/5672/9308/15672) and Docker daemon down.
 On WSL2 a third one — host.docker.internal DNS — only surfaces when
 bridge ExternalName Services fail to resolve in phase 8.
 
 **Concrete checks (v0.3 minimum):**
-- Host ports 5432 / 6379 / 5672 / 15672 / 7700 free (Compose binds them
+- Host ports 5432 / 6379 / 5672 / 15672 / 9308 free (Compose binds them
   via `ports:`). Use `lsof -iTCP:<port> -sTCP:LISTEN` (Linux/macOS).
 - Docker daemon reachable + Compose v2 plugin present.
 - `host.docker.internal` resolvable from inside a throwaway container
   (full-mode only). On Linux/WSL2 this requires the `--add-host` shim
   Compose already applies; verify it actually works.
-- Disk free in `/var/lib/docker` (PG/Meili eat space fast).
+- Disk free in `/var/lib/docker` (PG/Manticore eat space fast).
 - For full mode: `ROOT_DOMAIN` resolves via DNS, `CF_TUNNEL_TOKEN`
   format looks right (base64 length).
 - macOS / arm64 specifics: kaniko `executor:v1.5.1` multi-arch
@@ -581,7 +581,7 @@ version + bug.yml placeholder) is < 30 min CC.
 ## Make `upgrade.sh` actually work in full mode
 
 **What:** `upgrade.sh` today is 5 lines: `docker compose pull && up -d`.
-That covers the Compose layer (PG / Redis / RabbitMQ / Meili /
+That covers the Compose layer (PG / Redis / RabbitMQ / Manticore /
 cloudflared / caddy) but does *nothing* for the full-mode k3s layer:
 ArgoCD, Tekton, Sealed-Secrets controller, Testkube, Argo Rollouts,
 or the in-cluster Docker Registry.
@@ -643,7 +643,7 @@ no Cloudflare setup needed in the demo).
   above the existing "Quick start" section.
 - Or: a GIF (smaller, plays inline in GitHub README). Trade-off:
   asciinema embeds via SVG and stays text-selectable; GIF is universal.
-- Suggested copy: "0 → working Postgres + Redis + RabbitMQ + Meilisearch
+- Suggested copy: "0 → working Postgres + Redis + RabbitMQ + Manticore
   in 90s" with the timestamps visible.
 
 **Why:** the local-mode value prop is hard to convey in text. The

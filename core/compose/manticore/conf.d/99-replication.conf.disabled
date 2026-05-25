@@ -1,0 +1,40 @@
+# =============================================================================
+# Manticore Search — replication snippet (DISABLED by default)
+# -----------------------------------------------------------------------------
+# This file ships with the `.disabled` suffix so it is NEVER auto-loaded.
+# Local mode runs Manticore standalone; this is the hook for the day you
+# decide to turn the box into a replication node.
+#
+# To activate replication:
+#
+#   1. Rename:        99-replication.conf.disabled  →  99-replication.conf
+#   2. Provide a /etc/manticoresearch/manticore.conf that does:
+#        searchd { ... include = /etc/manticoresearch/conf.d/*.conf ... }
+#      Mount it via core/compose/docker-compose.yml (add a volume line under
+#      the `manticore` service).
+#   3. Add the extra replication port range to docker-compose.yml port list
+#      (Manticore picks ports above 9312 dynamically for cluster traffic;
+#       publish e.g. "0.0.0.0:9315-9325:9315-9325").
+#   4. `docker compose up -d manticore` then run inside Manticore:
+#        CREATE CLUSTER posts;
+#        ALTER CLUSTER posts ADD posts_idx;
+#      (see https://manual.manticoresearch.com/Creating_a_cluster)
+#
+# See core/compose/manticore/README.md for the full step-by-step.
+# =============================================================================
+
+searchd {
+    # Node identity — must be unique across the cluster
+    node_address = host.docker.internal
+
+    # Reserve the binary protocol port for cluster traffic
+    listen = 0.0.0.0:9312:replication
+
+    # Where SST snapshots and Galera state live (mounted to manticore_data)
+    data_dir = /var/lib/manticore
+
+    # Bind ports for SST / IST. The first published port is used for
+    # API + handshake; subsequent ports are allocated automatically.
+    # Make sure the range matches docker-compose.yml port publishes.
+    # listen_replication_range = 9315-9325
+}

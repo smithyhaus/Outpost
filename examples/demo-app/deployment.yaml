@@ -49,8 +49,10 @@ spec:
           env:
             # Non-secret config can stay inline. Example: service URLs that
             # only point at in-cluster bridges (no creds inside).
-            - name: MEILI_URL
-              value: "http://meilisearch.infra-bridges.svc.cluster.local:7700"
+            - name: MANTICORE_URL
+              value: "http://manticore.infra-bridges.svc.cluster.local:9308"
+            - name: MANTICORE_SQL
+              value: "manticore.infra-bridges.svc.cluster.local:9306"
           resources:
             requests:
               cpu: 100m

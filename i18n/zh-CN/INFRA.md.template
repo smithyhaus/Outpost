@@ -3,7 +3,7 @@
 > ⚠️ **明文密码**。已 .gitignore，不要提交到任何仓库。
 > 备份建议：复制到密码管理器（1Password / Bitwarden）。
 >
-> 🔁 **复用**：下次新项目要用 PG / Redis / RabbitMQ / Meilisearch，
+> 🔁 **复用**：下次新项目要用 PG / Redis / RabbitMQ / Manticore，
 >    直接从这里复制连接串，无需重装基础设施。
 
 生成时间：bootstrap 时
@@ -24,7 +24,7 @@ Rollout plugin：`${ROLLOUT_PLUGIN}`
 | Redis          | `redis.${ROOT_DOMAIN}`         | 6379 | （无）            | `${REDIS_PASSWORD}`        |
 | RabbitMQ AMQP  | `rabbitmq.${ROOT_DOMAIN}`      | 5672 | `${RABBITMQ_USER}` | `${RABBITMQ_PASSWORD}`     |
 | RabbitMQ UI    | `https://mq.${ROOT_DOMAIN}`    | —   | `${RABBITMQ_USER}` | `${RABBITMQ_PASSWORD}`     |
-| Meilisearch    | `https://search.${ROOT_DOMAIN}` | —  | (Bearer)          | `${MEILI_MASTER_KEY}`      |
+| Manticore HTTP | `https://search.${ROOT_DOMAIN}` | —  | （无）            | — （standalone 无内建鉴权）|
 | ArgoCD         | `https://argocd.${ROOT_DOMAIN}` | —  | `admin`           | （见 §6）                  |
 | Tekton Dashboard | `https://tekton.${ROOT_DOMAIN}` | — | `${OUTPOST_DASHBOARD_USER}`(BasicAuth) | `${OUTPOST_DASHBOARD_PASSWORD}` |
 | Argo Rollouts UI | `https://${ROLLOUTS_DASHBOARD_HOST}` | — | `${OUTPOST_DASHBOARD_USER}`(BasicAuth) | `${OUTPOST_DASHBOARD_PASSWORD}` |
@@ -91,15 +91,20 @@ amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq.infra-bridges.svc.cluster.
 amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@localhost:5672/
 ```
 
-## 5. Meilisearch v1.10
+## 5. Manticore Search 7.4.6
 
-- 公网：`https://search.${ROOT_DOMAIN}`
-- K8s 内：`http://meilisearch.infra-bridges.svc.cluster.local:7700`
-- Master Key：`${MEILI_MASTER_KEY}`
-- 模式：`${MEILI_ENV}`（必带 Authorization header）
+- 公网 HTTP：`https://search.${ROOT_DOMAIN}`（JSON API，不是 UI）
+- K8s 内 HTTP：`http://manticore.infra-bridges.svc.cluster.local:9308`
+- K8s 内 SQL：`mysql -hmanticore.infra-bridges.svc.cluster.local -P9306`
+- 鉴权：无（standalone 模式无内建鉴权）
+- Replication 钩子：见 `core/compose/manticore/README.md` 一键开启
 
 ```bash
-curl -H "Authorization: Bearer ${MEILI_MASTER_KEY}" https://search.${ROOT_DOMAIN}/health
+# 健康探测（HTTP）
+curl https://search.${ROOT_DOMAIN}/
+
+# 本地 SQL 接入
+mysql -h127.0.0.1 -P9306 -e 'SHOW STATUS'
 ```
 
 ## 6. ArgoCD

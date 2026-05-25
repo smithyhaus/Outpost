@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING — search backend swapped from Meilisearch to Manticore Search**
+  (`manticoresearch/manticore:7.4.6`). Standalone mode is the default; a
+  `core/compose/manticore/conf.d/99-replication.conf.disabled` sample and
+  bind-mount are shipped so the cluster path is one-step away. Port surface
+  changed: `7700` → `9308` (HTTP/JSON) + `9306` (MySQL wire) + `9312`
+  (binary / future replication). `MEILI_MASTER_KEY` and `MEILI_ENV` env
+  vars are removed (standalone Manticore needs no auth). The k8s bridge
+  Service is renamed `meilisearch` → `manticore`; apps must update env
+  vars (`MEILI_URL` → `MANTICORE_URL`) and any sealed-secret carrying a
+  `MEILI_KEY` should drop it.
+
 ### Added
 
 - **AI-agent on-ramp docs** — `AGENTS.md` (top-level, agents.md
