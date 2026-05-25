@@ -131,8 +131,8 @@ cmd_open() {
               pwd="${OUTPOST_DASHBOARD_PASSWORD:-}" ;;
     rollouts) url="https://${ROLLOUTS_DASHBOARD_HOST:-rollouts.${ROOT_DOMAIN}}"; user="${OUTPOST_DASHBOARD_USER:-outpost}"
               pwd="${OUTPOST_DASHBOARD_PASSWORD:-}" ;;
-    search)   url="https://search.${ROOT_DOMAIN}";              user="(Bearer)"
-              pwd="${MEILI_MASTER_KEY:-}" ;;
+    search)   url="https://search.${ROOT_DOMAIN}";              user="(none)"
+              pwd="" ;;  # Manticore standalone has no built-in auth
     mq)       url="https://mq.${ROOT_DOMAIN}";                  user="${RABBITMQ_USER:-admin}"
               pwd="${RABBITMQ_PASSWORD:-}" ;;
     registry) url="https://registry.${ROOT_DOMAIN}";            user="(anonymous)"
