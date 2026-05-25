@@ -1,7 +1,7 @@
 # Outpost
 
 > Cross-platform self-hosted dev backend — Postgres / Redis / RabbitMQ /
-> Meilisearch + Tekton + ArgoCD GitOps, exposed via Cloudflare Tunnel.
+> Manticore Search + Tekton + ArgoCD GitOps, exposed via Cloudflare Tunnel.
 > Two layers (Docker Compose + k3s), plugin-driven, AI-verifiable.
 
 Outpost gives a single developer (or a small team) the same backend

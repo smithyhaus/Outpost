@@ -16,7 +16,7 @@ Bundled / referenced components (each under its own license):
   - pgvector                         (PostgreSQL License)
   - Redis                            (BSD-3 / RSAL — see Redis license)
   - RabbitMQ                         (MPL-2.0 / Apache-2.0)
-  - Meilisearch                      (MIT)
+  - Manticore Search                 (GPL-2.0-or-later)
   - Argo CD                          (Apache-2.0)
   - Tekton Pipelines / Triggers      (Apache-2.0)
   - Sealed Secrets                   (Apache-2.0)
