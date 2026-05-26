@@ -16,8 +16,15 @@ echo "═══ Mode: $OUTPOST_MODE ═══"
 echo ""
 echo "═══ Compose ═══"
 # Use --env-file so we don't emit "variable not set" warnings; the .env
-# lives at the infra root, not next to docker-compose.yml.
-docker compose --env-file .env -f core/compose/docker-compose.yml ps 2>/dev/null || echo "(compose not running)"
+# lives at the infra root, not next to docker-compose.yml. Pick up any
+# onboarded-app overrides via the same convention as bootstrap.d/04-compose.sh.
+COMPOSE_ARGS=(--env-file .env -f core/compose/docker-compose.yml)
+shopt -s nullglob
+for _override in core/compose/overrides/*.yml; do
+  COMPOSE_ARGS+=(-f "$_override")
+done
+shopt -u nullglob
+docker compose "${COMPOSE_ARGS[@]}" ps 2>/dev/null || echo "(compose not running)"
 
 if [[ "$OUTPOST_MODE" != "full" ]]; then
   exit 0

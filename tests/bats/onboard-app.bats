@@ -171,3 +171,140 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" =~ "onboard" ]]
 }
+
+@test "outpost onboard k3s: spec.k3s.manifest_repo overrides global MANIFEST_REPO_URL" {
+  # Stage an app repo with tier=k3s + a per-app manifest_repo, plus a fake
+  # local manifests-dir clone the scaffolder will write into. Verify the
+  # rendered argocd-app.yaml points at the PER-APP repo, not the global one.
+  mkdir -p "$TEST_TMPDIR/app" "$TEST_TMPDIR/manifests/apps" "$TEST_TMPDIR/manifests/argocd-apps"
+  cat > "$TEST_TMPDIR/app/outpost.app.yaml" <<'YAML'
+apiVersion: outpost.dev/v1
+kind: App
+metadata:
+  name: k3s-app
+spec:
+  tier: k3s
+  k3s:
+    manifest_repo: https://example.com/per-app/manifests.git
+    manifest_branch: release
+YAML
+
+  run env OUTPOST_NO_ENV=1 MANIFEST_REPO_URL=https://example.com/GLOBAL/should-NOT-be-used.git \
+          MANIFEST_REPO_BRANCH=main \
+          ROOT_DOMAIN=example.com \
+          bash "$CLI" onboard "$TEST_TMPDIR/app" \
+            --manifests-dir "$TEST_TMPDIR/manifests" \
+            --lang go \
+            --no-reload
+  [ "$status" -eq 0 ]
+
+  # The scaffolded argocd-app yaml must reference the per-app repo + branch.
+  local argo_app="$TEST_TMPDIR/manifests/argocd-apps/k3s-app.yaml"
+  [ -r "$argo_app" ]
+  run grep -F "https://example.com/per-app/manifests.git" "$argo_app"
+  [ "$status" -eq 0 ]
+  run grep -F "targetRevision: release" "$argo_app"
+  [ "$status" -eq 0 ]
+  # And the global URL must NOT have leaked in.
+  run grep -F "GLOBAL/should-NOT-be-used" "$argo_app"
+  [ "$status" -ne 0 ]
+}
+
+@test "outpost onboard k3s: falls back to MANIFEST_REPO_URL when per-app override absent" {
+  mkdir -p "$TEST_TMPDIR/app" "$TEST_TMPDIR/manifests/apps" "$TEST_TMPDIR/manifests/argocd-apps"
+  cat > "$TEST_TMPDIR/app/outpost.app.yaml" <<'YAML'
+apiVersion: outpost.dev/v1
+kind: App
+metadata:
+  name: k3s-default
+spec:
+  tier: k3s
+YAML
+
+  run env OUTPOST_NO_ENV=1 MANIFEST_REPO_URL=https://example.com/fallback/manifests.git \
+          MANIFEST_REPO_BRANCH=main \
+          ROOT_DOMAIN=example.com \
+          bash "$CLI" onboard "$TEST_TMPDIR/app" \
+            --manifests-dir "$TEST_TMPDIR/manifests" \
+            --lang go \
+            --no-reload
+  [ "$status" -eq 0 ]
+  run grep -F "https://example.com/fallback/manifests.git" "$TEST_TMPDIR/manifests/argocd-apps/k3s-default.yaml"
+  [ "$status" -eq 0 ]
+}
+
+@test "outpost onboard k3s: envsubst applied to manifest_repo (per-app gating)" {
+  # outpost.app.yaml may write `${MY_APP_MANIFEST_REPO:-default}` so the
+  # caller can override per-instance via env. The onboard pipeline must
+  # envsubst before passing the value through.
+  mkdir -p "$TEST_TMPDIR/app" "$TEST_TMPDIR/manifests/apps" "$TEST_TMPDIR/manifests/argocd-apps"
+  cat > "$TEST_TMPDIR/app/outpost.app.yaml" <<'YAML'
+apiVersion: outpost.dev/v1
+kind: App
+metadata:
+  name: gated-app
+spec:
+  tier: k3s
+  k3s:
+    manifest_repo: "${SCM_MCP_MANIFEST_REPO}"
+YAML
+
+  run env OUTPOST_NO_ENV=1 MANIFEST_REPO_URL=https://example.com/fallback.git \
+          SCM_MCP_MANIFEST_REPO=https://example.com/scm-mcp/manifests.git \
+          ROOT_DOMAIN=example.com \
+          bash "$CLI" onboard "$TEST_TMPDIR/app" \
+            --manifests-dir "$TEST_TMPDIR/manifests" \
+            --lang go \
+            --no-reload
+  [ "$status" -eq 0 ]
+  run grep -F "https://example.com/scm-mcp/manifests.git" "$TEST_TMPDIR/manifests/argocd-apps/gated-app.yaml"
+  [ "$status" -eq 0 ]
+}
+
+@test "outpost onboard --install-skill: copies skill template into app's .claude/skills/" {
+  mkdir -p "$TEST_TMPDIR/app"
+  cp "${INFRA_ROOT}/examples/outpost.app.yaml.minimal.example" "$TEST_TMPDIR/app/outpost.app.yaml"
+  run bash "$CLI" onboard "$TEST_TMPDIR/app" --no-reload --no-up --install-skill --force
+  [ "$status" -eq 0 ]
+  [ -r "$TEST_TMPDIR/app/.claude/skills/outpost-deploy.skill.md" ]
+  # Cleanup the fragment + override the test produced (gitignored, but keeps
+  # the working tree clean for the rest of the suite).
+  rm -f "${INFRA_ROOT}/core/compose/Caddyfile.d/hello.caddy" \
+        "${INFRA_ROOT}/core/compose/overrides/hello.yml"
+}
+
+@test "outpost onboard --install-skill: idempotent (preserves existing skill)" {
+  mkdir -p "$TEST_TMPDIR/app/.claude/skills"
+  cp "${INFRA_ROOT}/examples/outpost.app.yaml.minimal.example" "$TEST_TMPDIR/app/outpost.app.yaml"
+  printf "# CUSTOM SKILL — DO NOT OVERWRITE\n" > "$TEST_TMPDIR/app/.claude/skills/outpost-deploy.skill.md"
+  run bash "$CLI" onboard "$TEST_TMPDIR/app" --no-reload --no-up --install-skill
+  [ "$status" -eq 0 ]
+  # Without --force, the existing file is preserved.
+  run grep -F "# CUSTOM SKILL — DO NOT OVERWRITE" "$TEST_TMPDIR/app/.claude/skills/outpost-deploy.skill.md"
+  [ "$status" -eq 0 ]
+  rm -f "${INFRA_ROOT}/core/compose/Caddyfile.d/hello.caddy" \
+        "${INFRA_ROOT}/core/compose/overrides/hello.yml"
+}
+
+@test "outpost onboard k3s: missing --manifests-dir prints helpful hint, no error" {
+  # Without --manifests-dir we render the Caddy side (none for k3s) but
+  # don't try to scaffold. Operators get a clear next-command hint.
+  mkdir -p "$TEST_TMPDIR/app"
+  cat > "$TEST_TMPDIR/app/outpost.app.yaml" <<'YAML'
+apiVersion: outpost.dev/v1
+kind: App
+metadata:
+  name: needs-dir
+spec:
+  tier: k3s
+  k3s:
+    manifest_repo: https://example.com/override/manifests.git
+YAML
+
+  run bash "$CLI" onboard "$TEST_TMPDIR/app" --no-reload
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "--manifests-dir" ]]
+  # The hint should surface the per-app override so the operator knows
+  # where to clone.
+  [[ "$output" =~ "https://example.com/override/manifests.git" ]]
+}

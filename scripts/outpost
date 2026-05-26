@@ -26,8 +26,10 @@ fi
 cd "$OUTPOST_HOME"
 
 # Load .env if present — every subcommand wants ROOT_DOMAIN / dashboard creds /
-# argocd admin pwd. Missing .env is fine for `help` / `version`.
-if [[ -f .env ]]; then
+# argocd admin pwd. Missing .env is fine for `help` / `version`. Tests and
+# specialised callers may pre-export every variable they need and skip the
+# auto-source via OUTPOST_NO_ENV=1 (so caller-set env wins over on-disk .env).
+if [[ -f .env && "${OUTPOST_NO_ENV:-0}" != "1" ]]; then
   set -a; # shellcheck disable=SC1091
   source .env
   set +a
@@ -70,11 +72,21 @@ $(_yellow PLATFORM)
                                     and open the browser
 
 $(_yellow APPLICATION)
-  onboard <repo-url-or-path> [--dry-run] [--no-reload] [--force]
+  onboard <repo-url-or-path> [--manifests-dir <path> --lang <lang>]
+                             [--dry-run] [--no-reload] [--no-up]
+                             [--install-skill] [--force]
                                     Register an app described by its
                                     outpost.app.yaml. Renders a Caddy fragment
-                                    + compose override; reloads caddy live.
-                                    Accepts a git URL, a local dir, or '.'.
+                                    + compose override; reloads caddy live and
+                                    auto-starts the compose service (--no-up
+                                    to opt out). --install-skill drops the
+                                    LLM-side onboarding skill into the app's
+                                    .claude/skills/. Accepts a git URL, a
+                                    local dir, or '.'. For tier=k3s: pass
+                                    --manifests-dir + --lang to scaffold k8s
+                                    manifests; honors spec.k3s.manifest_repo
+                                    (per-app override) over the global
+                                    MANIFEST_REPO_URL.
   new-app <name> --lang <go|python|java|csharp|react|vue>
                                     Scaffold a new app from examples/hello-world/<lang>
                                     into ./my-apps/<name>/
@@ -94,6 +106,12 @@ $(_yellow APPLICATION)
                                     Scaffold deployment/service/ingress/
                                     kustomization + argocd-app from templates
                                     ([--json] machine output on all three)
+  off-board <name> [--keep-running] [--remove-volumes] [--yes]
+                                    Inverse of `onboard`: removes the Caddy
+                                    fragment + compose override, stops the
+                                    container, reloads caddy. Idempotent.
+                                    For k3s-tier ArgoCD cleanup, also run
+                                    `decommission`.
   decommission <app>                Guided cleanup (confirms then runs)
 
 $(_yellow UTILITY)
@@ -638,17 +656,22 @@ _manifest_scaffold() {
 # the manifest_repo can be overridden per-app via spec.k3s.manifest_repo.
 cmd_onboard() {
   local src_arg="" tmpdir="" cleanup=0
-  local dry_run=0 no_reload=0 force=0
+  local dry_run=0 no_reload=0 no_up=0 force=0 install_skill=0
+  local manifests_dir="" lang=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --dry-run)   dry_run=1; shift ;;
-      --no-reload) no_reload=1; shift ;;
-      --force)     force=1; shift ;;
-      -*)          _die "unknown flag: $1" ;;
-      *)           [[ -z "$src_arg" ]] && src_arg="$1"; shift ;;
+      --dry-run)        dry_run=1; shift ;;
+      --no-reload)      no_reload=1; shift ;;
+      --no-up)          no_up=1; shift ;;
+      --force)          force=1; shift ;;
+      --install-skill)  install_skill=1; shift ;;
+      --manifests-dir)  manifests_dir="${2:-}"; shift 2 ;;
+      --lang)           lang="${2:-}"; shift 2 ;;
+      -*)               _die "unknown flag: $1" ;;
+      *)                [[ -z "$src_arg" ]] && src_arg="$1"; shift ;;
     esac
   done
-  [[ -z "$src_arg" ]] && _die "outpost onboard <repo-url-or-path> [--dry-run] [--no-reload] [--force]"
+  [[ -z "$src_arg" ]] && _die "outpost onboard <repo-url-or-path> [--manifests-dir <path> --lang <lang>] [--dry-run] [--no-reload] [--no-up] [--install-skill] [--force]"
   _need yq
 
   # Resolve src_arg to a local directory containing outpost.app.yaml.
@@ -732,11 +755,79 @@ cmd_onboard() {
       printf '%s\n' "$rendered_compose" > "$override_dst"
       echo "$(_green ✓) wrote $override_dst"
     fi
-    echo "$(_dim hint:) start the new service with"
-    echo "  cd core/compose && docker compose -f docker-compose.yml -f overrides/${name}.yml up -d ${name}"
+    # Auto-start the new service, unless the operator opted out. We bring up
+    # just the named service (not the full stack) to minimise side effects on
+    # already-running data services. status.sh + bootstrap.d/04-compose.sh
+    # glob overrides/*.yml so subsequent restarts pick this up naturally.
+    if [[ "$no_up" -ne 1 ]] && command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+      if ( cd "$OUTPOST_HOME/core/compose" && \
+           docker compose --env-file "$OUTPOST_HOME/.env" \
+             -f docker-compose.yml \
+             -f "overrides/${name}.yml" \
+             up -d "${name}" >/dev/null 2>&1 ); then
+        echo "$(_green ✓) started service: ${name}"
+      else
+        echo "$(_yellow !) docker compose up failed — start manually:"
+        echo "$(_dim    ) cd core/compose && docker compose -f docker-compose.yml -f overrides/${name}.yml up -d ${name}"
+      fi
+    else
+      echo "$(_dim hint:) start the new service with"
+      echo "  cd core/compose && docker compose -f docker-compose.yml -f overrides/${name}.yml up -d ${name}"
+    fi
   elif [[ "$tier" == "k3s" ]]; then
-    echo "$(_dim hint:) for k3s tier, run \`outpost manifest scaffold $name --lang <lang> --manifests-dir <path>\`"
-    echo "$(_dim hint:) spec.k3s.manifest_repo (if set) overrides the global MANIFEST_REPO_URL for this app"
+    # Read the per-app overrides. Each field passes through envsubst so the
+    # outpost.app.yaml author can write `${MY_APP_MANIFEST_REPO:-...}` to
+    # gate the value on a caller-set env var (useful when one repo is
+    # onboarded against different infras instances).
+    local per_app_repo per_app_branch per_app_path
+    per_app_repo=$(yq -r '.spec.k3s.manifest_repo // ""' "$cfg" | envsubst)
+    per_app_branch=$(yq -r '.spec.k3s.manifest_branch // ""' "$cfg" | envsubst)
+    per_app_path=$(yq -r '.spec.k3s.manifest_path // ""' "$cfg" | envsubst)
+
+    # Per-app override wins; else fall through to the global MANIFEST_REPO_URL
+    # (set in .env at install time). Same precedence rule applies to branch.
+    local resolved_repo="${per_app_repo:-${MANIFEST_REPO_URL:-}}"
+    local resolved_branch="${per_app_branch:-${MANIFEST_REPO_BRANCH:-main}}"
+
+    if [[ -z "$manifests_dir" ]]; then
+      echo "$(_yellow !) tier=k3s but --manifests-dir not given — onboard rendered the Caddy fragment only"
+      echo "$(_dim hint:) clone the manifests repo locally and re-run with:"
+      echo "  outpost onboard $src_arg --manifests-dir <local-clone> --lang <go|python|java|csharp|react|vue>"
+      if [[ -n "$per_app_repo" ]]; then
+        echo "$(_dim hint:) this app overrides MANIFEST_REPO_URL to: $resolved_repo"
+      fi
+      return 0
+    fi
+
+    [[ -z "$lang" ]] && _die "--lang is required when --manifests-dir is set (one of: $(ls "$OUTPOST_HOME/examples/hello-world" 2>/dev/null | grep -v README | tr '\n' ' '))"
+    if [[ -z "$resolved_repo" ]]; then
+      _die "no manifest repo to wire — set spec.k3s.manifest_repo in $cfg, or MANIFEST_REPO_URL in .env"
+    fi
+
+    echo "$(_green k3s) scaffolding manifests into $manifests_dir"
+    echo "  repo:   $resolved_repo"
+    echo "  branch: $resolved_branch"
+    [[ -n "$per_app_path" ]] && echo "  path:   $per_app_path (custom)"
+
+    # Scoped env override: temporarily replace MANIFEST_REPO_URL /
+    # MANIFEST_REPO_BRANCH so _manifest_scaffold (which reads them) emits
+    # the per-app values into the rendered argocd-app.yaml. Restored when
+    # the subshell exits — no global pollution. Run as two branches rather
+    # than a `${arr[@]}`-with-empty-array trick: bash 3.2 (macOS default)
+    # under `set -u` errors on empty-array expansion.
+    if [[ "$force" -eq 1 ]]; then
+      (
+        export MANIFEST_REPO_URL="$resolved_repo"
+        export MANIFEST_REPO_BRANCH="$resolved_branch"
+        _manifest_scaffold "$name" --lang "$lang" --manifests-dir "$manifests_dir" --force
+      )
+    else
+      (
+        export MANIFEST_REPO_URL="$resolved_repo"
+        export MANIFEST_REPO_BRANCH="$resolved_branch"
+        _manifest_scaffold "$name" --lang "$lang" --manifests-dir "$manifests_dir"
+      )
+    fi
   fi
 
   # Reload Caddy if running (no-op if container is stopped).
@@ -752,6 +843,121 @@ cmd_onboard() {
       echo "$(_dim ·) caddy container not running — fragment will load on next \`docker compose up\`"
     fi
   fi
+
+  # Optional: drop the LLM-side onboarding skill template into the app's
+  # repo so future Claude/Cursor sessions auto-discover the onboarding
+  # flow. Idempotent — `cp -n` style: existing target is preserved.
+  if [[ "$install_skill" -eq 1 ]]; then
+    local skill_src="$OUTPOST_HOME/docs/onboarding/outpost-app.skill.md"
+    local skill_dst_dir="$src_dir/.claude/skills"
+    local skill_dst="$skill_dst_dir/outpost-deploy.skill.md"
+    if [[ ! -r "$skill_src" ]]; then
+      echo "$(_yellow !) skill template not found at $skill_src — skipping --install-skill"
+    elif [[ -f "$skill_dst" && "$force" -ne 1 ]]; then
+      echo "$(_dim ·) skill already at $skill_dst (--force to overwrite)"
+    else
+      mkdir -p "$skill_dst_dir"
+      cp "$skill_src" "$skill_dst"
+      echo "$(_green ✓) installed skill template → $skill_dst"
+      echo "$(_dim hint:) commit \`.claude/skills/outpost-deploy.skill.md\` to share onboarding with the team"
+    fi
+  fi
+}
+
+# --- off-board ---------------------------------------------------------------
+# Inverse of `outpost onboard`: remove the Caddyfile.d/<name>.caddy fragment,
+# the overrides/<name>.yml compose override, and (unless --keep-running) stop
+# the named compose service. Idempotent — missing artefacts are tolerated.
+#
+# Does NOT delete data volumes by default. Pass --remove-volumes to also drop
+# named volumes the container declared (irreversible — confirms unless --yes).
+#
+# For tier=k3s apps, this only handles the local infras-side artefacts. To
+# remove the ArgoCD Application + manifests-repo files, use the existing
+# `outpost decommission` command.
+cmd_off_board() {
+  local name="" keep_running=0 remove_volumes=0 yes=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --keep-running)   keep_running=1; shift ;;
+      --remove-volumes) remove_volumes=1; shift ;;
+      --yes|-y)         yes=1; shift ;;
+      -*)               _die "unknown flag: $1" ;;
+      *)                [[ -z "$name" ]] && name="$1"; shift ;;
+    esac
+  done
+  [[ -z "$name" ]] && _die "outpost off-board <name> [--keep-running] [--remove-volumes] [--yes]"
+
+  local frag="$OUTPOST_HOME/core/compose/Caddyfile.d/${name}.caddy"
+  local override="$OUTPOST_HOME/core/compose/overrides/${name}.yml"
+
+  local found=0
+  [[ -f "$frag" ]] && found=1
+  [[ -f "$override" ]] && found=1
+  if [[ "$found" -eq 0 ]]; then
+    echo "$(_dim ·) no artefacts found for '${name}' (Caddyfile.d/, overrides/) — nothing to off-board"
+    return 0
+  fi
+
+  if [[ "$remove_volumes" -eq 1 && "$yes" -ne 1 ]]; then
+    if ! _confirm "remove data volumes for '${name}'? this is destructive."; then
+      _die "aborted by user"
+    fi
+  fi
+
+  # Stop the running container (if any). Use the override file so compose
+  # knows about the service definition; tolerate failures (container may
+  # have never been started, or already gone).
+  if [[ "$keep_running" -ne 1 && -f "$override" ]] && command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    local down_args=()
+    [[ "$remove_volumes" -eq 1 ]] && down_args=(-v)
+    if [[ ${#down_args[@]} -gt 0 ]]; then
+      ( cd "$OUTPOST_HOME/core/compose" && \
+        docker compose --env-file "$OUTPOST_HOME/.env" \
+          -f docker-compose.yml \
+          -f "overrides/${name}.yml" \
+          stop "${name}" >/dev/null 2>&1 || true; \
+        docker compose --env-file "$OUTPOST_HOME/.env" \
+          -f docker-compose.yml \
+          -f "overrides/${name}.yml" \
+          rm -f -s "${down_args[@]}" "${name}" >/dev/null 2>&1 || true )
+    else
+      ( cd "$OUTPOST_HOME/core/compose" && \
+        docker compose --env-file "$OUTPOST_HOME/.env" \
+          -f docker-compose.yml \
+          -f "overrides/${name}.yml" \
+          stop "${name}" >/dev/null 2>&1 || true; \
+        docker compose --env-file "$OUTPOST_HOME/.env" \
+          -f docker-compose.yml \
+          -f "overrides/${name}.yml" \
+          rm -f "${name}" >/dev/null 2>&1 || true )
+    fi
+    echo "$(_green ✓) stopped + removed container: ${name}"
+  fi
+
+  # Delete the artefacts.
+  if [[ -f "$frag" ]]; then
+    rm -f "$frag"
+    echo "$(_green ✓) removed $frag"
+  fi
+  if [[ -f "$override" ]]; then
+    rm -f "$override"
+    echo "$(_green ✓) removed $override"
+  fi
+
+  # Reload Caddy so the deleted fragment really goes away.
+  if command -v docker >/dev/null 2>&1; then
+    if docker inspect -f '{{.State.Running}}' caddy 2>/dev/null | grep -q true; then
+      if docker exec caddy caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
+        echo "$(_green ✓) caddy reloaded"
+      else
+        echo "$(_yellow !) caddy reload failed — config may still serve the old route until next restart"
+      fi
+    fi
+  fi
+
+  echo "$(_dim ·) off-board complete for '${name}'"
+  echo "$(_dim hint:) for tier=k3s apps, also run \`outpost decommission ${name}\` to remove the ArgoCD Application"
 }
 
 # --- router ------------------------------------------------------------------
@@ -770,6 +976,7 @@ case "$SUB" in
   manifest)       cmd_manifest "$@" ;;
   new-app)        cmd_new_app "$@" ;;
   onboard)        cmd_onboard "$@" ;;
+  off-board)      cmd_off_board "$@" ;;
   decommission)   cmd_decommission "$@" ;;
   version|--version|-v) cmd_version ;;
   help|--help|-h|"") usage ;;
