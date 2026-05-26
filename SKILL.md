@@ -87,6 +87,11 @@ in production, change only the ExternalName — application code stays unchanged
 | Plugins | `plugins/<kind>/<name>/` |
 | Plugin authoring guide | `plugins/README.md` |
 | Bootstrap installer | `bootstrap.sh` |
+| One-shot remote installer (curl-pipe-bash) | `install.sh` |
+| App-side onboarding schema | `tests/schema/outpost-app.schema.json` |
+| `outpost.app.yaml` examples (minimal + multi-product) | `examples/outpost.app.yaml.*.example` |
+| Caddy app-fragment dir (per-installation, gitignored content) | `core/compose/Caddyfile.d/` |
+| LLM onboarding skill (drop into app repos) | `docs/onboarding/outpost-app.skill.md` |
 | Health check (AI parseable) | `verify.sh` (`--json`) |
 | Health check schema | `tests/schema/verify-output.schema.json` |
 | AI verification playbook | `i18n/en/docs/07-ai-verification.md` |
@@ -158,8 +163,22 @@ in production, change only the ExternalName — application code stays unchanged
 
 ### Project onboarding
 When the user says "onboard X" / "add new project X":
-- Follow `i18n/en/docs/05-onboard-project.md` end-to-end.
-- Reuse `examples/demo-app/` as the manifest template.
+- **Preferred path (v0.5+):** if X has an `outpost.app.yaml` at its root,
+  run `outpost onboard <path-or-url>`. The CLI reads the yaml, renders a
+  Caddy route fragment into `core/compose/Caddyfile.d/<name>.caddy`, writes
+  a compose override (for `tier: compose`) or scaffolds k3s manifests (for
+  `tier: k3s`), and reloads Caddy live. Idempotent.
+- If X has no `outpost.app.yaml`, copy one from
+  `examples/outpost.app.yaml.minimal.example` (or the multi-product
+  variant for fan-out routing) into the app repo and adapt it. The schema
+  lives at `tests/schema/outpost-app.schema.json`.
+- For k3s-tier apps: also follow `i18n/en/docs/05-onboard-project.md`
+  end-to-end (manifest repo files, SealedSecret, ArgoCD Application).
+  Reuse `examples/demo-app/` as the manifest template.
+- **Never** add per-app routes to `core/compose/Caddyfile` directly —
+  that's the anti-pattern v0.5 was designed to prevent. Every app-specific
+  route lives in `Caddyfile.d/<name>.caddy` and is owned by the app's
+  `outpost.app.yaml`.
 - Don't ask about tech stack — that lives in the user's repo, not here.
 
 ### Plugin authoring

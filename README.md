@@ -57,7 +57,44 @@ Switch by editing `OUTPOST_MODE` in `.env`. Re-running `bash bootstrap.sh` is id
 > lives in **[`i18n/en/docs/00-quickstart.md`](i18n/en/docs/00-quickstart.md)**.
 > The block below is a quick recap for someone who's done it before.
 
-### `local` mode (~2 min, zero required input)
+### One-shot install (no clone required)
+
+For apps that have an `outpost.app.yaml` at their root, the entire stack
+(infras + your app) installs from a single line — Outpost is pulled from
+GitHub by the installer:
+
+```bash
+# Local mode — zero required input
+curl -fsSL https://raw.githubusercontent.com/smithyhaus/Outpost/main/install.sh | bash
+
+# Local mode + auto-onboard your app
+curl -fsSL https://raw.githubusercontent.com/smithyhaus/Outpost/main/install.sh \
+  | APP_REPO=https://github.com/me/my-app bash
+
+# Full mode (Cloudflare Tunnel + GitOps)
+curl -fsSL https://raw.githubusercontent.com/smithyhaus/Outpost/main/install.sh \
+  | ROOT_DOMAIN=mycompany.com \
+    CF_TUNNEL_TOKEN=xxx \
+    GIT_USER=me GIT_TOKEN=ghp_… \
+    MANIFEST_REPO_URL=https://github.com/me/manifests \
+    APP_REPO=https://github.com/me/my-app \
+    bash
+```
+
+What this does: clones Outpost to `~/outpost`, renders `.env` from your
+exported variables, runs `bootstrap.sh`, and (if `APP_REPO` is set) runs
+`outpost onboard $APP_REPO` to register your application. The installer
+is idempotent — safe to re-run.
+
+For LLM-driven onboarding (Claude Code, Cursor, etc.), drop
+**[`docs/onboarding/outpost-app.skill.md`](docs/onboarding/outpost-app.skill.md)**
+into your app repo as a skill — it carries the same logic.
+
+### Manual install (clone first)
+
+If you prefer cloning the repo yourself:
+
+#### `local` mode (~2 min, zero required input)
 
 ```bash
 git clone https://github.com/smithyhaus/outpost.git ~/outpost
