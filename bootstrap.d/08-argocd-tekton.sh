@@ -75,6 +75,18 @@ render_apply "core/k8s/04-argocd/ingress.yaml"
 render_apply "core/k8s/04-argocd/repo-secret.template.yaml"
 render_apply "core/k8s/04-argocd/bootstrap-app.yaml"
 
+# Enable /api/webhook receiver. Without these keys argocd-server returns 401
+# for every push payload and the manifest repo's webhook delivery log fills
+# up with red. Patch (not full apply) so we don't overwrite cmd-params-cm's
+# server.insecure flag that's also in argocd-cm.
+log "Patching argocd-cm with webhook secrets..."
+_WEBHOOK_PATCH=$(mktemp)
+render_template "core/k8s/04-argocd/webhook-cm-patch.template.yaml" "$_WEBHOOK_PATCH"
+kubectl patch -n argocd configmap argocd-cm --type merge --patch-file "$_WEBHOOK_PATCH"
+rm -f "$_WEBHOOK_PATCH"
+unset _WEBHOOK_PATCH
+ok "ArgoCD /api/webhook receiver enabled"
+
 # Tekton — install pipelines + triggers CRDs and controllers.
 # Same server-side-apply rationale as ArgoCD: Tekton's CRDs carry large
 # OpenAPI schemas that can exceed the client-side-apply 256KB limit.

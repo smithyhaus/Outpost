@@ -131,7 +131,17 @@ git commit -m "feat: onboard <app>"
 git push
 ```
 
-ArgoCD 大约 30 秒内会检测到变更，自动创建 Application 与 Deployment。
+> **首次接入新 manifest 仓库时**(每个集群只配一次,后续接入的 app 不用重配):
+> 在 manifest 仓库 → 管理 → WebHooks → 添加:
+> - URL:`https://argocd.<root>/api/webhook`
+> - Secret:`${ARGOCD_WEBHOOK_SECRET}`(INFRA.md §6)
+> - 触发事件:仅 Push
+> - Content-Type:`application/json`
+>
+> 这个 webhook 让 ArgoCD 立即 sync(~5s),而不是默认的 3 分钟轮询。
+> 用 `bash scripts/outpost setup-argocd-webhook` 可重新打印 URL 和 secret。
+
+配上 webhook 后 ArgoCD 在 ~5s 内 sync 完;未配 webhook 时 ArgoCD 仍会在 ~30s 到 3 min 之间轮询发现变更并 sync。
 
 ### 5. Gitee 应用仓库 — 配 Webhook
 

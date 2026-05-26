@@ -144,8 +144,20 @@ git commit -m "feat: onboard <app>"
 git push
 ```
 
-ArgoCD picks up the change within ~30s and creates the Application +
-Deployment.
+> **First time you point Outpost at a manifest repo** (one-time per cluster;
+> subsequent apps don't need to revisit this): in the manifest repo, add a
+> webhook:
+> - URL: `https://argocd.<root>/api/webhook`
+> - Secret: `${ARGOCD_WEBHOOK_SECRET}` (INFRA.md §6)
+> - Events: Push only
+> - Content-Type: `application/json`
+>
+> This collapses ArgoCD's default 3-min poll interval to ~5s push-triggered
+> sync. Re-print the URL + secret any time with
+> `bash scripts/outpost setup-argocd-webhook`.
+
+With the webhook configured ArgoCD syncs within ~5s; without it it still
+syncs but on its own ~30s–3min poll cadence.
 
 ### 5. Application repo — webhook
 

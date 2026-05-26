@@ -119,6 +119,13 @@ mysql -h127.0.0.1 -P9306 -e 'SHOW STATUS'
   Also written to `.env` as `ARGOCD_ADMIN_PASSWORD`.
 - Recommended: change the password after first login (`argocd account update-password`).
 - Manifest repo: `${MANIFEST_REPO_URL}` (branch `${MANIFEST_REPO_BRANCH}`)
+- **Manifest-repo instant-sync webhook** (configure ONCE per cluster — every app
+  inherits it automatically):
+  - URL: `https://argocd.${ROOT_DOMAIN}/api/webhook`
+  - Secret: `${ARGOCD_WEBHOOK_SECRET}`
+  - Push event, Content-Type=application/json
+  - Replaces ArgoCD's default 3-min poll with ~5s push-triggered sync.
+  - Re-print: `bash scripts/outpost setup-argocd-webhook`
 
 ## 7. Tekton CI (webhook + pipeline + dashboard)
 

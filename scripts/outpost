@@ -113,6 +113,11 @@ $(_yellow APPLICATION)
                                     For k3s-tier ArgoCD cleanup, also run
                                     `decommission`.
   decommission <app>                Guided cleanup (confirms then runs)
+  setup-argocd-webhook              Print the manifest-repo webhook URL +
+                                    shared secret. Configure this ONE webhook
+                                    once on your manifest repo so ArgoCD
+                                    syncs in ~5s instead of the default 3-min
+                                    poll. Re-runnable; reads .env.
 
 $(_yellow UTILITY)
   help [cmd]                        Show this or a subcommand's help
@@ -975,6 +980,62 @@ cmd_off_board() {
   echo "$(_dim hint:) for tier=k3s apps, also run \`outpost decommission ${name}\` to remove the ArgoCD Application"
 }
 
+# --- setup-argocd-webhook ----------------------------------------------------
+# Prints the manifest-repo webhook URL + shared secret + per-provider setup
+# steps. Re-runnable: reads everything from .env and the live cluster, no
+# state of its own. Called at the tail of `bash bootstrap.sh` (Phase 10) so
+# operators see this immediately after a clean install; runnable any time
+# after that to re-print the values (e.g. when adding a second manifest
+# repo or rotating the secret).
+cmd_setup_argocd_webhook() {
+  local domain="${ROOT_DOMAIN:-}"
+  local argocd_host="${ARGOCD_HOST:-argocd}"
+  local secret="${ARGOCD_WEBHOOK_SECRET:-}"
+  local provider="${GIT_PROVIDER_PLUGIN:-gitee}"
+  local manifest_url="${MANIFEST_REPO_URL:-<your manifest repo URL>}"
+
+  if [[ -z "$domain" || -z "$secret" ]]; then
+    _die "ROOT_DOMAIN and ARGOCD_WEBHOOK_SECRET must be set in .env (run bash bootstrap.sh first)"
+  fi
+
+  local url="https://${argocd_host}.${domain}/api/webhook"
+
+  # Per-provider header tip — ArgoCD's receiver dispatches on the provider's
+  # signature/token header. Same secret across providers (see
+  # core/k8s/04-argocd/webhook-cm-patch.template.yaml header for why).
+  local header_tip
+  case "$provider" in
+    gitee)  header_tip="Header field: 'Secret' (gitee.com webhook UI). ArgoCD matches X-Gitee-Token to webhook.gitee.secret." ;;
+    github) header_tip="Header: configured automatically by GitHub (X-Hub-Signature-256). Paste secret in the 'Secret' field." ;;
+    gitlab) header_tip="Header: X-Gitlab-Token. Paste secret in the 'Secret token' field." ;;
+    *)      header_tip="Provider '$provider' — paste secret in the webhook 'Secret' field; ArgoCD will validate via the provider-specific signature header." ;;
+  esac
+
+  cat <<EOF
+$(_green ArgoCD instant-sync webhook) — one-time manifest repo setup
+
+  Manifest repo : $manifest_url
+  Webhook URL   : $(_green "$url")
+  Secret        : $(_green "$secret")
+  Provider      : $provider
+  Events        : Push only
+  Content-Type  : application/json
+
+  $(_dim "$header_tip")
+
+$(_yellow why?) ArgoCD polls every 3 min by default. Configuring this webhook on
+        the manifest repo collapses that to ~5s — push → ArgoCD refresh → sync.
+        See i18n/zh-CN/docs/05-onboard-project.md for screenshots per provider.
+
+$(_dim "·") this is a ONE-TIME setup per manifest repo. Adding new apps does not
+   require revisiting this webhook.
+
+$(_dim "·") to verify after configuring: push any commit to the manifest repo and
+   watch \`kubectl logs -n argocd deploy/argocd-server | grep webhook\` — you should
+   see a 'webhook received' line within seconds.
+EOF
+}
+
 # --- router ------------------------------------------------------------------
 SUB="${1:-help}"
 shift || true
@@ -993,6 +1054,7 @@ case "$SUB" in
   onboard)        cmd_onboard "$@" ;;
   off-board)      cmd_off_board "$@" ;;
   decommission)   cmd_decommission "$@" ;;
+  setup-argocd-webhook) cmd_setup_argocd_webhook "$@" ;;
   version|--version|-v) cmd_version ;;
   help|--help|-h|"") usage ;;
   *) echo "$(_red unknown): $SUB"; usage; exit 1 ;;

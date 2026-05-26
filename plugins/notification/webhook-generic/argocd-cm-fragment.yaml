@@ -4,6 +4,18 @@
     headers:
       - name: Content-Type
         value: application/json
+  template.app-deployed-generic: |
+    webhook:
+      generic:
+        method: POST
+        body: |
+          {"event":"argocd.app.deployed","level":"info","app":"{{.app.metadata.name}}","env":"{{.app.spec.destination.namespace}}","revision":"{{.app.status.sync.revision}}","url":"https://argocd.${ROOT_DOMAIN}/applications/{{.app.metadata.name}}","text":"deployed and healthy"}
+  template.app-deleted-generic: |
+    webhook:
+      generic:
+        method: POST
+        body: |
+          {"event":"argocd.app.deleted","level":"warn","app":"{{.app.metadata.name}}","env":"{{.app.spec.destination.namespace}}","url":"https://argocd.${ROOT_DOMAIN}/applications/{{.app.metadata.name}}","text":"application is being deleted"}
   template.app-sync-failed-generic: |
     webhook:
       generic:

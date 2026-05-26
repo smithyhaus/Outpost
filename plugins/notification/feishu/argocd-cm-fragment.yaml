@@ -4,6 +4,35 @@
     headers:
       - name: Content-Type
         value: application/json
+  template.app-deployed-feishu: |
+    webhook:
+      feishu:
+        method: POST
+        body: |
+          {
+            "msg_type": "interactive",
+            "card": {
+              "header": { "title": { "tag": "plain_text", "content": "[ok] {{.app.metadata.name}} deployed" }, "template": "green" },
+              "elements": [
+                { "tag": "div", "text": { "tag": "lark_md", "content": "revision: {{.app.status.sync.revision | substr 0 7}}" } },
+                { "tag": "action", "actions": [ { "tag": "button", "text": { "tag": "plain_text", "content": "Open" }, "type": "primary", "url": "https://argocd.${ROOT_DOMAIN}/applications/{{.app.metadata.name}}" } ] }
+              ]
+            }
+          }
+  template.app-deleted-feishu: |
+    webhook:
+      feishu:
+        method: POST
+        body: |
+          {
+            "msg_type": "interactive",
+            "card": {
+              "header": { "title": { "tag": "plain_text", "content": "[warn] {{.app.metadata.name}} deleted" }, "template": "orange" },
+              "elements": [
+                { "tag": "div", "text": { "tag": "lark_md", "content": "Application is being deleted" } }
+              ]
+            }
+          }
   template.app-sync-failed-feishu: |
     webhook:
       feishu:

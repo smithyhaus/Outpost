@@ -273,8 +273,18 @@ Phase 9 of bootstrap will:
 1. Install **Testkube** in `testkube` namespace (auto-downloads helm if absent).
 2. Install **Argo Rollouts** controller + dashboard in `argo-rollouts` namespace.
 3. Apply per-plugin notification Secrets + ConfigMaps in `tekton-pipelines`.
-4. Build a combined `argocd-notifications-cm` + `argocd-notifications-secret` from the enabled plugins' fragments.
+4. Build a combined `argocd-notifications-cm` + `argocd-notifications-secret` from the enabled plugins' fragments, then substitute each trigger's `send:` list + the `subscriptions.recipients:` with the actual enabled-plugin template/service names.
 5. Apply the shared `outpost-notify` Tekton Task that the Pipeline `finally` block calls on PipelineRun failure.
+
+**ArgoCD events delivered to every enabled channel:**
+
+| Trigger | Fires when | What you use it for |
+|---|---|---|
+| `on-deployed` | sync succeeds AND health=Healthy | Know that a push actually shipped (once per revision, no noise) |
+| `on-sync-failed` | sync phase errors | Bad manifest / image pull fail / render fail |
+| `on-degraded` | health=Degraded | Crash / readiness fail after start |
+| `on-deleted` | Application is being deleted | Catch accidental deletes |
+| `on-rollback` | Argo Rollouts auto-rolled back | Canary analysis failed, back to last stable |
 
 #### J-4. Add `outpost.test.yaml` to your app repo (~2 min per app)
 

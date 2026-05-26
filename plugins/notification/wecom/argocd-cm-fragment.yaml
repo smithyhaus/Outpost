@@ -4,6 +4,28 @@
     headers:
       - name: Content-Type
         value: application/json
+  template.app-deployed-wecom: |
+    webhook:
+      wecom:
+        method: POST
+        body: |
+          {
+            "msgtype": "markdown",
+            "markdown": {
+              "content": "## <font color=\"info\">[ok] {{.app.metadata.name}} deployed</font>\n> revision: {{.app.status.sync.revision | substr 0 7}}\n> [open](https://argocd.${ROOT_DOMAIN}/applications/{{.app.metadata.name}})"
+            }
+          }
+  template.app-deleted-wecom: |
+    webhook:
+      wecom:
+        method: POST
+        body: |
+          {
+            "msgtype": "markdown",
+            "markdown": {
+              "content": "## <font color=\"comment\">[warn] {{.app.metadata.name}} deleted</font>\n> Application is being deleted"
+            }
+          }
   template.app-sync-failed-wecom: |
     webhook:
       wecom:

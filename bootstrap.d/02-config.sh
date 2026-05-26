@@ -106,6 +106,10 @@ TESTKUBE_CLOUD_API_KEY="${TESTKUBE_CLOUD_API_KEY:-}"
 [[ -z "${REDIS_PASSWORD:-}" ]]         && REDIS_PASSWORD=$(gen_password)
 [[ -z "${RABBITMQ_PASSWORD:-}" ]]      && RABBITMQ_PASSWORD=$(gen_password)
 [[ -z "${GIT_WEBHOOK_SECRET:-}" ]]     && GIT_WEBHOOK_SECRET=$(gen_password)
+# Independent from GIT_WEBHOOK_SECRET (which Tekton uses for app-repo pushes).
+# Manifest-repo webhook hits argocd-server /api/webhook — different secret
+# = different blast radius if either leaks.
+[[ -z "${ARGOCD_WEBHOOK_SECRET:-}" ]]  && ARGOCD_WEBHOOK_SECRET=$(gen_password)
 # Dashboard BasicAuth — protects Tekton Dashboard + Argo Rollouts UI.
 # Both ship without built-in auth and grant write access (cancel/delete
 # PipelineRuns, abort/promote rollouts). Auto-generated in full mode.
@@ -182,6 +186,7 @@ fi
   echo "GIT_USER=${GIT_USER}"
   echo "GIT_TOKEN=${GIT_TOKEN}"
   echo "GIT_WEBHOOK_SECRET=${GIT_WEBHOOK_SECRET}"
+  echo "ARGOCD_WEBHOOK_SECRET=${ARGOCD_WEBHOOK_SECRET}"
   echo "OUTPOST_DASHBOARD_USER=${OUTPOST_DASHBOARD_USER}"
   echo "OUTPOST_DASHBOARD_PASSWORD=${OUTPOST_DASHBOARD_PASSWORD}"
   echo "MANIFEST_REPO_URL=${MANIFEST_REPO_URL}"

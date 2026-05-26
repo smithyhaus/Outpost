@@ -118,6 +118,12 @@ mysql -h127.0.0.1 -P9306 -e 'SHOW STATUS'
   ```
 - 首次登录后建议改密码：`argocd account update-password`
 - 监听的 manifest 仓库：`${MANIFEST_REPO_URL}` (branch: `${MANIFEST_REPO_BRANCH}`)
+- **manifest 仓库 instant-sync webhook**(配一次,所有 app 自动受益):
+  - URL:`https://argocd.${ROOT_DOMAIN}/api/webhook`
+  - Secret:`${ARGOCD_WEBHOOK_SECRET}`
+  - Push event,Content-Type=application/json
+  - 配上之后,ArgoCD 从默认 3 min 轮询变成 ~5s 立即 sync
+  - 重新打印:`bash scripts/outpost setup-argocd-webhook`
 
 ## 7. Tekton CI（webhook + pipeline + dashboard）
 

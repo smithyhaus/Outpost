@@ -254,8 +254,18 @@ bootstrap 的 Phase 9 会:
 1. 在 `testkube` 命名空间装 **Testkube**(没装 helm 会自动下载)。
 2. 在 `argo-rollouts` 命名空间装 **Argo Rollouts** controller + Dashboard。
 3. 在 `tekton-pipelines` 应用每家通知 plugin 的 Secret + ConfigMap。
-4. 把每家 plugin 的 fragment 拼成统一的 `argocd-notifications-cm` + `argocd-notifications-secret`。
+4. 把每家 plugin 的 fragment 拼成统一的 `argocd-notifications-cm` + `argocd-notifications-secret`,并把每个 trigger 的 `send:` 列表 + `subscriptions.recipients:` 替换成实际启用的 plugin。
 5. 应用共享的 `outpost-notify` Tekton Task — Pipeline `finally` 块在失败时调它。
+
+**ArgoCD 通知覆盖的事件**(每个启用的 channel 都会收到):
+
+| Trigger | 触发条件 | 你能用它干什么 |
+|---|---|---|
+| `on-deployed` | sync 成功且 health=Healthy | 知道某个 push 真正部署上线了(每个 revision 只通知一次,无垃圾) |
+| `on-sync-failed` | sync 阶段报错 | manifest 错 / image pull 失败 / template 渲染失败 |
+| `on-degraded` | health=Degraded | 跑起来后挂了(crash / readiness 失败) |
+| `on-deleted` | Application 被删 | 防误删 |
+| `on-rollback` | Argo Rollouts 自动回滚 | 金丝雀分析失败,回到稳定版了 |
 
 #### J-4. 在应用仓库根目录加 `outpost.test.yaml`(每个应用 ~2 min)
 

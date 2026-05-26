@@ -1,0 +1,27 @@
+# =============================================================================
+# argocd-cm webhook secrets patch.
+# -----------------------------------------------------------------------------
+# Enables ArgoCD's built-in /api/webhook receiver so manifest-repo pushes
+# trigger an immediate refresh+sync instead of waiting for the 3-min poll.
+#
+# All three provider keys carry the same secret so operators can switch
+# GIT_PROVIDER without re-keying — the receiver matches on the request's
+# X-Gitee-Token / X-Hub-Signature / X-Gitlab-Token header and uses the
+# corresponding key. Setting all three is harmless (only the active path
+# validates) and keeps the patch idempotent across provider swaps.
+#
+# Applied via `kubectl patch --type merge` so it co-exists with whatever
+# argocd-cm config the upstream install.yaml + cmd-params-cm shipped.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd-cm
+    app.kubernetes.io/part-of: argocd
+data:
+  webhook.gitee.secret: "${ARGOCD_WEBHOOK_SECRET}"
+  webhook.github.secret: "${ARGOCD_WEBHOOK_SECRET}"
+  webhook.gitlab.secret: "${ARGOCD_WEBHOOK_SECRET}"

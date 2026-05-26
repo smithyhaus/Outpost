@@ -129,6 +129,16 @@ if [[ -n "${NOTIFICATION_PROVIDERS}" ]]; then
   NOTIFY_ALLOWLIST="DINGTALK_WEBHOOK_URL DINGTALK_SIGN_SECRET FEISHU_WEBHOOK_URL FEISHU_SIGN_SECRET WECOM_WEBHOOK_URL GENERIC_WEBHOOK_URL GENERIC_WEBHOOK_BEARER ROOT_DOMAIN"
 
   IFS=',' read -ra _np <<< "${NOTIFICATION_PROVIDERS}"
+  # Plugin service short-names (template suffix + service.webhook.<short>):
+  #   dingtalk → dingtalk, feishu → feishu, wecom → wecom, webhook-generic → generic
+  # Keep in sync with each plugin's argocd-cm-fragment.yaml service block.
+  _to_short() {
+    case "$1" in
+      webhook-generic) echo "generic" ;;
+      *)               echo "$1" ;;
+    esac
+  }
+  _shorts=()
   for _p in "${_np[@]}"; do
     _p="${_p// /}"
     [[ -z "$_p" ]] && continue
@@ -143,8 +153,49 @@ if [[ -n "${NOTIFICATION_PROVIDERS}" ]]; then
     # under data: / stringData:).
     cat "plugins/notification/${_p}/argocd-cm-fragment.yaml" >> "$ARGO_CM_OUT"
     cat "plugins/notification/${_p}/argocd-secret-fragment.yaml" >> "$ARGO_SECRET_OUT"
+    _shorts+=("$(_to_short "$_p")")
   done
   unset _np _p _tmp_manifest
+
+  # Substitute placeholders in the assembled cm. Each trigger's `send:` list
+  # needs the actual template names that the plugin fragments contributed
+  # (e.g. app-deployed-dingtalk, app-deployed-feishu); the subscriptions
+  # `recipients:` needs the actual service names (webhook.dingtalk, ...).
+  # Without this step the literal `_PLUGIN_*_` strings remain in the cm
+  # and argocd-notifications-controller logs `unknown template` for every
+  # firing — silent failure mode.
+  _join() { local IFS=", "; echo "$*"; }
+  _tmpl_for_event() {
+    # Build "app-<event>-<short1>, app-<event>-<short2>, ..."
+    local event="$1" out=() s
+    for s in "${_shorts[@]}"; do out+=("app-${event}-${s}"); done
+    _join "${out[@]}"
+  }
+  _recipients() {
+    local out=() s
+    for s in "${_shorts[@]}"; do out+=("webhook.${s}"); done
+    _join "${out[@]}"
+  }
+  # sed -i differs on macOS vs GNU; use a temp + mv for portability.
+  _ARGO_CM_FILLED="$(mktemp)"
+  sed \
+    -e "s|_PLUGIN_TEMPLATES_DEPLOYED_|$(_tmpl_for_event deployed)|g" \
+    -e "s|_PLUGIN_TEMPLATES_SYNC_FAILED_|$(_tmpl_for_event sync-failed)|g" \
+    -e "s|_PLUGIN_TEMPLATES_DEGRADED_|$(_tmpl_for_event degraded)|g" \
+    -e "s|_PLUGIN_TEMPLATES_DELETED_|$(_tmpl_for_event deleted)|g" \
+    -e "s|_PLUGIN_TEMPLATES_ROLLBACK_|$(_tmpl_for_event rollback)|g" \
+    -e "s|_PLUGIN_RECIPIENTS_|$(_recipients)|g" \
+    "$ARGO_CM_OUT" > "$_ARGO_CM_FILLED"
+  mv "$_ARGO_CM_FILLED" "$ARGO_CM_OUT"
+  unset _shorts _tmpl_for_event _recipients _join _to_short _ARGO_CM_FILLED
+
+  # Defensive: fail loudly if any placeholder survived (means a future
+  # template added _PLUGIN_*_ without updating the sed list above).
+  if grep -q '_PLUGIN_[A-Z_]*_' "$ARGO_CM_OUT"; then
+    err "argocd-notifications-cm has unsubstituted _PLUGIN_*_ placeholders:"
+    grep '_PLUGIN_[A-Z_]*_' "$ARGO_CM_OUT" | sed 's/^/    /'
+    exit 1
+  fi
 
   # Render envsubst on the combined files (resolves ${ROOT_DOMAIN} in templates,
   # ${DINGTALK_WEBHOOK_URL} in secret data, etc.) then apply.

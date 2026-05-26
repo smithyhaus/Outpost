@@ -6,6 +6,30 @@
     headers:
       - name: Content-Type
         value: application/json
+  template.app-deployed-dingtalk: |
+    webhook:
+      dingtalk:
+        method: POST
+        body: |
+          {
+            "msgtype": "markdown",
+            "markdown": {
+              "title": "[ok] {{.app.metadata.name}} deployed",
+              "text": "### {{.app.metadata.name}} deployed\n- revision: {{.app.status.sync.revision | substr 0 7}}\n- detail: [open](https://argocd.${ROOT_DOMAIN}/applications/{{.app.metadata.name}})"
+            }
+          }
+  template.app-deleted-dingtalk: |
+    webhook:
+      dingtalk:
+        method: POST
+        body: |
+          {
+            "msgtype": "markdown",
+            "markdown": {
+              "title": "[warn] {{.app.metadata.name}} deleted",
+              "text": "### {{.app.metadata.name}} is being deleted"
+            }
+          }
   template.app-sync-failed-dingtalk: |
     webhook:
       dingtalk:
