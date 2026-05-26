@@ -4,7 +4,11 @@
 # - cloudflared forwards HTTP traffic for data UI subdomains here
 # - Caddy routes by Host header
 # - TLS is terminated at the Cloudflare edge — internal traffic is plain HTTP
-# - {$ROOT_DOMAIN} is substituted from the container env var (set in compose)
+# - All host prefixes and upstreams are env-var driven (Caddy's {$VAR:default}
+#   syntax). Override in .env to relocate routes without forking this file.
+# - App-specific routes go in ./Caddyfile.d/*.caddy fragments — never edit
+#   this file to add an application route. See `outpost onboard` (the CLI
+#   subcommand) and docs/onboarding/example-fragments/ for the pattern.
 # =============================================================================
 
 {
@@ -16,67 +20,25 @@
 }
 
 :80 {
-    @search host search.{$ROOT_DOMAIN}
+    # ----- built-in data-service UIs ----------------------------------------
+    # SEARCH_HOST / SEARCH_UPSTREAM / MQ_HOST / MQ_UPSTREAM all default to the
+    # in-network container names. Override only if you swap implementations or
+    # need different subdomain prefixes for your org.
+    @search host {$SEARCH_HOST:search}.{$ROOT_DOMAIN}
     handle @search {
-        reverse_proxy manticore:9308
+        reverse_proxy {$SEARCH_UPSTREAM:manticore:9308}
     }
 
-    @mq host mq.{$ROOT_DOMAIN}
+    @mq host {$MQ_HOST:mq}.{$ROOT_DOMAIN}
     handle @mq {
-        reverse_proxy rabbitmq:15672
+        reverse_proxy {$MQ_UPSTREAM:rabbitmq:15672}
     }
 
-    # =========================================================================
-    # SCM MCP — 多产品 MCP 平台
-    # mcp.<ROOT_DOMAIN> 下挂 3 个产品的 MCP server + Dashboard
-    # 容器名: scm-mcp-app (同 infra_infra 网络)
-    # 端口: 8080 FE / 8081 API / 8090 SCM Cloud / 8091 SCM 3.0 / 8092 LinkMind DI
-    # =========================================================================
-    @scm_mcp host mcp.{$ROOT_DOMAIN}
-    handle @scm_mcp {
-        # SCM Cloud (:8090) — 自带 /mcp + /mcp/lite 双 endpoint 设计,upstream 期望 /mcp/(带 trailing slash)
-        # /scm-cloud/mcp 或 /scm-cloud/mcp/ → upstream /mcp/(交给 server 自己的 redirect 处理 lite 分支)
-        @scm_cloud path /scm-cloud/mcp /scm-cloud/mcp/
-        handle @scm_cloud {
-            rewrite * /mcp/
-            reverse_proxy scm-mcp-app:8090
-        }
-        handle_path /scm-cloud/mcp/* {
-            rewrite * /mcp/{path}
-            reverse_proxy scm-mcp-app:8090
-        }
-
-        # SCM 3.0 (:8091) — 单一 /mcp endpoint,upstream 期望无 trailing slash
-        @scm_3 path /scm-3/mcp /scm-3/mcp/
-        handle @scm_3 {
-            rewrite * /mcp
-            reverse_proxy scm-mcp-app:8091
-        }
-
-        # LinkMind DI (:8092) — 同 SCM 3.0
-        @linkmou_di path /linkmou-di/mcp /linkmou-di/mcp/
-        handle @linkmou_di {
-            rewrite * /mcp
-            reverse_proxy scm-mcp-app:8092
-        }
-
-        # Legacy /mcp 老路径 30 天兼容 → SCM Cloud
-        @legacy path /mcp /mcp/
-        handle @legacy {
-            rewrite * /mcp/
-            reverse_proxy scm-mcp-app:8090
-        }
-
-        # Dashboard API
-        handle /dash/api/* {
-            reverse_proxy scm-mcp-app:8081
-        }
-
-        # Dashboard FE (catch-all)
-        handle {
-            reverse_proxy scm-mcp-app:8080
-        }
-    }
+    # ----- app-defined route fragments --------------------------------------
+    # Each onboarded app drops one `.caddy` file in Caddyfile.d/ (via
+    # `outpost onboard <repo>`). Adding routes here directly is an anti-pattern:
+    # it forks the infras repo per consumer and breaks `git pull` upgrades.
+    import /etc/caddy/Caddyfile.d/*.caddy
 
     handle {
         respond "Unknown host: {host}" 404

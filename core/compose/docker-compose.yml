@@ -56,13 +56,20 @@ services:
     container_name: caddy
     restart: unless-stopped
     environment:
-      # Required by Caddyfile {$ROOT_DOMAIN} substitution. Without this the
-      # host matchers expand to empty strings and all routes 404.
+      # ROOT_DOMAIN is required (host matchers depend on it).
+      # The remaining vars are optional — Caddyfile uses {$VAR:default}
+      # syntax, so leaving them unset falls back to the documented defaults.
+      # Passing them through here makes them substitutable by Caddy at startup.
       ROOT_DOMAIN: ${ROOT_DOMAIN}
+      SEARCH_HOST: ${SEARCH_HOST:-search}
+      SEARCH_UPSTREAM: ${SEARCH_UPSTREAM:-manticore:9308}
+      MQ_HOST: ${MQ_HOST:-mq}
+      MQ_UPSTREAM: ${MQ_UPSTREAM:-rabbitmq:15672}
     networks:
       - infra
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./Caddyfile.d:/etc/caddy/Caddyfile.d:ro
       - caddy_data:/data
       - caddy_config:/config
 

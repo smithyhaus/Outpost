@@ -1,0 +1,74 @@
+# =============================================================================
+# Example fragment — SCM MCP multi-product MCP platform.
+# -----------------------------------------------------------------------------
+# This is REFERENCE / EXAMPLE material. Do NOT copy this file into
+# core/compose/Caddyfile.d/ in the infras repo — that would re-introduce the
+# anti-pattern this file documents the fix for (see ADR 0002).
+#
+# The intended home for this fragment is the SCM MCP application's OWN repo,
+# at `outpost/mcp.caddy` (or whatever path SCM MCP's `outpost.app.yaml`
+# advertises). `outpost onboard <scm-mcp-repo>` then renders / copies it
+# into the running infras instance's Caddyfile.d/ at install time.
+#
+# This file is preserved as the worked example because:
+#   1. It demonstrates the rewrite trade-off between Caddy DSL `rewrite *`
+#      and `handle_path` — useful when an app has multiple upstreams that
+#      disagree on trailing-slash conventions.
+#   2. It shows how a single host (mcp.<ROOT_DOMAIN>) can fan out to 3+
+#      upstream ports + a dashboard split, without polluting infras.
+#
+# Container/port assumptions (declared by the app's outpost.app.yaml):
+#   container_name : scm-mcp-app
+#   network        : infra (the shared compose network)
+#   ports          : 8080 FE / 8081 API
+#                    8090 SCM Cloud / 8091 SCM 3.0 / 8092 LinkMind DI
+# =============================================================================
+
+@scm_mcp host {$MCP_HOST:mcp}.{$ROOT_DOMAIN}
+handle @scm_mcp {
+    # SCM Cloud (:8090) — exposes /mcp + /mcp/lite as two distinct endpoints;
+    # upstream expects /mcp/ (with trailing slash) so its own redirect chain
+    # can route /mcp/lite correctly.
+    @scm_cloud path /scm-cloud/mcp /scm-cloud/mcp/
+    handle @scm_cloud {
+        rewrite * /mcp/
+        reverse_proxy scm-mcp-app:8090
+    }
+    handle_path /scm-cloud/mcp/* {
+        rewrite * /mcp/{path}
+        reverse_proxy scm-mcp-app:8090
+    }
+
+    # SCM 3.0 (:8091) — single /mcp endpoint, upstream wants no trailing slash.
+    @scm_3 path /scm-3/mcp /scm-3/mcp/
+    handle @scm_3 {
+        rewrite * /mcp
+        reverse_proxy scm-mcp-app:8091
+    }
+
+    # LinkMind DI (:8092) — same shape as SCM 3.0.
+    @linkmou_di path /linkmou-di/mcp /linkmou-di/mcp/
+    handle @linkmou_di {
+        rewrite * /mcp
+        reverse_proxy scm-mcp-app:8092
+    }
+
+    # Legacy /mcp top-level — 30-day backward compat for old clients; routes
+    # to SCM Cloud (the previous default). Remove this block once telemetry
+    # shows no traffic.
+    @legacy path /mcp /mcp/
+    handle @legacy {
+        rewrite * /mcp/
+        reverse_proxy scm-mcp-app:8090
+    }
+
+    # Dashboard API.
+    handle /dash/api/* {
+        reverse_proxy scm-mcp-app:8081
+    }
+
+    # Dashboard FE (catch-all).
+    handle {
+        reverse_proxy scm-mcp-app:8080
+    }
+}
