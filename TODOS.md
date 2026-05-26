@@ -712,3 +712,129 @@ remote in v0.4 after dogfooding the schema.
 **Milestone:** v0.3 (local mode); v0.4 (anonymous remote)
 
 ---
+
+## ✅ Done in v0.5 — application onboarding primitives (env-driven + no-clone)
+
+Three commits delivered the "no-clone deployment" workflow:
+
+- `refactor(caddy): env-driven routes + Caddyfile.d/ fragment dir`
+  (commit `dd82061`) — `core/compose/Caddyfile` no longer carries per-app
+  routing knowledge; built-in services use `{$VAR:default}` for both host
+  prefix and upstream container:port. `core/compose/Caddyfile.d/*.caddy`
+  fragments are mounted via `import`; rendered fragments are gitignored.
+- `feat(onboard): outpost.app.yaml schema + onboard CLI` (commit `e550b73`)
+  — app-side declarative descriptor with JSON Schema, `outpost onboard
+  <repo>` reads it and renders Caddy + compose artefacts.
+- `feat(distribution): one-shot install.sh + LLM-side skill template`
+  (commit `6008c8c`) — `curl -fsSL .../install.sh | bash` with
+  `APP_REPO=` chains install + onboard. `docs/onboarding/outpost-app.skill.md`
+  ships as a Claude/Cursor skill template.
+
+Two follow-up commits closed the post-review gaps:
+
+- Subdomain prefixes for `argocd` / `hooks` / `registry` made env-driven
+  (`ARGOCD_HOST`, `HOOKS_HOST`, `REGISTRY_SUBDOMAIN`) — parity with
+  `search`/`mq` already shipped in `dd82061`.
+- `spec.k3s.manifest_repo` actually consumed: `outpost onboard
+  --manifests-dir <path> --lang <lang>` runs the existing `_manifest_scaffold`
+  with the per-app overrides applied via a scoped env subshell. The
+  previously schema-declared but unused `manifest_repo` / `manifest_branch`
+  / `manifest_path` fields now drive the rendered argocd-application.
+- `core/compose/overrides/*.yml` auto-included by `bootstrap.d/04-compose.sh`
+  and `status.sh` via `shopt -s nullglob` loop. `outpost onboard` auto-runs
+  `docker compose up -d <name>` for the new service (--no-up to opt out).
+- `outpost off-board <name>` for inverse cleanup (compose tier).
+- `outpost onboard --install-skill` drops the LLM skill template into the
+  app repo's `.claude/skills/`.
+
+Total bats coverage added: 5 new files (caddyfile-fragments, onboard-app,
+outpost-app-schema, install, env-driven-hosts, compose-overrides, off-board),
+~80 cases.
+
+---
+
+## outpost.app.yaml ↔ outpost.build.yaml relationship doc
+
+**What:** App repositories may now carry two outpost-namespaced YAML
+descriptors at their root: `outpost.app.yaml` (v0.5 — onboarding /
+routing) and `outpost.build.yaml` (v0.3 — Tekton per-app build config).
+Their relationship is not documented anywhere obvious; an operator
+reading the README cold won't know which goes where.
+
+**Concrete TODO:** add a short table to `i18n/en/docs/05-onboard-project.md`
+(and the zh-CN mirror) plus a sentence in `SKILL.md §3 file pointer map`
+documenting:
+- `outpost.app.yaml`: declarative app metadata, tier, routes,
+  k3s.manifest_repo. Read at install time by `outpost onboard`.
+- `outpost.build.yaml`: per-app kaniko inputs (dockerfile, context,
+  buildArgs, extraArgs). Read at *pipeline-run time* by the Tekton
+  `read-build-config` task.
+- They're independent files; an app may have either, both, or neither.
+
+**Why:** ambiguity costs ~10 minutes per new contributor every time.
+A 20-line doc fix amortises forever.
+
+**Depends on:** none.
+
+**Milestone:** v0.5.1 (docs-only patch release)
+
+---
+
+## install.sh remote distribution + version pinning
+
+**What:** `install.sh` at the repo root works locally; the README
+documents `curl -fsSL https://raw.githubusercontent.com/smithyhaus/Outpost/main/install.sh | bash`
+as the canonical install path. But:
+1. The `main` branch URL is fragile — a botched commit to main breaks
+   every fresh install in the world.
+2. There's no GitHub Action publishing install.sh to a stable URL
+   (e.g. `outpost.sh/install` or a versioned `releases/v0.5/install.sh`).
+3. `install.sh` clones `OUTPOST_GIT_REF=main` by default — same fragility.
+
+**Concrete TODO:**
+- Add a CI workflow that publishes install.sh under a stable URL on
+  every tagged release (GitHub Releases asset is enough; cdn.jsdelivr.net
+  also serves raw GitHub content with version pins).
+- Default `OUTPOST_GIT_REF` to the latest *tagged* release rather than
+  `main`; `install.sh` reads `VERSION` from the tarball if available.
+- README updated to recommend the versioned URL for production installs,
+  reserving `@main` for early adopters.
+
+**Pros:** any one bad merge to main can't break global installs;
+operators can pin to a specific Outpost release.
+
+**Cons:** introduces a release-cadence requirement (today the project
+runs from main).
+
+**Depends on:** decision on release cadence (v0.5 = first tagged release?).
+
+**Milestone:** v0.5.1
+
+---
+
+## Unify `decommission` to cover compose-tier apps
+
+**What:** `outpost decommission <app>` was designed for k3s-tier apps
+(removes the ArgoCD Application + cleans manifest repo). v0.5 added
+`outpost off-board <name>` for compose-tier cleanup (Caddyfile fragment
++ override + container removal). Operators now have two commands for
+"remove this app" and the right choice depends on the app's tier.
+
+**Concrete TODO:** merge into a single `outpost decommission <name>`
+that reads the on-disk artefacts (Caddyfile.d/<name>.caddy AND/OR
+argocd-apps/<name>.yaml in the manifest repo) and runs the appropriate
+cleanup branch. Keep `off-board` as a backwards-compat alias for one
+release, with a deprecation hint.
+
+**Pros:** one command, no tier guess.
+
+**Cons:** the unified command needs read access to the manifest repo
+to detect the k3s case — same access decommission already requires.
+
+**Depends on:** the unified decommission needs to handle the case where
+an app is BOTH tier=compose AND has k3s manifests (probably an error /
+warn-and-skip).
+
+**Milestone:** v0.6
+
+---
