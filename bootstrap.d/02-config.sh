@@ -66,6 +66,18 @@ export GIT_HOST
 REGISTRY_PLUGIN="${REGISTRY_PLUGIN:-self-hosted}"
 GIT_PROVIDER_PLUGIN="${GIT_PROVIDER_PLUGIN:-gitee}"
 MANIFEST_REPO_BRANCH="${MANIFEST_REPO_BRANCH:-main}"
+
+# Built-in service subdomain prefixes (joined with .${ROOT_DOMAIN}).
+# Templates under core/k8s/ reference these via envsubst; render_template's
+# strict residue check requires every ${VAR} placeholder in a template to
+# be set in the environment, so these defaults guarantee no silent failure
+# even when the operator left .env at its commented defaults.
+ARGOCD_HOST="${ARGOCD_HOST:-argocd}"
+HOOKS_HOST="${HOOKS_HOST:-hooks}"
+# REGISTRY_SUBDOMAIN feeds registry-config.sh's REGISTRY_HOST computation for
+# the self-hosted plugin only. aliyun-acr sets REGISTRY_HOST directly to the
+# ACR endpoint and ignores this var.
+REGISTRY_SUBDOMAIN="${REGISTRY_SUBDOMAIN:-registry}"
 # Branch of an APP repo whose pushes trigger the CI/CD pipeline. The EventListener
 # CEL ref filter pins to refs/heads/${OUTPOST_DEPLOY_BRANCH}; pushes to any other
 # branch are ignored. Distinct from MANIFEST_REPO_BRANCH (the manifests repo).
@@ -180,6 +192,12 @@ fi
   # but persisted so status.sh / verify.sh can show what's active).
   echo "REGISTRY_HOST=${REGISTRY_HOST:-}"
   echo "REGISTRY_PUSH_HOST=${REGISTRY_PUSH_HOST:-}"
+  # Built-in service subdomain prefix overrides (joined with .${ROOT_DOMAIN} by
+  # the relevant template/computation). Persisted so subsequent rebuilds, the
+  # registry plugin's REGISTRY_HOST computation, and verify.sh all agree.
+  echo "ARGOCD_HOST=${ARGOCD_HOST}"
+  echo "HOOKS_HOST=${HOOKS_HOST}"
+  echo "REGISTRY_SUBDOMAIN=${REGISTRY_SUBDOMAIN}"
   echo "KANIKO_EXTRA_ARGS=${KANIKO_EXTRA_ARGS:-}"
   echo "WEBHOOK_REPO_WHITELIST=${WEBHOOK_REPO_WHITELIST:-}"
   echo "CEL_WHITELIST_LIST=${CEL_WHITELIST_LIST:-[]}"

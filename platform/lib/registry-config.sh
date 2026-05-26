@@ -15,7 +15,11 @@
 resolve_registry_config() {
   case "${REGISTRY_PLUGIN:-}" in
     self-hosted)
-      REGISTRY_HOST="registry.${ROOT_DOMAIN}"
+      # Subdomain prefix is operator-overridable via REGISTRY_SUBDOMAIN in .env;
+      # defaults to "registry". The full REGISTRY_HOST is then exported and
+      # consumed by templates (k8s ingress, kaniko args) — they trust the
+      # computed value instead of re-deriving from the prefix themselves.
+      REGISTRY_HOST="${REGISTRY_SUBDOMAIN:-registry}.${ROOT_DOMAIN}"
       # Push to in-cluster Service to bypass cloudflared HTTP/2 large-blob limit.
       REGISTRY_PUSH_HOST="docker-registry.registry.svc.cluster.local:5000"
       # Insecure (HTTP, anonymous) + cache under /cache.

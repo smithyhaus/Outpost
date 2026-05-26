@@ -16,7 +16,8 @@
 #
 # Switch providers via GIT_PROVIDER_PLUGIN in .env; bootstrap re-renders.
 #
-# Webhook URL is provider-agnostic: https://hooks.<ROOT_DOMAIN>
+# Webhook URL is provider-agnostic: https://${HOOKS_HOST}.${ROOT_DOMAIN}
+# (default HOOKS_HOST=hooks → https://hooks.<ROOT_DOMAIN>)
 # Tekton service name is provider-agnostic: el-build-listener
 # ============================================================================
 apiVersion: triggers.tekton.dev/v1beta1
@@ -38,7 +39,7 @@ spec:
   entryPoints:
     - web
   routes:
-    - match: Host(`hooks.${ROOT_DOMAIN}`)
+    - match: Host(`${HOOKS_HOST}.${ROOT_DOMAIN}`)
       kind: Rule
       services:
         - name: el-build-listener

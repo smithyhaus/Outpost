@@ -15,7 +15,7 @@ spec:
   entryPoints:
     - web
   routes:
-    - match: Host(`argocd.${ROOT_DOMAIN}`)
+    - match: Host(`${ARGOCD_HOST}.${ROOT_DOMAIN}`)
       kind: Rule
       services:
         - name: argocd-server

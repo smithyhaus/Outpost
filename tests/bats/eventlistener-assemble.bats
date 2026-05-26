@@ -22,6 +22,10 @@ setup() {
   # trigger.yaml ref filter pins refs/heads/${OUTPOST_DEPLOY_BRANCH} — render_template
   # aborts on the unresolved placeholder if this is unset.
   export OUTPOST_DEPLOY_BRANCH="main"
+  # v0.5+ eventlistener-base.yaml uses ${HOOKS_HOST}.${ROOT_DOMAIN} in the
+  # IngressRoute host matcher; provide the default that bootstrap.d/02-config.sh
+  # exports during a real install.
+  export HOOKS_HOST="hooks"
   unset WEBHOOK_REPO_WHITELIST
   build_cel_whitelist          # → CEL_WHITELIST_LIST="[]"
 

@@ -14,24 +14,27 @@ credentials-file: /etc/cloudflared/<TUNNEL_ID>.json
 
 ingress:
   # ---- HTTP（经 caddy 内部路由）----
-  - hostname: search.example.com
+  # 子域前缀来自 .env 的 SEARCH_HOST / MQ_HOST(默认 search / mq)
+  - hostname: ${SEARCH_HOST}.${ROOT_DOMAIN}
     service: http://caddy:80
-  - hostname: mq.example.com
+  - hostname: ${MQ_HOST}.${ROOT_DOMAIN}
     service: http://caddy:80
 
   # ---- HTTP（经 k3s Traefik，NodePort 30080）----
-  - hostname: argocd.example.com
+  # 前缀来自 .env 的 ARGOCD_HOST / HOOKS_HOST / REGISTRY_SUBDOMAIN
+  # (默认 argocd / hooks / registry)
+  - hostname: ${ARGOCD_HOST}.${ROOT_DOMAIN}
     service: http://host.docker.internal:30080
-  - hostname: hooks.example.com
+  - hostname: ${HOOKS_HOST}.${ROOT_DOMAIN}
     service: http://host.docker.internal:30080
-  - hostname: tekton.example.com
+  - hostname: tekton.${ROOT_DOMAIN}
     service: http://host.docker.internal:30080
-  - hostname: registry.example.com
+  - hostname: ${REGISTRY_HOST}
     service: http://host.docker.internal:30080
     originRequest:
-      httpHostHeader: registry.example.com
+      httpHostHeader: ${REGISTRY_HOST}
   # 应用通配符
-  - hostname: "*.apps.example.com"
+  - hostname: "*.apps.${ROOT_DOMAIN}"
     service: http://host.docker.internal:30080
 
   # ---- TCP ----

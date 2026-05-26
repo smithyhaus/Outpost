@@ -72,7 +72,7 @@ spec:
   entryPoints:
     - web
   routes:
-    - match: Host(`registry.${ROOT_DOMAIN}`)
+    - match: Host(`${REGISTRY_HOST}`)
       kind: Rule
       services:
         - name: docker-registry
