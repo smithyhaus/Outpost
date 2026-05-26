@@ -70,6 +70,73 @@ EOF
   [[ "$output" =~ "spec.tier" ]]
 }
 
+@test "onboard_app_validate: rejects tier=k3s + spec.routes (contract violation)" {
+  cat > "$TEST_TMPDIR/x.yaml" <<'EOF'
+apiVersion: outpost.dev/v1
+kind: App
+metadata: { name: bad-k3s }
+spec:
+  tier: k3s
+  routes:
+    - host: "x.{$ROOT_DOMAIN}"
+      default_upstream: "x:80"
+EOF
+  run onboard_app_validate "$TEST_TMPDIR/x.yaml"
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "tier=k3s forbids spec.routes" ]]
+  [[ "$output" =~ "IngressRoute" ]]
+}
+
+@test "onboard_app_validate: rejects tier=k3s + spec.caddy_fragment (contract violation)" {
+  cat > "$TEST_TMPDIR/x.yaml" <<'EOF'
+apiVersion: outpost.dev/v1
+kind: App
+metadata: { name: bad-k3s2 }
+spec:
+  tier: k3s
+  caddy_fragment: |
+    @x host x.{$ROOT_DOMAIN}
+    handle @x { reverse_proxy x:80 }
+EOF
+  run onboard_app_validate "$TEST_TMPDIR/x.yaml"
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "tier=k3s forbids spec.caddy_fragment" ]]
+}
+
+@test "onboard_app_validate: rejects tier=compose with host on *.apps. wildcard" {
+  # The .apps. wildcard goes to k3s Traefik, not caddy. A compose-tier
+  # service on mcp.apps.<ROOT_DOMAIN> is silently unreachable.
+  cat > "$TEST_TMPDIR/x.yaml" <<'EOF'
+apiVersion: outpost.dev/v1
+kind: App
+metadata: { name: bad-compose }
+spec:
+  tier: compose
+  compose: { image: nginx }
+  routes:
+    - host: "mcp.apps.{$ROOT_DOMAIN}"
+      default_upstream: "nginx:80"
+EOF
+  run onboard_app_validate "$TEST_TMPDIR/x.yaml"
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "tier=compose host" ]]
+  [[ "$output" =~ ".apps." ]]
+  # The error must hint at both fixes: switch tier OR pick top-level host.
+  [[ "$output" =~ "tier=k3s" ]]
+}
+
+@test "onboard_app_validate: accepts tier=compose with legitimate top-level host" {
+  run onboard_app_validate "${INFRA_ROOT}/examples/outpost.app.yaml.stateful-infra.example"
+  [ "$status" -eq 0 ]
+}
+
+@test "onboard_app_validate: accepts tier=k3s without any routes" {
+  run onboard_app_validate "${INFRA_ROOT}/examples/outpost.app.yaml.minimal.example"
+  [ "$status" -eq 0 ]
+  run onboard_app_validate "${INFRA_ROOT}/examples/outpost.app.yaml.multiproduct.example"
+  [ "$status" -eq 0 ]
+}
+
 @test "onboard_app_validate: rejects routes + caddy_fragment together" {
   cat > "$TEST_TMPDIR/x.yaml" <<'EOF'
 apiVersion: outpost.dev/v1
@@ -91,24 +158,57 @@ EOF
 }
 
 @test "onboard_render_caddy_fragment: emits host matcher + handle block" {
-  out=$(onboard_render_caddy_fragment "${INFRA_ROOT}/examples/outpost.app.yaml.minimal.example")
-  [[ "$out" =~ "@hello_host_0 host" ]]
-  [[ "$out" =~ "handle @hello_host_0" ]]
-  [[ "$out" =~ "reverse_proxy hello:80" ]]
+  # Caddy fragments are now rendered only for tier=compose; the stateful-infra
+  # example is the canonical fixture for fragment rendering.
+  out=$(onboard_render_caddy_fragment "${INFRA_ROOT}/examples/outpost.app.yaml.stateful-infra.example")
+  [[ "$out" =~ "@elasticsearch_host_0 host" ]]
+  [[ "$out" =~ "handle @elasticsearch_host_0" ]]
+  [[ "$out" =~ "reverse_proxy elasticsearch:9200" ]]
 }
 
 @test "onboard_render_caddy_fragment: dashed app name → underscored matcher" {
-  out=$(onboard_render_caddy_fragment "${INFRA_ROOT}/examples/outpost.app.yaml.multiproduct.example")
-  # 'scm-mcp' must become 'scm_mcp' in matcher names (Caddy disallows hyphens).
-  [[ "$out" =~ "scm_mcp_host_0" ]]
-  ! [[ "$out" =~ "scm-mcp_host_0" ]]
+  # Use a synthetic dashed-name yaml (the new examples don't have one).
+  cat > "$TEST_TMPDIR/dashed.yaml" <<'EOF'
+apiVersion: outpost.dev/v1
+kind: App
+metadata:
+  name: my-infra
+spec:
+  tier: compose
+  compose: { image: nginx }
+  routes:
+    - host: "my-infra.{$ROOT_DOMAIN}"
+      default_upstream: "my-infra:80"
+EOF
+  out=$(onboard_render_caddy_fragment "$TEST_TMPDIR/dashed.yaml")
+  # 'my-infra' must become 'my_infra' in matcher names (Caddy disallows hyphens).
+  [[ "$out" =~ "my_infra_host_0" ]]
+  ! [[ "$out" =~ "my-infra_host_0" ]]
 }
 
 @test "onboard_render_caddy_fragment: rewrite_path_prefix → uri strip_prefix" {
-  out=$(onboard_render_caddy_fragment "${INFRA_ROOT}/examples/outpost.app.yaml.multiproduct.example")
-  # `rewrite_path_prefix: ["/scm-cloud", ""]` must render as strip_prefix,
+  # Synthetic yaml exercising rewrite_path_prefix (legitimate stateful-infra
+  # use case: e.g., Kibana under /kibana on the same host as Elasticsearch).
+  cat > "$TEST_TMPDIR/strip.yaml" <<'EOF'
+apiVersion: outpost.dev/v1
+kind: App
+metadata:
+  name: search-bundle
+spec:
+  tier: compose
+  compose: { image: searchstack }
+  routes:
+    - host: "search.{$ROOT_DOMAIN}"
+      rules:
+        - path: ["/kibana/*"]
+          rewrite_path_prefix: ["/kibana", ""]
+          upstream: "kibana:5601"
+      default_upstream: "elasticsearch:9200"
+EOF
+  out=$(onboard_render_caddy_fragment "$TEST_TMPDIR/strip.yaml")
+  # `rewrite_path_prefix: ["/kibana", ""]` must render as strip_prefix,
   # NOT as a full `rewrite *` (which would discard the URL tail).
-  [[ "$out" =~ "uri strip_prefix /scm-cloud" ]]
+  [[ "$out" =~ "uri strip_prefix /kibana" ]]
 }
 
 @test "onboard_render_caddy_fragment: caddy_fragment escape hatch is passed verbatim" {
@@ -133,13 +233,15 @@ EOF
   ! [[ "$out" =~ "raw_host_0 host" ]]
 }
 
-@test "onboard_render_compose_override: minimal output is valid YAML" {
-  out=$(onboard_render_compose_override "${INFRA_ROOT}/examples/outpost.app.yaml.minimal.example")
-  echo "$out" | yq -e '.services.hello.image == "nginxdemos/hello:latest"' >/dev/null
+@test "onboard_render_compose_override: stateful-infra output is valid YAML" {
+  # Stateful-infra example is the only legitimate compose-tier example, so
+  # it carries the canonical compose-override fixture.
+  out=$(onboard_render_compose_override "${INFRA_ROOT}/examples/outpost.app.yaml.stateful-infra.example")
+  echo "$out" | yq -e '.services.elasticsearch.image | test("^docker.elastic.co/elasticsearch")' >/dev/null
 }
 
 @test "onboard_render_compose_override: env_from_outpost expands to \${VAR}" {
-  out=$(onboard_render_compose_override "${INFRA_ROOT}/examples/outpost.app.yaml.multiproduct.example")
+  out=$(onboard_render_compose_override "${INFRA_ROOT}/examples/outpost.app.yaml.stateful-infra.example")
   # ROOT_DOMAIN listed in env_from_outpost should appear as `ROOT_DOMAIN: ${ROOT_DOMAIN}`.
   [[ "$out" =~ ROOT_DOMAIN:[[:space:]]+\$\{ROOT_DOMAIN\} ]]
 }
@@ -155,14 +257,27 @@ EOF
   [ "$status" -ne 0 ]
 }
 
-@test "outpost onboard --dry-run: emits fragment + override without writing" {
+@test "outpost onboard --dry-run (tier=compose): emits fragment + override without writing" {
+  mkdir -p "$TEST_TMPDIR/app"
+  # Stateful-infra is the canonical tier=compose example post-contract.
+  cp "${INFRA_ROOT}/examples/outpost.app.yaml.stateful-infra.example" "$TEST_TMPDIR/app/outpost.app.yaml"
+  run bash "$CLI" onboard "$TEST_TMPDIR/app" --dry-run --no-reload
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "DRY RUN" ]]
+  [[ "$output" =~ "reverse_proxy elasticsearch:9200" ]]
+  # Crucially, dry-run must NOT have touched the infras dir.
+  [ ! -e "${INFRA_ROOT}/core/compose/Caddyfile.d/elasticsearch.caddy" ]
+}
+
+@test "outpost onboard --dry-run (tier=k3s): skips caddy fragment entirely" {
   mkdir -p "$TEST_TMPDIR/app"
   cp "${INFRA_ROOT}/examples/outpost.app.yaml.minimal.example" "$TEST_TMPDIR/app/outpost.app.yaml"
   run bash "$CLI" onboard "$TEST_TMPDIR/app" --dry-run --no-reload
   [ "$status" -eq 0 ]
   [[ "$output" =~ "DRY RUN" ]]
-  [[ "$output" =~ "reverse_proxy hello:80" ]]
-  # Crucially, dry-run must NOT have touched the infras dir.
+  # tier=k3s must NOT emit a Caddy fragment — apps use IngressRoute.
+  [[ "$output" =~ "tier=k3s" ]]
+  ! [[ "$output" =~ "reverse_proxy" ]]
   [ ! -e "${INFRA_ROOT}/core/compose/Caddyfile.d/hello.caddy" ]
 }
 
@@ -263,27 +378,23 @@ YAML
 
 @test "outpost onboard --install-skill: copies skill template into app's .claude/skills/" {
   mkdir -p "$TEST_TMPDIR/app"
+  # tier=k3s + no --manifests-dir is a valid path: onboard prints the
+  # next-step hint and runs install-skill (tier-agnostic, runs unconditionally).
   cp "${INFRA_ROOT}/examples/outpost.app.yaml.minimal.example" "$TEST_TMPDIR/app/outpost.app.yaml"
-  run bash "$CLI" onboard "$TEST_TMPDIR/app" --no-reload --no-up --install-skill --force
+  run bash "$CLI" onboard "$TEST_TMPDIR/app" --no-reload --install-skill --force
   [ "$status" -eq 0 ]
   [ -r "$TEST_TMPDIR/app/.claude/skills/outpost-deploy.skill.md" ]
-  # Cleanup the fragment + override the test produced (gitignored, but keeps
-  # the working tree clean for the rest of the suite).
-  rm -f "${INFRA_ROOT}/core/compose/Caddyfile.d/hello.caddy" \
-        "${INFRA_ROOT}/core/compose/overrides/hello.yml"
 }
 
 @test "outpost onboard --install-skill: idempotent (preserves existing skill)" {
   mkdir -p "$TEST_TMPDIR/app/.claude/skills"
   cp "${INFRA_ROOT}/examples/outpost.app.yaml.minimal.example" "$TEST_TMPDIR/app/outpost.app.yaml"
   printf "# CUSTOM SKILL — DO NOT OVERWRITE\n" > "$TEST_TMPDIR/app/.claude/skills/outpost-deploy.skill.md"
-  run bash "$CLI" onboard "$TEST_TMPDIR/app" --no-reload --no-up --install-skill
+  run bash "$CLI" onboard "$TEST_TMPDIR/app" --no-reload --install-skill
   [ "$status" -eq 0 ]
   # Without --force, the existing file is preserved.
   run grep -F "# CUSTOM SKILL — DO NOT OVERWRITE" "$TEST_TMPDIR/app/.claude/skills/outpost-deploy.skill.md"
   [ "$status" -eq 0 ]
-  rm -f "${INFRA_ROOT}/core/compose/Caddyfile.d/hello.caddy" \
-        "${INFRA_ROOT}/core/compose/overrides/hello.yml"
 }
 
 @test "outpost onboard k3s: missing --manifests-dir prints helpful hint, no error" {

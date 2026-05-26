@@ -2,10 +2,12 @@
 name: outpost-app-deploy
 description: |
   Claude / LLM-driven onboarding skill for an application repository that
-  ships an `outpost.app.yaml`. Detects whether outpost is already installed
-  locally, installs it via the one-shot `install.sh` if needed, then runs
-  `outpost onboard .` to register THIS repository's app with the running
-  infras instance.
+  ships an `outpost.app.yaml`. Encodes the Outpost architectural contract:
+  stateless applications go to tier=k3s (auto-routed under
+  *.apps.<ROOT_DOMAIN>), stateful infrastructure additions go to tier=compose
+  (top-level subdomain via Caddy). Detects whether outpost is installed
+  locally, installs it via the one-shot install.sh if needed, then runs
+  `outpost onboard .` to register THIS repository with the running infras.
 when_to_use: |
   Trigger automatically when:
     - The repository root contains an `outpost.app.yaml` file
@@ -18,9 +20,51 @@ when_to_use: |
 
 # Outpost — app onboarding skill (LLM template)
 
-> **Copy this file into your application repository** as `.claude/skills/outpost-deploy.skill.md`
-> (or wherever your LLM tooling picks up skills). It is the same file regardless
-> of which app uses it — the per-app variation lives in `outpost.app.yaml`.
+> **Copy this file into your application repository** as
+> `.claude/skills/outpost-deploy.skill.md` (or wherever your LLM tooling
+> picks up skills). It is the same file regardless of which app uses it —
+> the per-app variation lives in `outpost.app.yaml`. `outpost onboard
+> --install-skill` will drop this copy for you.
+
+## 0. The architectural contract — read this first
+
+Outpost has two ingress paths, each owning a distinct workload tier. If you
+get the tier wrong, you end up either (a) routing app traffic through the
+data-layer caddy, or (b) putting stateful infrastructure on the k3s
+wildcard ingress. Both break the contract.
+
+```
+                              cloudflared
+                                   |
+            +----------------------+----------------------+
+            |                                             |
+            v                                             v
+   *.apps.<ROOT_DOMAIN>                          <prefix>.<ROOT_DOMAIN>
+   wildcard (one CF rule)                        top-level (per-svc CF rule)
+            |                                             |
+            v                                             v
+       k3s Traefik                                    Caddy :80
+            |                                             |
+            v                                             v
+   STATELESS APPLICATIONS                  STATEFUL INFRASTRUCTURE
+   (HTTP servers, workers,                 (extra DBs, queues, search,
+   queue consumers, ML inference,          object stores — anything
+   CRUD services, dashboards)              that owns persistent data)
+        tier=k3s                                    tier=compose
+```
+
+**The skill enforces this contract:**
+
+- If the repo's `outpost.app.yaml` declares `tier=k3s` and contains
+  `spec.routes` or `spec.caddy_fragment`, `outpost onboard` refuses with
+  a clear error — apps use Kubernetes IngressRoute in the manifest repo,
+  not Caddy fragments.
+- If the repo's yaml declares `tier=compose` and the host contains
+  `.apps.`, `outpost onboard` refuses — that wildcard goes to k3s, caddy
+  never sees it.
+
+**Default to `tier=k3s`.** If you're not adding a stateful data service,
+this is the right answer.
 
 ## 1. What this skill does
 
@@ -46,7 +90,7 @@ Before doing anything, verify (in this order):
 Run `command -v outpost`:
 
 - **If `outpost` is on PATH:** the dev backend is already installed — skip
-  to "5. Onboard this app". The user just wants this repo registered.
+  to step 5. The user just wants this repo registered.
 - **If `outpost` is NOT on PATH:** prompt the user with the install
   questions in step 4, then run the one-shot installer.
 
@@ -91,14 +135,34 @@ curl -fsSL https://raw.githubusercontent.com/smithyhaus/Outpost/main/install.sh 
 `APP_REPO` makes the installer automatically run `outpost onboard` after
 bootstrap completes — no second command needed.
 
-When the working tree IS the app's source (local path is `.`), pass
-`APP_REPO="$PWD"` so the installer onboards the in-progress code, not the
-remote `main` of the repo.
+## 6. Onboarding an app on an existing Outpost
 
-## 6. Onboard a new app on an existing Outpost
+If `outpost` is already on PATH (re-trigger, second app on same machine):
 
-If `outpost` is already on PATH (re-trigger of this skill, second app on
-the same machine, etc.):
+### tier=k3s (stateless — DEFAULT for applications)
+
+```bash
+# Clone your manifests repo locally first (or reuse an existing clone).
+git clone "$MANIFEST_REPO_URL" ~/code/my-manifests
+
+# Onboard scaffolds deployment.yaml + service.yaml + ingress.yaml +
+# kustomization.yaml + the argocd-app pointing at it.
+cd "$REPO_ROOT"
+outpost onboard . \
+  --manifests-dir ~/code/my-manifests \
+  --lang go    # or python | java | csharp | react | vue
+```
+
+For multi-product or path-based routing (the SCM-MCP-style fan-out),
+adapt the scaffolded `apps/<name>/ingress.yaml` in your manifests repo —
+add multiple `Rule` entries with different `PathPrefix` matchers, all
+matching `Host(`<name>.apps.<ROOT_DOMAIN>`)`. See
+`examples/outpost.app.yaml.multiproduct.example` (in the Outpost repo)
+for the reference comment block.
+
+Then commit + push the manifest repo — ArgoCD picks it up automatically.
+
+### tier=compose (stateful infrastructure — rare)
 
 ```bash
 cd "$REPO_ROOT" && outpost onboard .
@@ -106,45 +170,50 @@ cd "$REPO_ROOT" && outpost onboard .
 
 This reads `./outpost.app.yaml`, renders a Caddy fragment into
 `~/outpost/core/compose/Caddyfile.d/<name>.caddy`, writes a compose
-override (for `tier: compose` apps) into `~/outpost/core/compose/overrides/<name>.yml`,
-and reloads the running Caddy container.
+override into `~/outpost/core/compose/overrides/<name>.yml`, reloads
+caddy, and runs `docker compose up -d <name>`.
+
+**Cloudflare side:** top-level subdomains aren't on the `*.apps.<root>`
+wildcard. After onboard, go to Cloudflare Dashboard → Zero Trust →
+Tunnels → your tunnel → Public Hostname and add an entry:
+- Host: `<your-prefix>.<your-domain>`
+- Service: `http://caddy:80`
 
 ## 7. Verify the deploy
 
-After onboarding, confirm the app is reachable:
-
 ```bash
-# Check that the new fragment is loaded
-docker exec caddy caddy fmt /etc/caddy/Caddyfile >/dev/null && echo "Caddy config valid"
+# Compose-tier infra: container running?
+docker ps | grep "<your-name>"
 
-# Compose-tier apps: bring up the container if it isn't running
-cd ~/outpost/core/compose
-docker compose -f docker-compose.yml -f overrides/<name>.yml up -d <name>
-
-# k3s-tier apps: ArgoCD picks up the manifest repo change automatically;
-# watch the rollout
+# k3s-tier apps: ArgoCD synced + pods running?
 outpost status
-```
+kubectl get pods -n apps
 
-For full-mode installs, the public URL is `https://<host-from-outpost.app.yaml>`
-where `<host>` resolves through the Cloudflare Tunnel.
+# Public reachability (full mode):
+curl -i "https://<host-from-outpost.app.yaml-or-ingress>"
+```
 
 ## 8. Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `outpost: command not found` after install | `~/.local/bin` (or `/usr/local/bin`) not on PATH | Append `export PATH=…` to shell rc |
-| `outpost.app.yaml validation failed` | Schema mismatch | Compare against `tests/schema/outpost-app.schema.json` |
-| `caddy reload failed` | Fragment syntax error | `docker logs caddy --tail 30`; fix `outpost.app.yaml`; rerun `outpost onboard .` |
-| `git clone failed` (in install.sh) | No internet / proxy | Set `OUTPOST_GIT_URL` to a mirror; for fully offline, `git clone` manually then `bash ~/outpost/install.sh` |
+| `tier=k3s forbids spec.routes` | Trying to put app routes in outpost.app.yaml | Move routing into your manifest repo's `ingress.yaml`. Apps use IngressRoute, not Caddy. |
+| `tier=compose host contains '.apps.'` | Used the k3s wildcard pattern for a compose-tier service | Switch to `tier=k3s` (probably what you want) OR pick a top-level subdomain prefix |
+| `outpost: command not found` | `~/.local/bin` not on PATH | Append `export PATH=...` to shell rc |
+| `caddy reload failed` | Fragment syntax error | `docker logs caddy --tail 30`; fix yaml; rerun `outpost onboard .` |
+| 502 from `<my-app>.apps.<root>` | App pod not Healthy in ArgoCD | `kubectl get pods -n apps`; `kubectl logs -n apps <pod>` |
 
 ## 9. What this skill must NOT do
 
-- **Never edit files inside `~/outpost/`** other than via `outpost onboard`.
-  The infras repo is read-only from the app's perspective.
-- **Never commit `outpost.app.yaml` rendered artifacts** (`Caddyfile.d/<name>.caddy`,
-  `overrides/<name>.yml`) to source control. They're gitignored in the
-  infras repo for a reason — they're per-installation, not per-app.
-- **Never run `reset.sh` or `bash bootstrap.sh --force`** — they wipe data.
-  If the user says "reinstall outpost", confirm twice and use a fresh
-  `OUTPOST_DIR` instead.
+- **Never edit files inside `~/outpost/`** other than via `outpost onboard`
+  / `outpost off-board`. The infras repo is read-only from the app's
+  perspective.
+- **Never set tier=compose to get caddy ingress** for a stateless app.
+  That's an architectural violation — the caddy path is for stateful infra.
+- **Never add a top-level subdomain for an application** to bypass the
+  `*.apps.<root>` wildcard. Apps live under that wildcard by design.
+- **Never commit rendered artefacts** (`Caddyfile.d/<name>.caddy`,
+  `overrides/<name>.yml`) — they're gitignored in the infras repo.
+- **Never run `reset.sh` or `bash bootstrap.sh --force`** — they wipe
+  data. If the user says "reinstall outpost", confirm twice and use a
+  fresh `OUTPOST_DIR` instead.

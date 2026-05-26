@@ -1,0 +1,59 @@
+# =============================================================================
+# Stateful infrastructure sidecar — the ONLY legitimate use of tier=compose.
+# -----------------------------------------------------------------------------
+# Use tier=compose when adding a stateful data service alongside the built-in
+# Postgres / Redis / RabbitMQ / Manticore on the data layer. Examples:
+#   - Elasticsearch / OpenSearch (alternative to Manticore)
+#   - ClickHouse / DuckDB (analytics)
+#   - MinIO (S3-compatible object store)
+#   - Kafka (event streaming, when RabbitMQ isn't enough)
+#   - MongoDB / Cassandra (different data model)
+#
+# These services:
+#   - Have persistent volumes (true state)
+#   - Live in the `infra` Docker network so k3s apps can reach them via the
+#     ExternalName bridge pattern (see SKILL.md §2 architecture diagram)
+#   - Are reached from the public internet (if at all) via a Caddy fragment
+#     on a top-level subdomain — never via *.apps.<ROOT_DOMAIN> (that
+#     wildcard goes to k3s Traefik, not Caddy)
+#
+# Stateless applications go on tier=k3s instead — see the minimal /
+# multiproduct examples in this directory.
+# =============================================================================
+apiVersion: outpost.dev/v1
+kind: App
+metadata:
+  name: elasticsearch
+  description: Stateful Elasticsearch sidecar — full-text + vector search.
+spec:
+  tier: compose
+  compose:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
+    container_name: elasticsearch
+    env:
+      discovery.type: "single-node"
+      ES_JAVA_OPTS: "-Xms1g -Xmx1g"
+      xpack.security.enabled: "false"
+    env_from_outpost:
+      - ROOT_DOMAIN
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    # Optional: expose to localhost for direct dev access. Public access
+    # is routed via the Caddy fragment below + Cloudflare Tunnel.
+    ports:
+      - "9200:9200"
+
+  # Caddy fragment — stateful infra exposes itself on a TOP-LEVEL subdomain.
+  # The host MUST NOT contain `.apps.` (that wildcard goes to k3s Traefik;
+  # Caddy never sees that traffic). `outpost onboard` rejects compose-tier
+  # hosts that include `.apps.`.
+  routes:
+    - host: "{$ES_HOST:es}.{$ROOT_DOMAIN}"
+      default_upstream: "elasticsearch:9200"
+
+  # IMPORTANT — Cloudflare Tunnel side:
+  # Top-level subdomains are NOT covered by the *.apps.<ROOT_DOMAIN>
+  # wildcard. You must add a Public Hostname in the Cloudflare Dashboard:
+  #   Host: es.<your-domain>
+  #   Service: http://caddy:80
+  # Reference template: core/compose/cloudflared/config.template.yml

@@ -1,11 +1,23 @@
 # =============================================================================
-# Minimal outpost.app.yaml — the smallest viable onboarding descriptor.
+# Minimal outpost.app.yaml — the smallest viable application descriptor.
 # -----------------------------------------------------------------------------
 # Place at the root of your application repo. `outpost onboard <this-repo>`
 # reads it to register the app with a local outpost instance.
 #
-# This example: a single HTTP service exposed on hello.<ROOT_DOMAIN>, running
-# from a public image, no secrets, no extra envs.
+# Architectural contract (read this once, then never get tier-confused):
+#   - tier=k3s    : DEFAULT for applications. Anything stateless (HTTP
+#                   servers, workers, queue consumers, ML inference, ...).
+#                   Gets the *.apps.<ROOT_DOMAIN> wildcard ingress for free
+#                   via k3s Traefik — zero Cloudflare changes per app.
+#   - tier=compose: RESERVED for stateful infrastructure additions only
+#                   (extra databases, message queues, search engines on the
+#                   data layer). See outpost.app.yaml.stateful-infra.example
+#                   for that case. Not for apps.
+#
+# This minimal example is a stateless web service — so tier=k3s. The actual
+# deployment manifests (deployment.yaml + service.yaml + ingress.yaml) are
+# scaffolded by `outpost onboard . --manifests-dir <local-clone> --lang go`
+# into your manifests repo, then ArgoCD picks them up.
 # =============================================================================
 apiVersion: outpost.dev/v1
 kind: App
@@ -13,10 +25,11 @@ metadata:
   name: hello
   description: Minimal example service for the Outpost onboarding flow.
 spec:
-  tier: compose
-  compose:
-    image: nginxdemos/hello:latest
-    container_name: hello
-  routes:
-    - host: "{$HELLO_HOST:hello}.{$ROOT_DOMAIN}"
-      default_upstream: "hello:80"
+  tier: k3s
+  # k3s.manifest_repo is optional — when omitted, falls back to the global
+  # MANIFEST_REPO_URL set in the Outpost installation's .env. Override here
+  # only when this app's manifests live in a different repo than the
+  # platform default (e.g. team-owned manifests).
+  # k3s:
+  #   manifest_repo: https://github.com/me/hello-manifests
+  #   manifest_branch: main

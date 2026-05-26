@@ -33,24 +33,26 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-@test "outpost onboard --no-up: skips compose up but still renders" {
+@test "outpost onboard --no-up (tier=compose): skips compose up but still renders" {
   CLI="${INFRA_ROOT}/scripts/outpost"
   TEST_TMPDIR="$(mktemp -d)"
   trap '[[ -d "$TEST_TMPDIR" ]] && rm -rf "$TEST_TMPDIR"' EXIT
 
   mkdir -p "$TEST_TMPDIR/app"
-  cp "${INFRA_ROOT}/examples/outpost.app.yaml.minimal.example" "$TEST_TMPDIR/app/outpost.app.yaml"
+  # --no-up is meaningful only for tier=compose (k3s doesn't run `compose up`
+  # at all). Stateful-infra is the canonical tier=compose example after the
+  # tier contract was enforced.
+  cp "${INFRA_ROOT}/examples/outpost.app.yaml.stateful-infra.example" "$TEST_TMPDIR/app/outpost.app.yaml"
 
   # --no-up exits cleanly even if docker isn't reachable in the test env.
   run bash "$CLI" onboard "$TEST_TMPDIR/app" --no-up --no-reload --force
   [ "$status" -eq 0 ]
   # Must NOT have tried to run `docker compose up`.
   ! [[ "$output" =~ "started service" ]]
-  # Must have written the fragment + override.
-  [ -r "${INFRA_ROOT}/core/compose/Caddyfile.d/hello.caddy" ]
-  [ -r "${INFRA_ROOT}/core/compose/overrides/hello.yml" ]
-  # Cleanup the side effects of this test (Caddyfile.d/*.caddy and overrides/
-  # are gitignored, so this just keeps the working tree clean).
-  rm -f "${INFRA_ROOT}/core/compose/Caddyfile.d/hello.caddy"
-  rm -f "${INFRA_ROOT}/core/compose/overrides/hello.yml"
+  # Must have written the fragment + override (tier=compose path).
+  [ -r "${INFRA_ROOT}/core/compose/Caddyfile.d/elasticsearch.caddy" ]
+  [ -r "${INFRA_ROOT}/core/compose/overrides/elasticsearch.yml" ]
+  # Cleanup the side effects (gitignored, but keeps the working tree clean).
+  rm -f "${INFRA_ROOT}/core/compose/Caddyfile.d/elasticsearch.caddy"
+  rm -f "${INFRA_ROOT}/core/compose/overrides/elasticsearch.yml"
 }

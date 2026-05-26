@@ -130,13 +130,54 @@ onboard_app_validate() {
     "") echo "outpost.app: spec.tier is required (compose|k3s)" >&2; errs=$((errs + 1)) ;;
     *)  echo "outpost.app: spec.tier '$v' must be 'compose' or 'k3s'" >&2; errs=$((errs + 1)) ;;
   esac
-  local has_routes has_frag
+  local tier has_routes has_frag
+  tier=$(yq -r '.spec.tier // ""' "$cfg")
   has_routes=$(yq -r '(.spec.routes // [] | length) > 0' "$cfg")
   has_frag=$(yq -r '(.spec.caddy_fragment // "") != ""' "$cfg")
   if [[ "$has_routes" == "true" && "$has_frag" == "true" ]]; then
     echo "outpost.app: spec.routes and spec.caddy_fragment are mutually exclusive" >&2
     errs=$((errs + 1))
   fi
+
+  # Tier contract: caddy = stateful infrastructure, k3s = stateless apps.
+  # k3s-tier apps expose themselves via Kubernetes IngressRoute in their
+  # manifest repo (which gives them the *.apps.<ROOT_DOMAIN> wildcard for
+  # free). Caddy fragments here are reserved for stateful infra sidecars.
+  # See SKILL.md §7 + docs/onboarding/outpost-app.skill.md for the rationale.
+  if [[ "$tier" == "k3s" ]]; then
+    if [[ "$has_routes" == "true" ]]; then
+      echo "outpost.app: tier=k3s forbids spec.routes — applications expose ingress" >&2
+      echo "             via Kubernetes IngressRoute in the manifest repo, not via" >&2
+      echo "             Caddy fragments. Move path-based routing into the IngressRoute" >&2
+      echo "             generated under apps/<name>/ingress.yaml in your manifests repo." >&2
+      errs=$((errs + 1))
+    fi
+    if [[ "$has_frag" == "true" ]]; then
+      echo "outpost.app: tier=k3s forbids spec.caddy_fragment — same rule as routes." >&2
+      errs=$((errs + 1))
+    fi
+  fi
+
+  # tier=compose: routes/hosts must be top-level subdomains. Hosts containing
+  # `.apps.` collide with the k3s wildcard (cloudflared → host:30080 →
+  # k3s Traefik), so a compose-tier service on `mcp.apps.<root>` would be
+  # unreachable: caddy never sees the traffic. Reject early with a clear
+  # explanation rather than letting the user debug 502s.
+  if [[ "$tier" == "compose" && "$has_routes" == "true" ]]; then
+    local bad_host
+    bad_host=$(yq -r '[.spec.routes[]?.host // "" | select(test("\\.apps\\.|\\.apps$"))] | .[0] // ""' "$cfg")
+    if [[ -n "$bad_host" ]]; then
+      echo "outpost.app: tier=compose host '$bad_host' contains '.apps.'" >&2
+      echo "             The *.apps.<ROOT_DOMAIN> wildcard belongs to the k3s ingress;" >&2
+      echo "             Caddy never sees that traffic. Either:" >&2
+      echo "               (a) Use a top-level subdomain: '<prefix>.\${ROOT_DOMAIN}'." >&2
+      echo "                   You will need a matching Cloudflare Tunnel Public Hostname." >&2
+      echo "               (b) If this is an APPLICATION (not stateful infra), switch to" >&2
+      echo "                   spec.tier=k3s — you get the wildcard ingress for free." >&2
+      errs=$((errs + 1))
+    fi
+  fi
+
   [[ "$errs" -eq 0 ]]
 }
 

@@ -41,7 +41,7 @@
         "tier": {
           "type": "string",
           "enum": ["compose", "k3s"],
-          "description": "Where the app runs. `compose` = stateful sidecar on the data layer (shares the `infra` network). `k3s` = GitOps app via ArgoCD (image built by Tekton, deployed to the `apps` namespace)."
+          "description": "Architectural tier. **Strict contract:** `k3s` is the default for ALL applications (anything stateless — HTTP servers, workers, queues consumers, ML inference, etc.). These get the `*.apps.<ROOT_DOMAIN>` wildcard ingress for free via k3s Traefik, no Cloudflare changes. `compose` is RESERVED for stateful infrastructure additions (extra databases, message queues, search engines, etc.) that live alongside Postgres/Redis/RabbitMQ/Manticore on the data layer — these go through Caddy on top-level subdomains and require manual Cloudflare Tunnel configuration. If you're not adding a stateful data service, choose `k3s`."
         },
         "compose": {
           "type": "object",
@@ -105,7 +105,7 @@
         },
         "routes": {
           "type": "array",
-          "description": "Declarative HTTP route specification. Rendered to Caddyfile.d/<name>.caddy at onboard time. Each entry is one host block; rules within a host evaluate in order. For routing patterns the declarative form cannot express, use spec.caddy_fragment instead.",
+          "description": "**tier=compose ONLY.** Declarative Caddy route specification for stateful infrastructure additions. Rendered to Caddyfile.d/<name>.caddy at onboard time. Each entry is one host block; rules within a host evaluate in order. For routing patterns the declarative form cannot express, use spec.caddy_fragment. **Forbidden for tier=k3s** — applications expose themselves via Kubernetes IngressRoute in the manifest repo, not via Caddy fragments. `outpost onboard` will reject tier=k3s + routes.",
           "items": {
             "type": "object",
             "required": ["host"],
@@ -113,7 +113,7 @@
             "properties": {
               "host": {
                 "type": "string",
-                "description": "Host header to match. May embed Caddy env-var syntax: '{$MYAPP_HOST:myapp}.{$ROOT_DOMAIN}'."
+                "description": "Host header to match. **Must be a top-level subdomain** of the form `<prefix>.${ROOT_DOMAIN}` (e.g. `search.example.com`). May embed Caddy env-var syntax: `{$MY_HOST:myhost}.{$ROOT_DOMAIN}`. **Hosts containing `.apps.` are rejected** — that wildcard belongs to the k3s ingress; stateful infra must live at the top level (and requires a matching Cloudflare Tunnel Public Hostname)."
               },
               "rules": {
                 "type": "array",
@@ -155,7 +155,7 @@
         },
         "caddy_fragment": {
           "type": "string",
-          "description": "Raw Caddy DSL escape hatch. When `routes` cannot express a needed pattern (complex matchers, custom directives, header manipulation), provide the full fragment as a string. Mutually exclusive with `routes` — if both are set, onboard fails. The fragment must NOT declare its own `:80 { ... }` site block; it is inserted inside the main site block of the infras Caddyfile."
+          "description": "**tier=compose ONLY.** Raw Caddy DSL escape hatch for stateful infrastructure additions. When `routes` cannot express a needed pattern (complex matchers, custom directives, header manipulation), provide the full fragment as a string. Mutually exclusive with `routes` — if both are set, onboard fails. The fragment must NOT declare its own `:80 { ... }` site block; it is inserted inside the main site block of the infras Caddyfile. **Forbidden for tier=k3s** (same rationale as `routes`)."
         }
       },
       "oneOf": [

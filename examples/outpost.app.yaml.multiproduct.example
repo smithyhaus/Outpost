@@ -1,15 +1,33 @@
 # =============================================================================
-# Multi-product outpost.app.yaml — the SCM-MCP-style case.
+# Multi-product outpost.app.yaml — SCM-MCP-style: one container fans out to
+# multiple HTTP endpoints on the same host.
 # -----------------------------------------------------------------------------
-# One container fans out to 3+ upstream ports on the same host. Demonstrates:
-#   - Multiple path-prefix matchers under one host
-#   - Path-rewrite trade-offs (trailing-slash conventions differ per upstream)
-#   - Dashboard split (/dash/api/* → API port, everything else → FE port)
-#   - Legacy alias retained for backward compat
+# This is a STATELESS APPLICATION (a server, no persistent data of its own).
+# Architectural contract says: tier=k3s. The fanout-by-path is implemented
+# inside the Kubernetes IngressRoute (in the manifest repo), NOT inside an
+# outpost.app.yaml routes/caddy_fragment block — those are reserved for
+# stateful infrastructure additions.
 #
-# When the declarative `routes` form can express your needs, prefer it — the
-# resulting Caddyfile.d/ fragment is generated and validated.
-# When it can't (very rare), drop down to `caddy_fragment:` for raw DSL.
+# Why this matters:
+#   - tier=k3s lands the app under *.apps.<ROOT_DOMAIN> — already covered by
+#     a single Cloudflare Tunnel wildcard, zero per-app CF Dashboard work.
+#   - Adding the app to caddy on a top-level subdomain (mcp.<ROOT_DOMAIN>)
+#     would require manually wiring a new Public Hostname in Cloudflare and
+#     would route stateless traffic through the data-layer ingress — both
+#     anti-patterns.
+#
+# How the multi-product routing works (path → port → product):
+#   /scm-cloud/mcp{,/}     → :8090 (SCM Cloud)
+#   /scm-3/mcp{,/}         → :8091 (SCM 3.0)
+#   /linkmou-di/mcp{,/}    → :8092 (LinkMind DI)
+#   /dash/api/*            → :8081 (Dashboard API)
+#   <anything else>        → :8080 (Dashboard FE)
+#
+# All five upstreams are ports on a single Kubernetes Service. The
+# IngressRoute under apps/scm-mcp/ingress.yaml in the manifests repo carries
+# the path matchers. `outpost onboard` scaffolds the service + a basic
+# IngressRoute; you adapt the IngressRoute for the multi-port path routing
+# (see the snippet in the comment block at the bottom of this file).
 # =============================================================================
 apiVersion: outpost.dev/v1
 kind: App
@@ -17,41 +35,40 @@ metadata:
   name: scm-mcp
   description: Multi-product MCP platform (SCM Cloud / SCM 3.0 / LinkMind DI).
 spec:
-  tier: compose
-  compose:
-    image: ghcr.io/your-org/scm-mcp:latest
-    container_name: scm-mcp-app
-    env_from_outpost:
-      - ROOT_DOMAIN
-      - POSTGRES_URL
-      - REDIS_URL
-    depends_on:
-      - postgres
-      - redis
-  routes:
-    - host: "{$MCP_HOST:mcp}.{$ROOT_DOMAIN}"
-      rules:
-        # SCM Cloud (:8090) — upstream wants /mcp/ (trailing slash).
-        - path: ["/scm-cloud/mcp", "/scm-cloud/mcp/"]
-          rewrite: "/mcp/"
-          upstream: "scm-mcp-app:8090"
-        - path: ["/scm-cloud/mcp/*"]
-          rewrite_path_prefix: ["/scm-cloud", ""]
-          upstream: "scm-mcp-app:8090"
-        # SCM 3.0 (:8091) — upstream wants /mcp (no trailing slash).
-        - path: ["/scm-3/mcp", "/scm-3/mcp/"]
-          rewrite: "/mcp"
-          upstream: "scm-mcp-app:8091"
-        # LinkMind DI (:8092) — same shape as SCM 3.0.
-        - path: ["/linkmou-di/mcp", "/linkmou-di/mcp/"]
-          rewrite: "/mcp"
-          upstream: "scm-mcp-app:8092"
-        # Legacy /mcp — 30-day alias to SCM Cloud (remove once 0 traffic).
-        - path: ["/mcp", "/mcp/"]
-          rewrite: "/mcp/"
-          upstream: "scm-mcp-app:8090"
-        # Dashboard API split.
-        - path: ["/dash/api/*"]
-          upstream: "scm-mcp-app:8081"
-      # Dashboard FE catches everything else under this host.
-      default_upstream: "scm-mcp-app:8080"
+  tier: k3s
+  k3s:
+    # Per-app manifest repo override — the SCM MCP team owns its own
+    # manifests repo separate from the platform default. Falls back to
+    # MANIFEST_REPO_URL when this field is absent.
+    manifest_repo: "${SCM_MCP_MANIFEST_REPO:-https://github.com/your-org/scm-manifests}"
+    manifest_branch: main
+
+# -----------------------------------------------------------------------------
+# Reference: the IngressRoute that lives in the manifests repo
+# (apps/scm-mcp/ingress.yaml) carries the actual routing. Sample shape:
+#
+#   apiVersion: traefik.io/v1alpha1
+#   kind: IngressRoute
+#   metadata:
+#     name: scm-mcp
+#     namespace: apps
+#   spec:
+#     entryPoints: [web]
+#     routes:
+#       - match: Host(`mcp.apps.${ROOT_DOMAIN}`) && PathPrefix(`/scm-cloud/mcp`)
+#         kind: Rule
+#         middlewares:
+#           - name: rewrite-scm-cloud
+#         services:
+#           - name: scm-mcp
+#             port: 8090
+#       - match: Host(`mcp.apps.${ROOT_DOMAIN}`) && PathPrefix(`/scm-3/mcp`)
+#         kind: Rule
+#         services:
+#           - name: scm-mcp
+#             port: 8091
+#       # ...etc — one Rule per product path; final catch-all Rule for the FE
+#
+# The Service exposes all five ports; the Deployment runs one container
+# image that listens on all five.
+# -----------------------------------------------------------------------------

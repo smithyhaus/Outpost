@@ -711,35 +711,49 @@ cmd_onboard() {
 
   local caddy_dst="$OUTPOST_HOME/core/compose/Caddyfile.d/${name}.caddy"
   local override_dst="$OUTPOST_HOME/core/compose/overrides/${name}.yml"
-  local rendered_caddy rendered_compose
-  rendered_caddy=$(onboard_render_caddy_fragment "$cfg")
+  local rendered_caddy="" rendered_compose=""
 
   echo "$(_green onboard): app=$name tier=$tier source=$src_dir"
 
+  # Architectural contract: caddy fragments + compose overrides exist only
+  # for stateful infrastructure (tier=compose). k3s-tier apps expose
+  # themselves via Kubernetes IngressRoute in the manifest repo; rendering
+  # a (necessarily empty) Caddy fragment for them would pollute
+  # Caddyfile.d/ and signal that k3s apps belong on caddy — which they
+  # don't. Skip the caddy/compose writes entirely for tier=k3s.
+  if [[ "$tier" == "compose" ]]; then
+    rendered_caddy=$(onboard_render_caddy_fragment "$cfg")
+  fi
+
   if [[ "$dry_run" -eq 1 ]]; then
     echo "$(_yellow DRY RUN) — would write:"
-    echo "  $caddy_dst"
-    [[ "$tier" == "compose" ]] && echo "  $override_dst"
-    echo "$(_dim --- Caddy fragment ---)"
-    printf '%s\n' "$rendered_caddy"
     if [[ "$tier" == "compose" ]]; then
+      echo "  $caddy_dst"
+      echo "  $override_dst"
+      echo "$(_dim --- Caddy fragment ---)"
+      printf '%s\n' "$rendered_caddy"
       echo "$(_dim --- Compose override ---)"
       onboard_render_compose_override "$cfg"
+    else
+      echo "  (tier=k3s — no caddy fragment / no compose override; k3s manifests"
+      echo "   scaffolded only when --manifests-dir is provided)"
     fi
     return 0
   fi
 
-  # Write Caddy fragment. Refuse to clobber a drifted fragment unless --force.
-  mkdir -p "$(dirname "$caddy_dst")"
-  if [[ -f "$caddy_dst" && "$force" -ne 1 ]]; then
-    if [[ "$rendered_caddy" == "$(cat "$caddy_dst")" ]]; then
-      echo "$(_dim ✓) Caddyfile.d/${name}.caddy unchanged"
+  if [[ "$tier" == "compose" ]]; then
+    # Write Caddy fragment. Refuse to clobber a drifted fragment unless --force.
+    mkdir -p "$(dirname "$caddy_dst")"
+    if [[ -f "$caddy_dst" && "$force" -ne 1 ]]; then
+      if [[ "$rendered_caddy" == "$(cat "$caddy_dst")" ]]; then
+        echo "$(_dim ✓) Caddyfile.d/${name}.caddy unchanged"
+      else
+        _die "Caddyfile.d/${name}.caddy differs from rendered output. Re-run with --force to overwrite."
+      fi
     else
-      _die "Caddyfile.d/${name}.caddy differs from rendered output. Re-run with --force to overwrite."
+      printf '%s\n' "$rendered_caddy" > "$caddy_dst"
+      echo "$(_green ✓) wrote $caddy_dst"
     fi
-  else
-    printf '%s\n' "$rendered_caddy" > "$caddy_dst"
-    echo "$(_green ✓) wrote $caddy_dst"
   fi
 
   if [[ "$tier" == "compose" ]]; then
@@ -790,45 +804,43 @@ cmd_onboard() {
     local resolved_branch="${per_app_branch:-${MANIFEST_REPO_BRANCH:-main}}"
 
     if [[ -z "$manifests_dir" ]]; then
-      echo "$(_yellow !) tier=k3s but --manifests-dir not given — onboard rendered the Caddy fragment only"
+      echo "$(_yellow !) tier=k3s but --manifests-dir not given — onboard recorded the app, skipping manifest scaffold"
       echo "$(_dim hint:) clone the manifests repo locally and re-run with:"
       echo "  outpost onboard $src_arg --manifests-dir <local-clone> --lang <go|python|java|csharp|react|vue>"
       if [[ -n "$per_app_repo" ]]; then
         echo "$(_dim hint:) this app overrides MANIFEST_REPO_URL to: $resolved_repo"
       fi
-      return 0
-    fi
-
-    [[ -z "$lang" ]] && _die "--lang is required when --manifests-dir is set (one of: $(ls "$OUTPOST_HOME/examples/hello-world" 2>/dev/null | grep -v README | tr '\n' ' '))"
-    if [[ -z "$resolved_repo" ]]; then
+    elif [[ -z "$lang" ]]; then
+      _die "--lang is required when --manifests-dir is set (one of: $(ls "$OUTPOST_HOME/examples/hello-world" 2>/dev/null | grep -v README | tr '\n' ' '))"
+    elif [[ -z "$resolved_repo" ]]; then
       _die "no manifest repo to wire — set spec.k3s.manifest_repo in $cfg, or MANIFEST_REPO_URL in .env"
-    fi
-
-    echo "$(_green k3s) scaffolding manifests into $manifests_dir"
-    echo "  repo:   $resolved_repo"
-    echo "  branch: $resolved_branch"
-    [[ -n "$per_app_path" ]] && echo "  path:   $per_app_path (custom)"
-
-    # Scoped env override: temporarily replace MANIFEST_REPO_URL /
-    # MANIFEST_REPO_BRANCH so _manifest_scaffold (which reads them) emits
-    # the per-app values into the rendered argocd-app.yaml. Restored when
-    # the subshell exits — no global pollution. Run as two branches rather
-    # than a `${arr[@]}`-with-empty-array trick: bash 3.2 (macOS default)
-    # under `set -u` errors on empty-array expansion.
-    if [[ "$force" -eq 1 ]]; then
-      (
-        export MANIFEST_REPO_URL="$resolved_repo"
-        export MANIFEST_REPO_BRANCH="$resolved_branch"
-        _manifest_scaffold "$name" --lang "$lang" --manifests-dir "$manifests_dir" --force
-      )
     else
-      (
-        export MANIFEST_REPO_URL="$resolved_repo"
-        export MANIFEST_REPO_BRANCH="$resolved_branch"
-        _manifest_scaffold "$name" --lang "$lang" --manifests-dir "$manifests_dir"
-      )
-    fi
-  fi
+      echo "$(_green k3s) scaffolding manifests into $manifests_dir"
+      echo "  repo:   $resolved_repo"
+      echo "  branch: $resolved_branch"
+      [[ -n "$per_app_path" ]] && echo "  path:   $per_app_path (custom)"
+
+      # Scoped env override: temporarily replace MANIFEST_REPO_URL /
+      # MANIFEST_REPO_BRANCH so _manifest_scaffold (which reads them) emits
+      # the per-app values into the rendered argocd-app.yaml. Restored when
+      # the subshell exits — no global pollution. Run as two branches rather
+      # than a `${arr[@]}`-with-empty-array trick: bash 3.2 (macOS default)
+      # under `set -u` errors on empty-array expansion.
+      if [[ "$force" -eq 1 ]]; then
+        (
+          export MANIFEST_REPO_URL="$resolved_repo"
+          export MANIFEST_REPO_BRANCH="$resolved_branch"
+          _manifest_scaffold "$name" --lang "$lang" --manifests-dir "$manifests_dir" --force
+        )
+      else
+        (
+          export MANIFEST_REPO_URL="$resolved_repo"
+          export MANIFEST_REPO_BRANCH="$resolved_branch"
+          _manifest_scaffold "$name" --lang "$lang" --manifests-dir "$manifests_dir"
+        )
+      fi
+    fi   # close of "manifests-dir branch chain"
+  fi     # close of "elif tier == k3s"
 
   # Reload Caddy if running (no-op if container is stopped).
   if [[ "$no_reload" -ne 1 ]] && command -v docker >/dev/null 2>&1; then

@@ -162,24 +162,74 @@ in production, change only the ExternalName — application code stays unchanged
 ```
 
 ### Project onboarding
+
+**The architectural contract — read this once, then never get tier-confused:**
+
+```
++-----------------------------------------------------------+
+|                      cloudflared                          |
++-----+--------------------------+--------------------------+
+      |                          |                          |
+      v                          v                          v
+*.apps.<ROOT_DOMAIN>      <prefix>.<ROOT_DOMAIN>      <built-in>.<ROOT_DOMAIN>
+wildcard (one CF rule)    top-level (per-svc CF rule)  argocd/hooks/search/mq/registry
+      |                          |                          |
+      v                          v                          v
+  k3s Traefik                Caddy :80                  Caddy :80
+      |                          |                          |
+      v                          v                          v
+  STATELESS APPS             STATEFUL INFRA            BUILT-IN SERVICES
+  (tier=k3s)                 SIDECARS (tier=compose)   (postgres / redis / ...)
+```
+
 When the user says "onboard X" / "add new project X":
-- **Preferred path (v0.5+):** if X has an `outpost.app.yaml` at its root,
-  run `outpost onboard <path-or-url>`. The CLI reads the yaml, renders a
-  Caddy route fragment into `core/compose/Caddyfile.d/<name>.caddy`, writes
-  a compose override (for `tier: compose`) or scaffolds k3s manifests (for
-  `tier: k3s`), and reloads Caddy live. Idempotent.
-- If X has no `outpost.app.yaml`, copy one from
-  `examples/outpost.app.yaml.minimal.example` (or the multi-product
-  variant for fan-out routing) into the app repo and adapt it. The schema
-  lives at `tests/schema/outpost-app.schema.json`.
-- For k3s-tier apps: also follow `i18n/en/docs/05-onboard-project.md`
-  end-to-end (manifest repo files, SealedSecret, ArgoCD Application).
-  Reuse `examples/demo-app/` as the manifest template.
-- **Never** add per-app routes to `core/compose/Caddyfile` directly —
-  that's the anti-pattern v0.5 was designed to prevent. Every app-specific
-  route lives in `Caddyfile.d/<name>.caddy` and is owned by the app's
-  `outpost.app.yaml`.
-- Don't ask about tech stack — that lives in the user's repo, not here.
+
+1. **Decide the tier first:**
+   - **Stateless application?** (HTTP server, worker, queue consumer, ML
+     inference, CRUD service, ...) → `tier=k3s`. This is the default.
+     Lands under `*.apps.<ROOT_DOMAIN>` — zero Cloudflare Dashboard work
+     per app.
+   - **Stateful infrastructure?** (extra database, message queue, search
+     engine, object store — anything that owns persistent data and would
+     live alongside Postgres/Redis/RabbitMQ/Manticore) → `tier=compose`.
+     Lands on a top-level subdomain via Caddy; requires a matching
+     Cloudflare Tunnel Public Hostname.
+   - **In doubt?** It's almost certainly an application. Choose `tier=k3s`.
+
+2. **Run `outpost onboard <path-or-url>`** if the repo has an
+   `outpost.app.yaml`. For tier=k3s, pass `--manifests-dir <local-clone>
+   --lang <go|python|java|csharp|react|vue>` to scaffold the k3s
+   manifests. Honors `spec.k3s.manifest_repo` (per-app override) over the
+   global `MANIFEST_REPO_URL`.
+
+3. **If X has no `outpost.app.yaml`**, copy one from:
+   - `examples/outpost.app.yaml.minimal.example` — tier=k3s starter
+   - `examples/outpost.app.yaml.multiproduct.example` — tier=k3s with
+     path-based fan-out (the SCM-MCP-style case, done right)
+   - `examples/outpost.app.yaml.stateful-infra.example` — tier=compose,
+     the only legitimate stateful-infra case
+
+4. **Schema is the contract.** `tests/schema/outpost-app.schema.json`
+   describes every field; `onboard_app_validate` (in
+   `platform/lib/onboard-lib.sh`) enforces:
+   - `tier=k3s` + `spec.routes` or `spec.caddy_fragment` → REJECTED
+     (apps use IngressRoute via manifests, not Caddy fragments)
+   - `tier=compose` + host containing `.apps.` → REJECTED (that
+     wildcard goes to k3s; caddy never sees the traffic)
+
+5. **For k3s-tier apps**, also follow `i18n/en/docs/05-onboard-project.md`
+   end-to-end (manifest repo files, SealedSecret, ArgoCD Application).
+   Reuse `examples/demo-app/` as the manifest template.
+
+6. **Anti-patterns to refuse:**
+   - Adding per-app routes to `core/compose/Caddyfile` directly (the
+     pre-v0.5 anti-pattern).
+   - Setting `tier=compose` on a stateless server to "get caddy routing"
+     — that route through caddy is for infra only, not for apps.
+   - Adding a top-level subdomain for an app to bypass `*.apps.<root>`
+     (forces manual CF Dashboard work + violates the tier boundary).
+
+Don't ask about tech stack — that lives in the user's repo, not here.
 
 ### Plugin authoring
 Five plugin kinds today: `registry`, `git-provider`, `test-runner`,
@@ -251,13 +301,29 @@ the rendered file is the source of truth.
 - Update the credentials vault (`INFRA.md.template` for both languages).
 
 ### "Expose a new subdomain"
-- HTTP service: edit `core/compose/Caddyfile`, then
-  `docker exec caddy caddy reload --config /etc/caddy/Caddyfile`. Add the
-  Public Hostname in the Cloudflare Tunnel dashboard.
-- TCP service: just add a Public Hostname (TCP type) in the Cloudflare
-  dashboard. Caddy is HTTP-only.
-- App on `*.apps.<root>`: no Cloudflare change needed (wildcard). Just
-  add an `IngressRoute` in the manifest repo.
+
+**Pick the right path by what you're exposing — the architectural contract
+(see §5 "Project onboarding") drives the answer:**
+
+- **Stateless application on `<name>.apps.<root>`** (the common case):
+  add an `IngressRoute` in the manifest repo. No Cloudflare changes —
+  the `*.apps.<root>` wildcard already routes through cloudflared →
+  k3s Traefik. Use `outpost onboard --manifests-dir <path> --lang <l>`
+  for scaffolding.
+- **Stateful infra HTTP service on `<prefix>.<root>`** (e.g. adding
+  Elasticsearch's HTTP UI): write a Caddy fragment via
+  `outpost onboard` (tier=compose) — do NOT edit
+  `core/compose/Caddyfile` directly; the fragment lands in
+  `core/compose/Caddyfile.d/<name>.caddy`. **Add the Public Hostname
+  in the Cloudflare Dashboard** — top-level subdomains are not covered
+  by the `*.apps.<root>` wildcard.
+- **Stateful infra TCP service** (raw database port etc.): just add a
+  Public Hostname (TCP type) in the Cloudflare Dashboard. Caddy is
+  HTTP-only and isn't in the path.
+
+**Refuse to do**: edit `core/compose/Caddyfile` for a per-app route, or
+set `tier=compose` for a stateless application to get the caddy ingress.
+Those bypass the contract. See SKILL.md §5 for the why.
 
 ### "View an application's logs"
 ```bash

@@ -812,6 +812,76 @@ runs from main).
 
 ---
 
+## SCM MCP — migrate from tier=compose to tier=k3s
+
+**What:** SCM MCP was the first real-project onboard against Outpost
+(commit `1b22f1b`, since reverted), and went onto `mcp.<ROOT_DOMAIN>`
+via a Caddy fragment + manual Cloudflare Public Hostname. The v0.5.1
+tier-contract enforcement makes this an explicit violation: stateless
+applications belong on `*.apps.<ROOT_DOMAIN>` via k3s Traefik, not on
+top-level subdomains via Caddy. Per-app tier check in
+`onboard_app_validate` now rejects the old shape.
+
+**Why it matters:** keeping SCM MCP on `mcp.<ROOT_DOMAIN>` means:
+- Every new SCM MCP environment requires manual CF Dashboard work.
+- The team can't reuse the existing `*.apps.<ROOT_DOMAIN>` wildcard
+  rule that already covers every other app.
+- Future maintenance and onboarding docs have a "this is the exception"
+  asterisk that pollutes the platform's clean tier story.
+
+**Concrete TODO** (in the SCM MCP repo, not the infras repo):
+
+1. Rewrite `outpost.app.yaml` to match
+   `examples/outpost.app.yaml.multiproduct.example`:
+   ```yaml
+   spec:
+     tier: k3s
+     k3s:
+       manifest_repo: https://github.com/your-org/scm-manifests
+   ```
+   Remove the `compose:` block and the `routes:` array.
+
+2. In the SCM MCP manifests repo, write `apps/scm-mcp/`:
+   - `deployment.yaml` — one container exposing all 5 ports
+     (8080 FE / 8081 API / 8090 SCM Cloud / 8091 SCM 3.0 / 8092 LinkMind DI)
+   - `service.yaml` — one Kubernetes Service with all 5 ports named
+   - `ingress.yaml` — Traefik IngressRoute on
+     `Host(`mcp.apps.<ROOT_DOMAIN>`)` with multiple Rule entries:
+     - `PathPrefix(`/scm-cloud/mcp`)` → port 8090
+     - `PathPrefix(`/scm-3/mcp`)` → port 8091
+     - `PathPrefix(`/linkmou-di/mcp`)` → port 8092
+     - `PathPrefix(`/dash/api`)` → port 8081
+     - `PathPrefix(`/`)` (catch-all) → port 8080 (Dashboard FE)
+   - `kustomization.yaml` (let `outpost manifest scaffold` generate)
+   - `argocd-application.yaml` (ditto)
+
+3. Run from the SCM MCP repo root:
+   ```bash
+   outpost onboard . \
+     --manifests-dir ~/code/scm-manifests \
+     --lang go
+   ```
+   Then commit + push the manifests repo; ArgoCD picks up the new app.
+
+4. Wait for ArgoCD to Sync + verify Healthy. Public URL becomes
+   `https://mcp.apps.<ROOT_DOMAIN>` automatically (CF wildcard).
+
+5. Once traffic is confirmed on the new path:
+   - Remove the manual `mcp.<ROOT_DOMAIN>` Public Hostname from
+     Cloudflare Dashboard.
+   - Run `outpost off-board scm-mcp` on the infras host to remove any
+     lingering Caddyfile.d/scm-mcp.caddy and overrides/scm-mcp.yml.
+
+6. Update SCM MCP repo's `.claude/skills/outpost-deploy.skill.md` to
+   the latest template (or run `outpost onboard . --install-skill
+   --force` once the migration lands).
+
+**Depends on:** SCM MCP team availability; nothing on infras side.
+
+**Milestone:** SCM MCP next planning slot (no infras dependency).
+
+---
+
 ## Unify `decommission` to cover compose-tier apps
 
 **What:** `outpost decommission <app>` was designed for k3s-tier apps
