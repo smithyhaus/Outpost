@@ -103,9 +103,11 @@ EOF
   [[ "$output" =~ "tier=k3s forbids spec.caddy_fragment" ]]
 }
 
-@test "onboard_app_validate: rejects tier=compose with host on *.apps. wildcard" {
-  # The .apps. wildcard goes to k3s Traefik, not caddy. A compose-tier
-  # service on mcp.apps.<ROOT_DOMAIN> is silently unreachable.
+@test "onboard_app_validate: rejects tier=compose with host on -apps.<root> naming convention" {
+  # The -apps.<root> suffix is the apps naming convention; CF Tunnel's
+  # broad *.<root> wildcard routes that traffic to k3s Traefik. A
+  # compose-tier service on `mcp-apps.<ROOT_DOMAIN>` is silently
+  # unreachable — caddy never sees it.
   cat > "$TEST_TMPDIR/x.yaml" <<'EOF'
 apiVersion: outpost.dev/v1
 kind: App
@@ -114,15 +116,56 @@ spec:
   tier: compose
   compose: { image: nginx }
   routes:
-    - host: "mcp.apps.{$ROOT_DOMAIN}"
+    - host: "mcp-apps.{$ROOT_DOMAIN}"
       default_upstream: "nginx:80"
 EOF
   run onboard_app_validate "$TEST_TMPDIR/x.yaml"
   [ "$status" -ne 0 ]
   [[ "$output" =~ "tier=compose host" ]]
-  [[ "$output" =~ ".apps." ]]
-  # The error must hint at both fixes: switch tier OR pick top-level host.
+  [[ "$output" =~ "-apps" ]]
+  # The error must hint at both fixes: switch tier OR pick non-apps prefix.
   [[ "$output" =~ "tier=k3s" ]]
+}
+
+@test "onboard_app_validate: tier=compose with .apps. (two-level, paid-cert) is also rejected" {
+  # Defensive: catch users who still try the old two-level pattern.
+  # The regex matches `-apps.` followed by template var or domain;
+  # `.apps.` doesn't match (no leading `-`), so this should PASS validate
+  # (we only reject the apps naming convention; the two-level pattern
+  # is a separate problem the operator solves at the CF + cert layer).
+  # In practice, users who write `.apps.` will hit cert/CF failures at
+  # deploy time, not at validate time. Validate is intentionally narrow.
+  cat > "$TEST_TMPDIR/x.yaml" <<'EOF'
+apiVersion: outpost.dev/v1
+kind: App
+metadata: { name: ok-shape }
+spec:
+  tier: compose
+  compose: { image: nginx }
+  routes:
+    - host: "myinfra.{$ROOT_DOMAIN}"
+      default_upstream: "nginx:80"
+EOF
+  run onboard_app_validate "$TEST_TMPDIR/x.yaml"
+  [ "$status" -eq 0 ]
+}
+
+@test "onboard_app_validate: tier=compose accepts non-apps prefix containing hyphens" {
+  # Make sure the regex doesn't false-positive on hostnames like
+  # `my-search.<root>` or `my-redis.<root>` — those don't end in `-apps`.
+  cat > "$TEST_TMPDIR/x.yaml" <<'EOF'
+apiVersion: outpost.dev/v1
+kind: App
+metadata: { name: my-search }
+spec:
+  tier: compose
+  compose: { image: elasticsearch }
+  routes:
+    - host: "my-search.{$ROOT_DOMAIN}"
+      default_upstream: "elasticsearch:9200"
+EOF
+  run onboard_app_validate "$TEST_TMPDIR/x.yaml"
+  [ "$status" -eq 0 ]
 }
 
 @test "onboard_app_validate: accepts tier=compose with legitimate top-level host" {

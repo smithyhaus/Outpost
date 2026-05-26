@@ -7,7 +7,7 @@ spec:
   entryPoints:
     - web
   routes:
-    - match: Host(`hello-vue.apps.example.com`)
+    - match: Host(`hello-vue-apps.example.com`)
       kind: Rule
       services:
         - name: hello-vue

@@ -140,9 +140,10 @@ onboard_app_validate() {
   fi
 
   # Tier contract: caddy = stateful infrastructure, k3s = stateless apps.
-  # k3s-tier apps expose themselves via Kubernetes IngressRoute in their
-  # manifest repo (which gives them the *.apps.<ROOT_DOMAIN> wildcard for
-  # free). Caddy fragments here are reserved for stateful infra sidecars.
+  # k3s-tier apps expose themselves via Kubernetes IngressRoute under the
+  # `<name>-apps.<ROOT_DOMAIN>` naming convention (caught by the single
+  # `*.<ROOT_DOMAIN>` Cloudflare Tunnel wildcard → k3s Traefik). Caddy
+  # fragments here are reserved for stateful infra sidecars.
   # See SKILL.md §7 + docs/onboarding/outpost-app.skill.md for the rationale.
   if [[ "$tier" == "k3s" ]]; then
     if [[ "$has_routes" == "true" ]]; then
@@ -158,22 +159,30 @@ onboard_app_validate() {
     fi
   fi
 
-  # tier=compose: routes/hosts must be top-level subdomains. Hosts containing
-  # `.apps.` collide with the k3s wildcard (cloudflared → host:30080 →
-  # k3s Traefik), so a compose-tier service on `mcp.apps.<root>` would be
-  # unreachable: caddy never sees the traffic. Reject early with a clear
-  # explanation rather than letting the user debug 502s.
+  # tier=compose: hosts MUST be top-level subdomains with a non-apps prefix.
+  # The `-apps.<ROOT_DOMAIN>` suffix is the apps naming convention — caught
+  # by the `*.<ROOT_DOMAIN>` CF Tunnel wildcard → k3s Traefik. A compose-tier
+  # service on `mcp-apps.<root>` would be silently unreachable (caddy never
+  # sees the traffic). Reject early with the two corrective paths so the
+  # operator doesn't have to debug 502s later.
+  #
+  # Match: `-apps.` followed by either a template var reference (`{$VAR` or
+  # `${VAR`) or any non-empty tail. Anchored so genuine prefixes like
+  # `myapp-apps-internal` (some hypothetical infra) don't accidentally match.
   if [[ "$tier" == "compose" && "$has_routes" == "true" ]]; then
     local bad_host
-    bad_host=$(yq -r '[.spec.routes[]?.host // "" | select(test("\\.apps\\.|\\.apps$"))] | .[0] // ""' "$cfg")
+    bad_host=$(yq -r '[.spec.routes[]?.host // "" | select(test("-apps\\.(\\{?\\$|[a-zA-Z0-9])"))] | .[0] // ""' "$cfg")
     if [[ -n "$bad_host" ]]; then
-      echo "outpost.app: tier=compose host '$bad_host' contains '.apps.'" >&2
-      echo "             The *.apps.<ROOT_DOMAIN> wildcard belongs to the k3s ingress;" >&2
-      echo "             Caddy never sees that traffic. Either:" >&2
-      echo "               (a) Use a top-level subdomain: '<prefix>.\${ROOT_DOMAIN}'." >&2
-      echo "                   You will need a matching Cloudflare Tunnel Public Hostname." >&2
+      echo "outpost.app: tier=compose host '$bad_host' ends with the apps naming convention." >&2
+      echo "             '-apps.<ROOT_DOMAIN>' is reserved for k3s applications;" >&2
+      echo "             Cloudflare Tunnel's *.<ROOT_DOMAIN> wildcard routes those" >&2
+      echo "             requests to k3s Traefik — Caddy never sees that traffic. Either:" >&2
+      echo "               (a) Pick a non-apps top-level subdomain: '<prefix>.\${ROOT_DOMAIN}'" >&2
+      echo "                   (e.g. 'es.\${ROOT_DOMAIN}'). Add a matching CF Tunnel" >&2
+      echo "                   Public Hostname pointing at http://caddy:80." >&2
       echo "               (b) If this is an APPLICATION (not stateful infra), switch to" >&2
-      echo "                   spec.tier=k3s — you get the wildcard ingress for free." >&2
+      echo "                   spec.tier=k3s — you'll get the wildcard ingress for free" >&2
+      echo "                   and the free Universal SSL '*.<root>' covers your hostname." >&2
       errs=$((errs + 1))
     fi
   fi

@@ -68,9 +68,10 @@ skip ahead.
 - [ ] **A1** Move your domain's NS to Cloudflare (Free plan is fine), wait for propagation
 - [ ] **A2** Zero Trust → Networks → Tunnels → **Create a tunnel** → choose `Cloudflared` → name it (anything, e.g. `outpost`) → Save
 - [ ] **A3** On the install page, **copy only the token** (a long `eyJhIjoi…` string). Keep it for Phase D. **Do NOT** run that install command — we run cloudflared inside Compose, not on the host directly
-- [ ] **A4** Open the tunnel detail page → **Public Hostname** tab → add the 10 rows (full table in `01-cloudflare-setup.md` §3):
-  - 7 HTTP rows: `search` / `mq` / `argocd` / `tekton` / `hooks` / `registry` / `*.apps`
+- [ ] **A4** Open the tunnel detail page → **Public Hostname** tab → add the 11 rows (full table in `01-cloudflare-setup.md` §3):
+  - 8 HTTP rows: `search` / `mq` / `argocd` / `tekton` / `rollouts` / `hooks` / `registry` / `*` (broad wildcard — catches apps named `<x>-apps.<root>`)
   - 3 TCP rows: `pg` / `redis` / `rabbitmq`
+  - **Don't use `*.apps`** — that's a two-level wildcard, not covered by free Universal SSL (would cost $10/mo for ACM). Apps follow the `<name>-apps.<root>` naming convention so the single broad `*.<root>` wildcard suffices.
   - **Extra for `registry`**: expand *Additional application settings → HTTP Settings → HTTP Host Header* and set it to `registry.<your-domain>` (Docker Registry is Host-header sensitive; without this, image pulls 401)
 - [ ] **A5** The Tunnel status in the Dashboard will show *Inactive / Down* — **expected**, because cloudflared isn't running locally yet. **Do NOT run any connectivity check here.** Real verification happens in Phase F
 
@@ -212,7 +213,7 @@ Onboarding your own application: see `05-onboard-project.md`. Sketch:
 1. Create an application code repo with a `Dockerfile` at the root
 2. In the manifest repo, add `apps/<app>/` (Deployment + Service + Ingress) and `argocd-apps/<app>.yaml` (ArgoCD Application)
 3. Configure a webhook on the application repo: URL `https://hooks.<root>`, secret `${GIT_WEBHOOK_SECRET}` from `INFRA.md`
-4. Push code → Tekton builds → ArgoCD deploys → `https://<app>.apps.<root>` is live
+4. Push code → Tekton builds → ArgoCD deploys → `https://<app>-apps.<root>` is live
 
 Application secrets (DB connection strings, API tokens) get sealed with
 SealedSecret before committing to git — see `08-seal-secret.md`.

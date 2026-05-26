@@ -7,7 +7,7 @@ spec:
   entryPoints:
     - web
   routes:
-    - match: Host(`hello-python.apps.example.com`)
+    - match: Host(`hello-python-apps.example.com`)
       kind: Rule
       services:
         - name: hello-python

@@ -568,11 +568,14 @@ _manifest_scaffold() {
   repo_branch="${MANIFEST_REPO_BRANCH:-main}"
 
   # Substitutions shared by deployment / service / ingress.
+  # `-apps.example.com` → `-apps.<root>` honors the v0.5.2 naming convention
+  # that keeps apps under a single-level subdomain so Cloudflare Universal SSL
+  # (free, covers `*.<root>`) applies — `*.apps.<root>` would require paid ACM.
   local subst=(
     "s|hello-world-${lang}|${app}|g"
     "s|hello-${lang}|${app}|g"
     "s|registry\\.example\\.com|${registry}|g"
-    "s|apps\\.example\\.com|apps.${domain}|g"
+    "s|-apps\\.example\\.com|-apps.${domain}|g"
   )
 
   local tmpdir; tmpdir="$(mktemp -d)"

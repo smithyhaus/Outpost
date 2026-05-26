@@ -27,7 +27,7 @@ swappable.
     │                                                │  Testkube (Gate A/B) │
     │                                                │  Argo Rollouts       │
     │                                                │     + Dashboard      │
-    │                                                │  *.apps.* → user apps│
+    │                                                │  *.<root> → user apps │
     │                                                │                       │
     │                       ▲ (k3s pods reach        │                       │
     │                        data layer via         │                       │
@@ -84,9 +84,12 @@ A single `cloudflared` container in Compose carries all ingress:
 | `rollouts.<domain>`             | HTTP | `host.docker.internal:30080` → Argo Rollouts UI *(BasicAuth)* |
 | `hooks.<domain>`                | HTTP | `host.docker.internal:30080` → Tekton EL   |
 | `registry.<domain>`             | HTTP | `host.docker.internal:30080` → Registry    |
-| `*.apps.<domain>`               | HTTP | `host.docker.internal:30080` → user apps   |
+| `*.<domain>`                    | HTTP | `host.docker.internal:30080` → user apps *(catch-all; apps named `<x>-apps.<domain>` by convention)* |
 
 Cloudflare terminates TLS at the edge — internal traffic is plain HTTP.
+The single `*.<domain>` wildcard avoids two-level subdomains so the free
+Universal SSL `*.<domain>` certificate covers every app — a two-level
+`*.apps.<domain>` would require paid Advanced Certificate Manager.
 This is intentional and simplifies certificate management.
 
 ## GitOps pipeline
@@ -122,7 +125,7 @@ ArgoCD sync → kubectl apply
                         failure → automatic rollback + notify
     │
     ▼
-App reachable at <app>.apps.<domain>
+App reachable at <app>-apps.<domain>
 ```
 
 Five implications worth understanding:

@@ -94,7 +94,7 @@ cp <outpost>/examples/hello-world/go/argocd-application.yaml argocd-apps/hello-g
 Then edit the four files to fill in your real values:
 
 - `apps/hello-go/deployment.yaml` — change `registry.example.com` to `registry.<your-root-domain>`
-- `apps/hello-go/ingress.yaml`    — change `hello-go.apps.example.com` to `hello-go.apps.<your-root-domain>`
+- `apps/hello-go/ingress.yaml`    — change `hello-go-apps.example.com` to `hello-go-apps.<your-root-domain>`
 - `argocd-apps/hello-go.yaml`     — change `repoURL` to your manifest repo URL
 
 ```bash
@@ -138,10 +138,10 @@ When that completes, the manifest repo gets a new commit
 ### 5. Verify
 
 ```bash
-curl https://hello-go.apps.<your-root-domain>
+curl https://hello-go-apps.<your-root-domain>
 # → Hello from Go!
 
-curl https://hello-go.apps.<your-root-domain>/healthz
+curl https://hello-go-apps.<your-root-domain>/healthz
 # → ok
 ```
 
@@ -157,6 +157,6 @@ git → Tekton → registry → ArgoCD → ingress → app.
 | `build-and-push` fails | Look at the Dockerfile path / kaniko logs (`kubectl logs -n tekton-pipelines -l tekton.dev/pipelineRun=<run> -c step-build-and-push`) |
 | `update-manifest` fails | manifest repo missing `apps/hello-<lang>/deployment.yaml`, or the PAT can't push |
 | ArgoCD stuck OutOfSync | `kubectl get app -n argocd hello-<lang> -o yaml` and read `.status.conditions` |
-| 502 from `https://hello-<lang>.apps.<root>` | Pod not ready yet, or readinessProbe path mismatch |
+| 502 from `https://hello-<lang>-apps.<root>` | Pod not ready yet, or readinessProbe path mismatch |
 
 Detailed diagnosis: `i18n/<lang>/docs/06-troubleshooting.md`.

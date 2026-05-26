@@ -9,8 +9,11 @@
 # stateful infrastructure additions.
 #
 # Why this matters:
-#   - tier=k3s lands the app under *.apps.<ROOT_DOMAIN> — already covered by
-#     a single Cloudflare Tunnel wildcard, zero per-app CF Dashboard work.
+#   - tier=k3s lands the app under <name>-apps.<ROOT_DOMAIN> — caught by the
+#     single Cloudflare Tunnel `*.<ROOT_DOMAIN>` wildcard, zero per-app CF
+#     Dashboard work. The `-apps` suffix keeps the hostname at a single
+#     subdomain level so the free Universal SSL `*.<root>` cert covers it
+#     (two-level `*.apps.<root>` would need paid Advanced Certificate Manager).
 #   - Adding the app to caddy on a top-level subdomain (mcp.<ROOT_DOMAIN>)
 #     would require manually wiring a new Public Hostname in Cloudflare and
 #     would route stateless traffic through the data-layer ingress — both
@@ -55,14 +58,14 @@ spec:
 #   spec:
 #     entryPoints: [web]
 #     routes:
-#       - match: Host(`mcp.apps.${ROOT_DOMAIN}`) && PathPrefix(`/scm-cloud/mcp`)
+#       - match: Host(`mcp-apps.${ROOT_DOMAIN}`) && PathPrefix(`/scm-cloud/mcp`)
 #         kind: Rule
 #         middlewares:
 #           - name: rewrite-scm-cloud
 #         services:
 #           - name: scm-mcp
 #             port: 8090
-#       - match: Host(`mcp.apps.${ROOT_DOMAIN}`) && PathPrefix(`/scm-3/mcp`)
+#       - match: Host(`mcp-apps.${ROOT_DOMAIN}`) && PathPrefix(`/scm-3/mcp`)
 #         kind: Rule
 #         services:
 #           - name: scm-mcp

@@ -14,8 +14,9 @@
 #   - Live in the `infra` Docker network so k3s apps can reach them via the
 #     ExternalName bridge pattern (see SKILL.md §2 architecture diagram)
 #   - Are reached from the public internet (if at all) via a Caddy fragment
-#     on a top-level subdomain — never via *.apps.<ROOT_DOMAIN> (that
-#     wildcard goes to k3s Traefik, not Caddy)
+#     on a top-level subdomain — never under the `-apps` naming convention
+#     (which is reserved for k3s applications and is caught by the
+#     `*.<ROOT_DOMAIN>` Cloudflare Tunnel wildcard → k3s Traefik, not Caddy)
 #
 # Stateless applications go on tier=k3s instead — see the minimal /
 # multiproduct examples in this directory.
@@ -44,16 +45,18 @@ spec:
       - "9200:9200"
 
   # Caddy fragment — stateful infra exposes itself on a TOP-LEVEL subdomain.
-  # The host MUST NOT contain `.apps.` (that wildcard goes to k3s Traefik;
-  # Caddy never sees that traffic). `outpost onboard` rejects compose-tier
-  # hosts that include `.apps.`.
+  # The host MUST NOT end with `-apps.<ROOT_DOMAIN>` (the apps naming
+  # convention reserves that suffix for k3s applications; CF Tunnel routes
+  # the `*.<ROOT_DOMAIN>` wildcard to k3s Traefik, so Caddy never sees that
+  # traffic). `outpost onboard` rejects compose-tier hosts ending in `-apps.<root>`.
   routes:
     - host: "{$ES_HOST:es}.{$ROOT_DOMAIN}"
       default_upstream: "elasticsearch:9200"
 
   # IMPORTANT — Cloudflare Tunnel side:
-  # Top-level subdomains are NOT covered by the *.apps.<ROOT_DOMAIN>
-  # wildcard. You must add a Public Hostname in the Cloudflare Dashboard:
+  # The `*.<ROOT_DOMAIN>` wildcard in CF Tunnel is configured to route to
+  # k3s Traefik (the apps default). Stateful infra needs its OWN specific
+  # Public Hostname entry pointing at caddy. Add in Cloudflare Dashboard:
   #   Host: es.<your-domain>
   #   Service: http://caddy:80
   # Reference template: core/compose/cloudflared/config.template.yml

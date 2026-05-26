@@ -29,12 +29,24 @@ In your tunnel detail page → **Public Hostname** tab → add each row (mind th
 | `mq`      | your root domain | HTTP | `caddy:80` |
 | `argocd`  | your root domain | HTTP | `host.docker.internal:30080` |
 | `tekton`  | your root domain | HTTP | `host.docker.internal:30080` |
+| `rollouts`| your root domain | HTTP | `host.docker.internal:30080` |
 | `hooks`   | your root domain | HTTP | `host.docker.internal:30080` |
 | `registry`| your root domain | HTTP | `host.docker.internal:30080` |
-| `*.apps`  | your root domain | HTTP | `host.docker.internal:30080` |
+| `*`       | your root domain | HTTP | `host.docker.internal:30080` |
 | `pg`      | your root domain | TCP  | `postgres:5432` |
 | `redis`   | your root domain | TCP  | `redis:6379` |
 | `rabbitmq`| your root domain | TCP  | `rabbitmq:5672` |
+
+> **Wildcard subdomain note**: enter `*` in the Subdomain field (not
+> `*.apps`). Apps follow the naming convention `<name>-apps.<root>` and
+> get caught by this single broad `*.<root>` wildcard — it routes to
+> k3s Traefik, where the IngressRoute matches the specific `<name>-apps`
+> Host header. **Don't use `*.apps`** as a Subdomain — that's a two-level
+> wildcard (`*.apps.<root>`) which Cloudflare's free Universal SSL
+> doesn't cover (requires paid Advanced Certificate Manager, ~$10/mo).
+> CF Tunnel also doesn't support partial-label wildcards like `*-apps`
+> in Public Hostnames either; the `-apps` suffix is enforced inside
+> k3s, not at the CF edge.
 
 **Why URLs look duplicated**: cloudflared doesn't route — it just hands the request to the next hop. Caddy (`caddy:80`, splits by Host header to manticore HTTP / rabbitmq UI) and k3s Traefik (`host.docker.internal:30080`, splits by Ingress to ArgoCD / Tekton EL / Registry / user apps) do the second-level routing.
 
@@ -48,7 +60,9 @@ In your tunnel detail page → **Public Hostname** tab → add each row (mind th
   cloudflared container has `extra_hosts: host-gateway` configured for
   that lookup (see `core/compose/docker-compose.yml`).
 - TCP rows use the service:port form. Cloudflare will set up an L4 tunnel.
-- `*.apps.<domain>` is a wildcard. Free plan supports it.
+- The broad `*` wildcard catches every subdomain not specifically listed.
+  More-specific entries (like `argocd.<domain>`) override the wildcard
+  automatically — CF Tunnel uses most-specific-wins matching.
 - **Extra config for `registry`**: expand *Additional application
   settings → HTTP Settings → HTTP Host Header* and set it to
   `registry.<your-domain>`. Docker Registry is Host-header sensitive;

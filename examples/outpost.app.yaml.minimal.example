@@ -7,8 +7,12 @@
 # Architectural contract (read this once, then never get tier-confused):
 #   - tier=k3s    : DEFAULT for applications. Anything stateless (HTTP
 #                   servers, workers, queue consumers, ML inference, ...).
-#                   Gets the *.apps.<ROOT_DOMAIN> wildcard ingress for free
-#                   via k3s Traefik — zero Cloudflare changes per app.
+#                   Lands under `<name>-apps.<ROOT_DOMAIN>` — caught by the
+#                   single Cloudflare Tunnel `*.<ROOT_DOMAIN>` wildcard, zero
+#                   per-app CF Dashboard work. The `-apps` suffix keeps the
+#                   FQDN at single-subdomain level so the free Universal SSL
+#                   cert `*.<root>` covers it (two-level `*.apps.<root>`
+#                   would require paid Advanced Certificate Manager).
 #   - tier=compose: RESERVED for stateful infrastructure additions only
 #                   (extra databases, message queues, search engines on the
 #                   data layer). See outpost.app.yaml.stateful-infra.example

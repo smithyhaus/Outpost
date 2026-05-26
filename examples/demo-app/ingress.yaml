@@ -1,4 +1,6 @@
-# 应用域名: demo-app.apps.<ROOT_DOMAIN>
+# 应用域名: demo-app-apps.<ROOT_DOMAIN>
+# 命名约定 `<name>-apps.<ROOT_DOMAIN>` 保持单级子域,享受 Cloudflare Universal
+# SSL 免费证书覆盖(二级 `*.apps.<root>` 要付费 Advanced Certificate Manager)。
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
@@ -8,7 +10,7 @@ spec:
   entryPoints:
     - web
   routes:
-    - match: Host(`demo-app.apps.example.com`)
+    - match: Host(`demo-app-apps.example.com`)
       kind: Rule
       services:
         - name: demo-app

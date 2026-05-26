@@ -36,15 +36,17 @@ Cloudflare edge (HTTPS / TLS)
     │
     ▼
 cloudflared (Compose container)
-    ├─→ caddy:80 ─→ search.* / mq.* (HTTP UIs)
+    ├─→ caddy:80 ─→ search.* / mq.* (HTTP UIs for stateful infra)
     ├─→ postgres:5432 (TCP)
     ├─→ redis:6379 (TCP)
     ├─→ rabbitmq:5672 (TCP)
     └─→ host.docker.internal:30080 ─→ k3s Traefik
-                                         ├─ argocd.*  → argocd-server
-                                         ├─ hooks.*   → tekton EventListener
-                                         ├─ registry.* → docker-registry
-                                         └─ *.apps.*  → user apps
+                                         ├─ argocd.*       → argocd-server
+                                         ├─ hooks.*        → tekton EventListener
+                                         ├─ registry.*     → docker-registry
+                                         └─ *.<root>       → user apps (catch-all)
+                                            (apps named `<x>-apps.<root>`,
+                                             one-level FQDN → free Universal SSL)
 ```
 
 **Layer boundaries are strict:**
@@ -171,29 +173,42 @@ in production, change only the ExternalName — application code stays unchanged
 +-----+--------------------------+--------------------------+
       |                          |                          |
       v                          v                          v
-*.apps.<ROOT_DOMAIN>      <prefix>.<ROOT_DOMAIN>      <built-in>.<ROOT_DOMAIN>
-wildcard (one CF rule)    top-level (per-svc CF rule)  argocd/hooks/search/mq/registry
+*.<ROOT_DOMAIN>           <prefix>.<ROOT_DOMAIN>      <built-in>.<ROOT_DOMAIN>
+broad CF wildcard         top-level (per-svc CF rule) argocd/hooks/search/mq/registry
+(catches everything)
       |                          |                          |
       v                          v                          v
   k3s Traefik                Caddy :80                  Caddy :80
       |                          |                          |
       v                          v                          v
   STATELESS APPS             STATEFUL INFRA            BUILT-IN SERVICES
-  (tier=k3s)                 SIDECARS (tier=compose)   (postgres / redis / ...)
+  named `<x>-apps.<root>`    SIDECARS (tier=compose)   (postgres / redis / ...)
+  (tier=k3s)
 ```
+
+**SSL constraint behind the naming convention:** Cloudflare Universal SSL
+covers `*.<ROOT_DOMAIN>` for free (one-level wildcard). Apps live at
+`<x>-apps.<ROOT_DOMAIN>` — still one-level FQDN, so free Universal SSL
+covers them too. A two-level `*.apps.<ROOT_DOMAIN>` would require paid
+Advanced Certificate Manager (~$10/mo) and is therefore avoided.
+CF Tunnel doesn't support partial-label wildcards like `*-apps.<root>` in
+public hostnames either — the `-apps` suffix is a naming convention
+(enforced by validator + IngressRoute Host matching), not a CF routing
+pattern.
 
 When the user says "onboard X" / "add new project X":
 
 1. **Decide the tier first:**
    - **Stateless application?** (HTTP server, worker, queue consumer, ML
      inference, CRUD service, ...) → `tier=k3s`. This is the default.
-     Lands under `*.apps.<ROOT_DOMAIN>` — zero Cloudflare Dashboard work
-     per app.
+     Lands under `<name>-apps.<ROOT_DOMAIN>` — caught by the single
+     `*.<ROOT_DOMAIN>` Cloudflare Tunnel wildcard → k3s Traefik. Zero
+     Cloudflare Dashboard work per app.
    - **Stateful infrastructure?** (extra database, message queue, search
      engine, object store — anything that owns persistent data and would
      live alongside Postgres/Redis/RabbitMQ/Manticore) → `tier=compose`.
      Lands on a top-level subdomain via Caddy; requires a matching
-     Cloudflare Tunnel Public Hostname.
+     Cloudflare Tunnel Public Hostname entry pointing at `http://caddy:80`.
    - **In doubt?** It's almost certainly an application. Choose `tier=k3s`.
 
 2. **Run `outpost onboard <path-or-url>`** if the repo has an
@@ -214,8 +229,10 @@ When the user says "onboard X" / "add new project X":
    `platform/lib/onboard-lib.sh`) enforces:
    - `tier=k3s` + `spec.routes` or `spec.caddy_fragment` → REJECTED
      (apps use IngressRoute via manifests, not Caddy fragments)
-   - `tier=compose` + host containing `.apps.` → REJECTED (that
-     wildcard goes to k3s; caddy never sees the traffic)
+   - `tier=compose` + host ending in `-apps.<ROOT_DOMAIN>` → REJECTED
+     (the `-apps` suffix is the apps naming convention; CF Tunnel's
+     `*.<ROOT_DOMAIN>` wildcard routes that traffic to k3s, caddy never
+     sees it)
 
 5. **For k3s-tier apps**, also follow `i18n/en/docs/05-onboard-project.md`
    end-to-end (manifest repo files, SealedSecret, ArgoCD Application).
@@ -226,8 +243,9 @@ When the user says "onboard X" / "add new project X":
      pre-v0.5 anti-pattern).
    - Setting `tier=compose` on a stateless server to "get caddy routing"
      — that route through caddy is for infra only, not for apps.
-   - Adding a top-level subdomain for an app to bypass `*.apps.<root>`
-     (forces manual CF Dashboard work + violates the tier boundary).
+   - Adding a top-level subdomain for an app to bypass the
+     `<name>-apps.<root>` naming convention (forces manual CF Dashboard
+     work + violates the tier boundary).
 
 Don't ask about tech stack — that lives in the user's repo, not here.
 
@@ -305,18 +323,20 @@ the rendered file is the source of truth.
 **Pick the right path by what you're exposing — the architectural contract
 (see §5 "Project onboarding") drives the answer:**
 
-- **Stateless application on `<name>.apps.<root>`** (the common case):
-  add an `IngressRoute` in the manifest repo. No Cloudflare changes —
-  the `*.apps.<root>` wildcard already routes through cloudflared →
-  k3s Traefik. Use `outpost onboard --manifests-dir <path> --lang <l>`
-  for scaffolding.
+- **Stateless application on `<name>-apps.<root>`** (the common case):
+  add an `IngressRoute` in the manifest repo with `Host(`<name>-apps.<root>`)`.
+  No Cloudflare changes — the broad `*.<root>` CF Tunnel wildcard already
+  routes through cloudflared → k3s Traefik, where Traefik matches by Host
+  header. Use `outpost onboard --manifests-dir <path> --lang <l>` for
+  scaffolding.
 - **Stateful infra HTTP service on `<prefix>.<root>`** (e.g. adding
   Elasticsearch's HTTP UI): write a Caddy fragment via
   `outpost onboard` (tier=compose) — do NOT edit
   `core/compose/Caddyfile` directly; the fragment lands in
-  `core/compose/Caddyfile.d/<name>.caddy`. **Add the Public Hostname
-  in the Cloudflare Dashboard** — top-level subdomains are not covered
-  by the `*.apps.<root>` wildcard.
+  `core/compose/Caddyfile.d/<name>.caddy`. **Add a specific Public Hostname
+  in the Cloudflare Dashboard** (`<prefix>.<root>` → `http://caddy:80`) so
+  it overrides the broad `*.<root>` wildcard for this exact name — CF uses
+  most-specific-wins matching.
 - **Stateful infra TCP service** (raw database port etc.): just add a
   Public Hostname (TCP type) in the Cloudflare Dashboard. Caddy is
   HTTP-only and isn't in the path.

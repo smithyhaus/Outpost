@@ -59,7 +59,7 @@ spec:
             limits:   { cpu: 1,    memory: 512Mi }
 ```
 
-**ingress.yaml** 用 `<app>.apps.<root>` 域名(已被 cloudflared 通配符路由覆盖,无需改 CF 配置)。
+**ingress.yaml** 用 `<app>-apps.<root>` 域名 — 被广义 `*.<root>` 通配 CF Tunnel 路由覆盖,加新应用无需改 CF 配置。`-apps` 后缀让 FQDN 保持一级子域,免费 Universal SSL `*.<root>` 直接覆盖(二级 `*.apps.<root>` 要付费 Advanced Certificate Manager)。
 
 **镜像 tag 格式:** Tekton 写 7 字符短 SHA(`registry.<root>/<app>:abc1234`)。
 回滚 = `git revert` manifest 仓库的那次 commit;`kubectl rollout undo` 也行。
@@ -162,7 +162,7 @@ kubectl get pipelinerun -n tekton-pipelines
 
 ArgoCD UI(`https://argocd.<root>`):找到 `<app>` Application,应当显示 Synced + Healthy。
 
-应用访问:`https://<app>.apps.<root>`
+应用访问:`https://<app>-apps.<root>`
 
 ### 7. (可选)接入测试网关 + 自动回滚
 

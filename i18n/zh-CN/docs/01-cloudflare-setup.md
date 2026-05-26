@@ -27,12 +27,20 @@
 | `mq` | `<你的根域名>` | HTTP | `caddy:80` |
 | `argocd` | `<你的根域名>` | HTTP | `host.docker.internal:30080` |
 | `tekton` | `<你的根域名>` | HTTP | `host.docker.internal:30080` |
+| `rollouts` | `<你的根域名>` | HTTP | `host.docker.internal:30080` |
 | `hooks` | `<你的根域名>` | HTTP | `host.docker.internal:30080` |
 | `registry` | `<你的根域名>` | HTTP | `host.docker.internal:30080` |
-| `*.apps` | `<你的根域名>` | HTTP | `host.docker.internal:30080` |
+| `*` | `<你的根域名>` | HTTP | `host.docker.internal:30080` |
 | `pg` | `<你的根域名>` | TCP | `postgres:5432` |
 | `redis` | `<你的根域名>` | TCP | `redis:6379` |
 | `rabbitmq` | `<你的根域名>` | TCP | `rabbitmq:5672` |
+
+> **关于通配符那一行**:Subdomain 填 `*`(不是 `*.apps`)。应用走命名约定
+> `<name>-apps.<root>`,被这条 `*.<root>` 兜底通配捕获,转给 k3s Traefik,
+> 由 IngressRoute 按 `Host()` 匹配具体的 `<name>-apps`。**别填 `*.apps`** —
+> 那是二级通配 `*.apps.<root>`,Cloudflare 免费 Universal SSL 不覆盖(要付费
+> Advanced Certificate Manager ~$10/月)。CF Tunnel 也不支持 partial-label
+> 通配 `*-apps`,所以 `-apps` 是 k3s 端的命名约定,不是 CF 路由模式。
 
 **为什么 URL 看起来重复**:cloudflared 自己不路由,只是把流量交给下一跳;再由 Caddy(`caddy:80`,按 Host 头分流给 manticore HTTP / rabbitmq UI)和 k3s Traefik(`host.docker.internal:30080`,按 Ingress 分流给 ArgoCD / Tekton EL / Registry / 用户应用)做二次路由。
 
@@ -43,7 +51,8 @@
 - HTTP 行用容器名(`caddy:80`):cloudflared 容器在 Compose 网络里能解析
 - 走 k3s 的 4 行用 `host.docker.internal:30080`:cloudflared 容器已配置 `extra_hosts: host-gateway`(见 `core/compose/docker-compose.yml`)
 - TCP 行的 URL 字段填 `service:port`,Cloudflare 会建 L4 通道
-- `*.apps.<domain>` 是通配符,Free 计划支持
+- 那条 `*` 兜底通配会接住所有没单独列出的子域。更具体的条目(比如 `argocd.<域名>`)
+  自动覆盖通配 — CF Tunnel 是 most-specific-wins 匹配,顺序无关
 - **`registry` 行额外配置**:展开 *Additional application settings → HTTP Settings → HTTP Host Header*,填 `registry.<你的根域名>`。Docker Registry 对 Host 头敏感,不写会拉镜像 401
 
 每条添加完点 Save。

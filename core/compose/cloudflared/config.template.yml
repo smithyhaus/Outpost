@@ -1,49 +1,90 @@
 # ============================================================================
-# Cloudflare Tunnel — 推荐用 Dashboard 配置 Public Hostname（更简单）
-# 此文件仅作参考，列出所有需要在 Dashboard 添加的 hostname → service 映射。
+# Cloudflare Tunnel — Public Hostname 参考映射
+# ----------------------------------------------------------------------------
+# 本文件【仅作参考】,生产路由在 Cloudflare Dashboard 的 Public Hostnames 里
+# 配置。docker-compose.yml 默认用 `--token` 模式(由 Dashboard 推送配置)。
+# 如改用本地配置文件模式(去掉 --token + 挂载本文件 + `tunnel run <NAME>`),
+# 则下面的 yaml 直接生效。
 #
-# 如选择 Dashboard 模式：忽略此文件，docker-compose.yml 已用 token 模式。
-# 如选择本地配置文件模式：去掉 docker-compose.yml 中的 --token，
-# 改为挂载此文件并用 tunnel run <NAME>。
+# ----------------------------------------------------------------------------
+# 重要 ── 子域命名约定(免费证书覆盖范围)
+# ----------------------------------------------------------------------------
+# Cloudflare Universal SSL 免费证书覆盖范围:
+#   ✅ 根域:                 example.com
+#   ✅ 一级子域通配:         *.example.com
+#   ❌ 二级子域通配:         *.apps.example.com  (要 Advanced Certificate
+#                                                 Manager,~$10/月)
 #
-# Dashboard 操作步骤见 docs/01-cloudflare-setup.md
+# 所以 Outpost 的应用命名约定是:
+#   <app>-apps.<ROOT_DOMAIN>     ✅ 一级子域,免费 SSL 覆盖
+#   <app>.apps.<ROOT_DOMAIN>     ❌ 二级子域,要付费 SSL(已弃用)
+#
+# `-apps` 后缀是【命名约定】,不是 CF Tunnel 路由模式。CF Tunnel 不支持
+# partial-label 通配 `*-apps.example.com`(只支持完整 label 通配 `*.example.com`),
+# 所以 apps 走下面那条 `*.${ROOT_DOMAIN}` 兜底,由 k3s Traefik 按 Host header
+# 路由到具体的 IngressRoute(每个 app 的 IngressRoute 匹配 `<app>-apps.<root>`)。
+#
+# ----------------------------------------------------------------------------
+# 规则顺序说明
+# ----------------------------------------------------------------------------
+# 本地配置文件模式(下方 yaml):cloudflared 按从上到下 first-match-wins,
+# 所以 specific entry 必须放在通配符之前。
+# Dashboard 模式:CF edge 使用 most-specific-wins(最具体 hostname 优先),
+# Dashboard UI 不提供调整顺序的入口,因为不需要 — 顺序对结果无影响。
+#
+# 参考: https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/local-management/configuration-file/
 # ============================================================================
 
 tunnel: <YOUR_TUNNEL_ID>
 credentials-file: /etc/cloudflared/<TUNNEL_ID>.json
 
 ingress:
-  # ---- HTTP（经 caddy 内部路由）----
+  # -------------------------------------------------------------------------
+  # 有状态基础设施 HTTP UI(经 caddy 内部反向代理)
   # 子域前缀来自 .env 的 SEARCH_HOST / MQ_HOST(默认 search / mq)
+  # -------------------------------------------------------------------------
   - hostname: ${SEARCH_HOST}.${ROOT_DOMAIN}
     service: http://caddy:80
   - hostname: ${MQ_HOST}.${ROOT_DOMAIN}
     service: http://caddy:80
 
-  # ---- HTTP（经 k3s Traefik，NodePort 30080）----
-  # 前缀来自 .env 的 ARGOCD_HOST / HOOKS_HOST / REGISTRY_SUBDOMAIN
-  # (默认 argocd / hooks / registry)
+  # -------------------------------------------------------------------------
+  # k3s 控制面 / 平台服务(经 k3s Traefik NodePort 30080)
+  # 前缀来自 .env(ARGOCD_HOST / HOOKS_HOST / REGISTRY_SUBDOMAIN,
+  # 默认 argocd / hooks / registry)
+  # -------------------------------------------------------------------------
   - hostname: ${ARGOCD_HOST}.${ROOT_DOMAIN}
     service: http://host.docker.internal:30080
   - hostname: ${HOOKS_HOST}.${ROOT_DOMAIN}
     service: http://host.docker.internal:30080
   - hostname: tekton.${ROOT_DOMAIN}
     service: http://host.docker.internal:30080
+  - hostname: rollouts.${ROOT_DOMAIN}
+    service: http://host.docker.internal:30080
   - hostname: ${REGISTRY_HOST}
     service: http://host.docker.internal:30080
     originRequest:
       httpHostHeader: ${REGISTRY_HOST}
-  # 应用通配符
-  - hostname: "*.apps.${ROOT_DOMAIN}"
-    service: http://host.docker.internal:30080
 
-  # ---- TCP ----
-  - hostname: pg.example.com
+  # -------------------------------------------------------------------------
+  # 有状态数据服务(TCP — 不经 caddy,caddy 仅 HTTP)
+  # 客户端用 `cloudflared access tcp --hostname pg.<ROOT_DOMAIN> --url localhost:5432`
+  # -------------------------------------------------------------------------
+  - hostname: pg.${ROOT_DOMAIN}
     service: tcp://postgres:5432
-  - hostname: redis.example.com
+  - hostname: redis.${ROOT_DOMAIN}
     service: tcp://redis:6379
-  - hostname: rabbitmq.example.com
+  - hostname: rabbitmq.${ROOT_DOMAIN}
     service: tcp://rabbitmq:5672
 
-  # ---- 兜底 ----
+  # -------------------------------------------------------------------------
+  # 应用兜底通配(catch-all for *-apps.<ROOT_DOMAIN> 及其它未列名子域)
+  # → k3s Traefik,由各 app 自己的 IngressRoute 按 Host header 落到具体 Service
+  # -------------------------------------------------------------------------
+  - hostname: "*.${ROOT_DOMAIN}"
+    service: http://host.docker.internal:30080
+
+  # -------------------------------------------------------------------------
+  # 兜底 404(任何不匹配 *.${ROOT_DOMAIN} 的请求)
+  # -------------------------------------------------------------------------
   - service: http_status:404

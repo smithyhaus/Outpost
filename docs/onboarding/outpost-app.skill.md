@@ -3,11 +3,12 @@ name: outpost-app-deploy
 description: |
   Claude / LLM-driven onboarding skill for an application repository that
   ships an `outpost.app.yaml`. Encodes the Outpost architectural contract:
-  stateless applications go to tier=k3s (auto-routed under
-  *.apps.<ROOT_DOMAIN>), stateful infrastructure additions go to tier=compose
-  (top-level subdomain via Caddy). Detects whether outpost is installed
-  locally, installs it via the one-shot install.sh if needed, then runs
-  `outpost onboard .` to register THIS repository with the running infras.
+  stateless applications go to tier=k3s (named `<x>-apps.<ROOT_DOMAIN>`,
+  routed through the single `*.<ROOT_DOMAIN>` CF Tunnel wildcard); stateful
+  infrastructure additions go to tier=compose (top-level subdomain via
+  Caddy). Detects whether outpost is installed locally, installs it via
+  the one-shot install.sh if needed, then runs `outpost onboard .` to
+  register THIS repository with the running infras.
 when_to_use: |
   Trigger automatically when:
     - The repository root contains an `outpost.app.yaml` file
@@ -39,19 +40,29 @@ wildcard ingress. Both break the contract.
             +----------------------+----------------------+
             |                                             |
             v                                             v
-   *.apps.<ROOT_DOMAIN>                          <prefix>.<ROOT_DOMAIN>
-   wildcard (one CF rule)                        top-level (per-svc CF rule)
+   *.<ROOT_DOMAIN>                               <prefix>.<ROOT_DOMAIN>
+   broad CF wildcard                             top-level (per-svc CF rule)
+   (catches everything not specific)
             |                                             |
             v                                             v
        k3s Traefik                                    Caddy :80
             |                                             |
             v                                             v
    STATELESS APPLICATIONS                  STATEFUL INFRASTRUCTURE
-   (HTTP servers, workers,                 (extra DBs, queues, search,
-   queue consumers, ML inference,          object stores — anything
-   CRUD services, dashboards)              that owns persistent data)
-        tier=k3s                                    tier=compose
+   named `<x>-apps.<ROOT_DOMAIN>`          (extra DBs, queues, search,
+   (HTTP servers, workers, queue           object stores — anything
+   consumers, ML inference, CRUD,          that owns persistent data)
+   dashboards)                                     tier=compose
+        tier=k3s
 ```
+
+**Why `<x>-apps.<root>` and not `<x>.apps.<root>`?** Cloudflare Universal
+SSL covers `*.<ROOT_DOMAIN>` for free (one-level wildcard). Apps named
+`<x>-apps.<root>` keep the FQDN at one level → free SSL works. Two-level
+`<x>.apps.<root>` would require paid Advanced Certificate Manager (~$10/mo).
+CF Tunnel can't use `*-apps.<root>` as a routing wildcard either (partial-
+label wildcards aren't supported), so `-apps` is a NAMING CONVENTION,
+enforced by validator + IngressRoute `Host()` matching.
 
 **The skill enforces this contract:**
 
@@ -59,9 +70,10 @@ wildcard ingress. Both break the contract.
   `spec.routes` or `spec.caddy_fragment`, `outpost onboard` refuses with
   a clear error — apps use Kubernetes IngressRoute in the manifest repo,
   not Caddy fragments.
-- If the repo's yaml declares `tier=compose` and the host contains
-  `.apps.`, `outpost onboard` refuses — that wildcard goes to k3s, caddy
-  never sees it.
+- If the repo's yaml declares `tier=compose` and the host ends in
+  `-apps.<root>`, `outpost onboard` refuses — that suffix is the apps
+  naming convention; CF Tunnel routes `*.<root>` to k3s, so caddy never
+  sees the traffic.
 
 **Default to `tier=k3s`.** If you're not adding a stateful data service,
 this is the right answer.
@@ -156,7 +168,7 @@ outpost onboard . \
 For multi-product or path-based routing (the SCM-MCP-style fan-out),
 adapt the scaffolded `apps/<name>/ingress.yaml` in your manifests repo —
 add multiple `Rule` entries with different `PathPrefix` matchers, all
-matching `Host(`<name>.apps.<ROOT_DOMAIN>`)`. See
+matching `Host(`<name>-apps.<ROOT_DOMAIN>`)`. See
 `examples/outpost.app.yaml.multiproduct.example` (in the Outpost repo)
 for the reference comment block.
 
@@ -173,11 +185,15 @@ This reads `./outpost.app.yaml`, renders a Caddy fragment into
 override into `~/outpost/core/compose/overrides/<name>.yml`, reloads
 caddy, and runs `docker compose up -d <name>`.
 
-**Cloudflare side:** top-level subdomains aren't on the `*.apps.<root>`
-wildcard. After onboard, go to Cloudflare Dashboard → Zero Trust →
-Tunnels → your tunnel → Public Hostname and add an entry:
+**Cloudflare side:** the broad `*.<root>` CF Tunnel wildcard routes to
+k3s by default. A stateful infra subdomain needs a more specific entry
+to override the wildcard. Go to Cloudflare Dashboard → Zero Trust →
+Tunnels → your tunnel → Public Hostname and add:
 - Host: `<your-prefix>.<your-domain>`
 - Service: `http://caddy:80`
+
+CF Tunnel uses most-specific-wins matching, so `es.example.com` (literal)
+automatically takes precedence over `*.example.com` (wildcard).
 
 ## 7. Verify the deploy
 
@@ -198,10 +214,11 @@ curl -i "https://<host-from-outpost.app.yaml-or-ingress>"
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `tier=k3s forbids spec.routes` | Trying to put app routes in outpost.app.yaml | Move routing into your manifest repo's `ingress.yaml`. Apps use IngressRoute, not Caddy. |
-| `tier=compose host contains '.apps.'` | Used the k3s wildcard pattern for a compose-tier service | Switch to `tier=k3s` (probably what you want) OR pick a top-level subdomain prefix |
+| `tier=compose host ... ends with the apps naming convention` | Used the `-apps.<root>` suffix for a compose-tier service | Switch to `tier=k3s` (probably what you want) OR pick a non-apps top-level prefix |
 | `outpost: command not found` | `~/.local/bin` not on PATH | Append `export PATH=...` to shell rc |
 | `caddy reload failed` | Fragment syntax error | `docker logs caddy --tail 30`; fix yaml; rerun `outpost onboard .` |
-| 502 from `<my-app>.apps.<root>` | App pod not Healthy in ArgoCD | `kubectl get pods -n apps`; `kubectl logs -n apps <pod>` |
+| 502 from `<my-app>-apps.<root>` | App pod not Healthy in ArgoCD | `kubectl get pods -n apps`; `kubectl logs -n apps <pod>` |
+| `tier=compose host '<x>-apps.<root>'` rejected | tried to put an app on the apps naming convention as tier=compose | switch to `tier=k3s` (probably what you want) OR pick a non-apps prefix |
 
 ## 9. What this skill must NOT do
 
@@ -211,7 +228,7 @@ curl -i "https://<host-from-outpost.app.yaml-or-ingress>"
 - **Never set tier=compose to get caddy ingress** for a stateless app.
   That's an architectural violation — the caddy path is for stateful infra.
 - **Never add a top-level subdomain for an application** to bypass the
-  `*.apps.<root>` wildcard. Apps live under that wildcard by design.
+  apps naming convention. Apps use `<name>-apps.<root>` by design.
 - **Never commit rendered artefacts** (`Caddyfile.d/<name>.caddy`,
   `overrides/<name>.yml`) — they're gitignored in the infras repo.
 - **Never run `reset.sh` or `bash bootstrap.sh --force`** — they wipe

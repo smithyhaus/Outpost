@@ -65,8 +65,11 @@ spec:
             limits:   { cpu: 1,    memory: 512Mi }
 ```
 
-`ingress.yaml` should use `<app>.apps.<root>` (already covered by the
-wildcard in your Cloudflare Tunnel config — no CF change needed).
+`ingress.yaml` should use `<app>-apps.<root>` — caught by the broad
+`*.<root>` Cloudflare Tunnel wildcard, no per-app CF change needed.
+The `-apps` suffix keeps the FQDN at one subdomain level so the free
+Universal SSL `*.<root>` certificate covers it (a two-level
+`*.apps.<root>` would require paid Advanced Certificate Manager).
 
 **Image tag format:** Tekton writes a 7-character short SHA
 (`registry.<root>/<app>:abc1234`). Rollback = revert the manifest repo
@@ -177,7 +180,7 @@ Should show a new run. To inspect via the dashboard:
 ArgoCD UI (`https://argocd.<root>`): the `<app>` application should go
 to **Synced + Healthy**.
 
-Application URL: `https://<app>.apps.<root>`.
+Application URL: `https://<app>-apps.<root>`.
 
 ### 7. (optional) Wire test gate + auto-rollback
 

@@ -1,5 +1,9 @@
 # Replace example.com with your real ROOT_DOMAIN.
-# The *.apps.<ROOT_DOMAIN> wildcard is already configured in your Cloudflare Tunnel.
+# App hostnames follow `<name>-apps.<ROOT_DOMAIN>` so the free Cloudflare
+# Universal SSL `*.<ROOT_DOMAIN>` certificate covers them. (Two-level wildcards
+# like `*.apps.<ROOT_DOMAIN>` would require paid Advanced Certificate Manager.)
+# CF Tunnel routes `*.<ROOT_DOMAIN>` to k3s Traefik as a catch-all — no per-app
+# Cloudflare Dashboard work needed.
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
@@ -9,7 +13,7 @@ spec:
   entryPoints:
     - web
   routes:
-    - match: Host(`hello-react.apps.example.com`)
+    - match: Host(`hello-react-apps.example.com`)
       kind: Rule
       services:
         - name: hello-react

@@ -8,10 +8,12 @@ by humans, and they are gitignored on a per-installation basis.
 
 **Stateless applications do NOT belong here.** They go on k3s tier and
 expose themselves via Kubernetes IngressRoute under the
-`*.apps.<ROOT_DOMAIN>` wildcard — see `examples/outpost.app.yaml.minimal.example`
-and `examples/outpost.app.yaml.multiproduct.example`. `outpost onboard`
-rejects `tier=k3s` outpost.app.yaml files that try to ship a Caddy
-fragment, and it rejects `tier=compose` hosts containing `.apps.`.
+`<name>-apps.<ROOT_DOMAIN>` naming convention — caught by the broad
+`*.<ROOT_DOMAIN>` Cloudflare Tunnel wildcard that routes to k3s Traefik.
+See `examples/outpost.app.yaml.minimal.example` and
+`examples/outpost.app.yaml.multiproduct.example`. `outpost onboard` rejects
+`tier=k3s` outpost.app.yaml files that try to ship a Caddy fragment, and
+it rejects `tier=compose` hosts ending in `-apps.<ROOT_DOMAIN>`.
 
 ## Why a fragment directory at all
 
@@ -53,8 +55,10 @@ removes the fragment + reloads.
 ## Cloudflare side
 
 Stateful infra fragments expose top-level subdomains (`<prefix>.<ROOT_DOMAIN>`).
-These are NOT covered by the `*.apps.<ROOT_DOMAIN>` wildcard — that
-wildcard belongs to the k3s ingress. Each top-level subdomain needs a
-matching Public Hostname in the Cloudflare Dashboard pointing at
-`http://caddy:80`. Reference:
-`core/compose/cloudflared/config.template.yml`.
+The broad `*.<ROOT_DOMAIN>` CF Tunnel wildcard points at k3s Traefik (for
+apps named `<x>-apps.<ROOT_DOMAIN>`), so each stateful-infra subdomain
+needs its OWN Public Hostname entry in the Cloudflare Dashboard pointing
+at `http://caddy:80` to override the wildcard for that specific name.
+CF Tunnel uses most-specific-wins matching — a literal entry like
+`es.example.com` automatically takes precedence over `*.example.com`.
+Reference: `core/compose/cloudflared/config.template.yml`.
