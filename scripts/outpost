@@ -70,6 +70,11 @@ $(_yellow PLATFORM)
                                     and open the browser
 
 $(_yellow APPLICATION)
+  onboard <repo-url-or-path> [--dry-run] [--no-reload] [--force]
+                                    Register an app described by its
+                                    outpost.app.yaml. Renders a Caddy fragment
+                                    + compose override; reloads caddy live.
+                                    Accepts a git URL, a local dir, or '.'.
   new-app <name> --lang <go|python|java|csharp|react|vue>
                                     Scaffold a new app from examples/hello-world/<lang>
                                     into ./my-apps/<name>/
@@ -613,6 +618,142 @@ _manifest_scaffold() {
   exit 0
 }
 
+# --- onboard ----------------------------------------------------------------
+# `outpost onboard <repo-or-path>` — register an app described by its
+# outpost.app.yaml into the running infras instance. Idempotent:
+# re-running with the same yaml is a no-op (fragment + override files
+# only get rewritten if their content changed).
+#
+# Accepts:
+#   <local-dir>           — treated as a path, looks for outpost.app.yaml at root
+#   <git-url>             — cloned shallow into a temp dir; cleaned up on exit
+#   .                     — shorthand for CWD
+#
+# Side effects (after a successful render):
+#   1. core/compose/Caddyfile.d/<name>.caddy  ← Caddy route fragment
+#   2. core/compose/overrides/<name>.yml      ← compose override (tier=compose only)
+#   3. `docker exec caddy caddy reload`       ← live config swap if caddy is running
+#
+# For tier=k3s, this delegates to the existing `outpost manifest scaffold` flow;
+# the manifest_repo can be overridden per-app via spec.k3s.manifest_repo.
+cmd_onboard() {
+  local src_arg="" tmpdir="" cleanup=0
+  local dry_run=0 no_reload=0 force=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run)   dry_run=1; shift ;;
+      --no-reload) no_reload=1; shift ;;
+      --force)     force=1; shift ;;
+      -*)          _die "unknown flag: $1" ;;
+      *)           [[ -z "$src_arg" ]] && src_arg="$1"; shift ;;
+    esac
+  done
+  [[ -z "$src_arg" ]] && _die "outpost onboard <repo-url-or-path> [--dry-run] [--no-reload] [--force]"
+  _need yq
+
+  # Resolve src_arg to a local directory containing outpost.app.yaml.
+  local src_dir=""
+  case "$src_arg" in
+    .)                   src_dir="$PWD" ;;
+    /*|./*|../*)         src_dir="$src_arg" ;;
+    *://*|git@*:*|*@*:*) # URL-ish — clone shallow
+      _need git
+      tmpdir="$(mktemp -d)"
+      cleanup=1
+      # shellcheck disable=SC2064  # tmpdir is captured by value
+      trap "[[ -n '$tmpdir' && -d '$tmpdir' ]] && rm -rf '$tmpdir'" EXIT INT TERM
+      echo "$(_dim Cloning) $src_arg → $tmpdir"
+      git clone --depth 1 --quiet "$src_arg" "$tmpdir/repo" || _die "git clone failed: $src_arg"
+      src_dir="$tmpdir/repo"
+      ;;
+    *)
+      if [[ -d "$src_arg" ]]; then
+        src_dir="$src_arg"
+      else
+        _die "not a directory or recognized URL: $src_arg"
+      fi
+      ;;
+  esac
+
+  local cfg="$src_dir/outpost.app.yaml"
+  if [[ ! -r "$cfg" ]]; then
+    _die "no outpost.app.yaml at $src_dir (see examples/outpost.app.yaml.minimal.example)"
+  fi
+
+  onboard_app_validate "$cfg" || _die "outpost.app.yaml validation failed"
+
+  local name tier
+  name=$(yq -r '.metadata.name' "$cfg")
+  tier=$(yq -r '.spec.tier' "$cfg")
+
+  local caddy_dst="$OUTPOST_HOME/core/compose/Caddyfile.d/${name}.caddy"
+  local override_dst="$OUTPOST_HOME/core/compose/overrides/${name}.yml"
+  local rendered_caddy rendered_compose
+  rendered_caddy=$(onboard_render_caddy_fragment "$cfg")
+
+  echo "$(_green onboard): app=$name tier=$tier source=$src_dir"
+
+  if [[ "$dry_run" -eq 1 ]]; then
+    echo "$(_yellow DRY RUN) — would write:"
+    echo "  $caddy_dst"
+    [[ "$tier" == "compose" ]] && echo "  $override_dst"
+    echo "$(_dim --- Caddy fragment ---)"
+    printf '%s\n' "$rendered_caddy"
+    if [[ "$tier" == "compose" ]]; then
+      echo "$(_dim --- Compose override ---)"
+      onboard_render_compose_override "$cfg"
+    fi
+    return 0
+  fi
+
+  # Write Caddy fragment. Refuse to clobber a drifted fragment unless --force.
+  mkdir -p "$(dirname "$caddy_dst")"
+  if [[ -f "$caddy_dst" && "$force" -ne 1 ]]; then
+    if [[ "$rendered_caddy" == "$(cat "$caddy_dst")" ]]; then
+      echo "$(_dim ✓) Caddyfile.d/${name}.caddy unchanged"
+    else
+      _die "Caddyfile.d/${name}.caddy differs from rendered output. Re-run with --force to overwrite."
+    fi
+  else
+    printf '%s\n' "$rendered_caddy" > "$caddy_dst"
+    echo "$(_green ✓) wrote $caddy_dst"
+  fi
+
+  if [[ "$tier" == "compose" ]]; then
+    mkdir -p "$(dirname "$override_dst")"
+    rendered_compose=$(onboard_render_compose_override "$cfg")
+    if [[ -f "$override_dst" && "$force" -ne 1 ]]; then
+      if [[ "$rendered_compose" == "$(cat "$override_dst")" ]]; then
+        echo "$(_dim ✓) overrides/${name}.yml unchanged"
+      else
+        _die "overrides/${name}.yml differs from rendered output. Re-run with --force to overwrite."
+      fi
+    else
+      printf '%s\n' "$rendered_compose" > "$override_dst"
+      echo "$(_green ✓) wrote $override_dst"
+    fi
+    echo "$(_dim hint:) start the new service with"
+    echo "  cd core/compose && docker compose -f docker-compose.yml -f overrides/${name}.yml up -d ${name}"
+  elif [[ "$tier" == "k3s" ]]; then
+    echo "$(_dim hint:) for k3s tier, run \`outpost manifest scaffold $name --lang <lang> --manifests-dir <path>\`"
+    echo "$(_dim hint:) spec.k3s.manifest_repo (if set) overrides the global MANIFEST_REPO_URL for this app"
+  fi
+
+  # Reload Caddy if running (no-op if container is stopped).
+  if [[ "$no_reload" -ne 1 ]] && command -v docker >/dev/null 2>&1; then
+    if docker inspect -f '{{.State.Running}}' caddy 2>/dev/null | grep -q true; then
+      if docker exec caddy caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
+        echo "$(_green ✓) caddy reloaded"
+      else
+        echo "$(_yellow !) caddy reload failed — fragment written but config not live yet"
+        echo "$(_dim    run:) docker exec caddy caddy reload --config /etc/caddy/Caddyfile"
+      fi
+    else
+      echo "$(_dim ·) caddy container not running — fragment will load on next \`docker compose up\`"
+    fi
+  fi
+}
+
 # --- router ------------------------------------------------------------------
 SUB="${1:-help}"
 shift || true
@@ -628,6 +769,7 @@ case "$SUB" in
   db)             cmd_db "$@" ;;
   manifest)       cmd_manifest "$@" ;;
   new-app)        cmd_new_app "$@" ;;
+  onboard)        cmd_onboard "$@" ;;
   decommission)   cmd_decommission "$@" ;;
   version|--version|-v) cmd_version ;;
   help|--help|-h|"") usage ;;

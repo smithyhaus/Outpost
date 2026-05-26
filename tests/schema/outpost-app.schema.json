@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/smithyhaus/outpost/blob/main/tests/schema/outpost-app.schema.json",
+  "title": "Outpost application onboarding manifest (outpost.app.yaml)",
+  "description": "Schema for outpost.app.yaml — the per-application descriptor that lives at the root of an APPLICATION repo (not the infras repo). Consumed by `outpost onboard <repo-or-path>` to render Caddy fragments, compose overrides, and/or k8s manifests into the local infras instance. Stable across patch and minor versions; new optional fields are additive.",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "type": "string",
+      "enum": ["outpost.dev/v1"],
+      "description": "Schema version. Locked to outpost.dev/v1 — bumped on breaking changes only."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["App"],
+      "description": "Resource kind. Always 'App' for this schema."
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "description": "Short DNS-1123 label. Used as the Caddyfile.d/<name>.caddy basename, the compose service name, and the k8s Application name. Must be unique within an outpost instance."
+        },
+        "description": {
+          "type": "string",
+          "description": "One-line human description. Surfaced in `outpost status` and verify reports."
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "required": ["tier"],
+      "additionalProperties": false,
+      "properties": {
+        "tier": {
+          "type": "string",
+          "enum": ["compose", "k3s"],
+          "description": "Where the app runs. `compose` = stateful sidecar on the data layer (shares the `infra` network). `k3s` = GitOps app via ArgoCD (image built by Tekton, deployed to the `apps` namespace)."
+        },
+        "compose": {
+          "type": "object",
+          "description": "Required when tier=compose. Defines the container the app runs as.",
+          "required": ["image"],
+          "additionalProperties": false,
+          "properties": {
+            "image": {
+              "type": "string",
+              "description": "Container image reference (e.g. ghcr.io/me/scm-mcp:latest)."
+            },
+            "container_name": {
+              "type": "string",
+              "description": "Container name on the infra network. Used by other services (and Caddy fragments) to address the app. Defaults to metadata.name."
+            },
+            "ports": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Optional list of ports to expose on the host (for direct localhost access during development). Format: 'HOST:CONTAINER' or 'CONTAINER' for ephemeral host port."
+            },
+            "env": {
+              "type": "object",
+              "additionalProperties": { "type": "string" },
+              "description": "Environment variables to inject. Values may reference outpost vars like ${ROOT_DOMAIN}, ${POSTGRES_PASSWORD} — resolved at compose render time."
+            },
+            "env_from_outpost": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Convenience list: names of outpost-managed vars (ROOT_DOMAIN, POSTGRES_URL, REDIS_URL, etc.) to expose to the container without explicit env entries."
+            },
+            "volumes": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Optional volume mounts. Standard docker-compose volume syntax."
+            },
+            "depends_on": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Optional list of infra services this app depends on (postgres, redis, rabbitmq, manticore)."
+            }
+          }
+        },
+        "k3s": {
+          "type": "object",
+          "description": "Required when tier=k3s. Points at the manifest repo + image registry that drive the GitOps deploy.",
+          "additionalProperties": false,
+          "properties": {
+            "manifest_repo": {
+              "type": "string",
+              "description": "Optional override for the manifests repo URL. Falls back to MANIFEST_REPO_URL from .env. Supports envsubst syntax — e.g. ${MY_APP_MANIFEST_REPO:-https://default/...}."
+            },
+            "manifest_branch": {
+              "type": "string",
+              "description": "Optional override for the deploy branch. Defaults to OUTPOST_DEPLOY_BRANCH from .env."
+            },
+            "manifest_path": {
+              "type": "string",
+              "description": "Optional override for the path inside the manifest repo to sync. Defaults to apps/<metadata.name>."
+            }
+          }
+        },
+        "routes": {
+          "type": "array",
+          "description": "Declarative HTTP route specification. Rendered to Caddyfile.d/<name>.caddy at onboard time. Each entry is one host block; rules within a host evaluate in order. For routing patterns the declarative form cannot express, use spec.caddy_fragment instead.",
+          "items": {
+            "type": "object",
+            "required": ["host"],
+            "additionalProperties": false,
+            "properties": {
+              "host": {
+                "type": "string",
+                "description": "Host header to match. May embed Caddy env-var syntax: '{$MYAPP_HOST:myapp}.{$ROOT_DOMAIN}'."
+              },
+              "rules": {
+                "type": "array",
+                "description": "Path-based sub-routes inside this host. Evaluated in order.",
+                "items": {
+                  "type": "object",
+                  "required": ["upstream"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "path": {
+                      "type": "array",
+                      "items": { "type": "string" },
+                      "description": "List of path matchers (e.g. ['/api/v1', '/api/v1/']). May use wildcards: '/api/*'."
+                    },
+                    "rewrite": {
+                      "type": "string",
+                      "description": "Full path rewrite — replaces the matched URI with this string before proxying."
+                    },
+                    "rewrite_path_prefix": {
+                      "type": "array",
+                      "items": { "type": "string" },
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "description": "Two-element [old_prefix, new_prefix]. Strips old_prefix from the URI and prepends new_prefix before proxying. Mutually exclusive with rewrite."
+                    },
+                    "upstream": {
+                      "type": "string",
+                      "description": "Backend target: 'container:port'. Container must be on the infra network (or use host.docker.internal:<port> for host-network services)."
+                    }
+                  }
+                }
+              },
+              "default_upstream": {
+                "type": "string",
+                "description": "Catch-all upstream for any request to this host that didn't match a rule. Optional — without it, unmatched paths return 404."
+              }
+            }
+          }
+        },
+        "caddy_fragment": {
+          "type": "string",
+          "description": "Raw Caddy DSL escape hatch. When `routes` cannot express a needed pattern (complex matchers, custom directives, header manipulation), provide the full fragment as a string. Mutually exclusive with `routes` — if both are set, onboard fails. The fragment must NOT declare its own `:80 { ... }` site block; it is inserted inside the main site block of the infras Caddyfile."
+        }
+      },
+      "oneOf": [
+        {
+          "description": "Either declarative routes or a raw caddy_fragment, never both.",
+          "not": {
+            "required": ["routes", "caddy_fragment"]
+          }
+        }
+      ]
+    }
+  }
+}

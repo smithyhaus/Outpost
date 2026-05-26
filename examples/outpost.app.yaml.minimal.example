@@ -1,0 +1,22 @@
+# =============================================================================
+# Minimal outpost.app.yaml — the smallest viable onboarding descriptor.
+# -----------------------------------------------------------------------------
+# Place at the root of your application repo. `outpost onboard <this-repo>`
+# reads it to register the app with a local outpost instance.
+#
+# This example: a single HTTP service exposed on hello.<ROOT_DOMAIN>, running
+# from a public image, no secrets, no extra envs.
+# =============================================================================
+apiVersion: outpost.dev/v1
+kind: App
+metadata:
+  name: hello
+  description: Minimal example service for the Outpost onboarding flow.
+spec:
+  tier: compose
+  compose:
+    image: nginxdemos/hello:latest
+    container_name: hello
+  routes:
+    - host: "{$HELLO_HOST:hello}.{$ROOT_DOMAIN}"
+      default_upstream: "hello:80"

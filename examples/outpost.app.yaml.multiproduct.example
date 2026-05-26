@@ -1,0 +1,57 @@
+# =============================================================================
+# Multi-product outpost.app.yaml — the SCM-MCP-style case.
+# -----------------------------------------------------------------------------
+# One container fans out to 3+ upstream ports on the same host. Demonstrates:
+#   - Multiple path-prefix matchers under one host
+#   - Path-rewrite trade-offs (trailing-slash conventions differ per upstream)
+#   - Dashboard split (/dash/api/* → API port, everything else → FE port)
+#   - Legacy alias retained for backward compat
+#
+# When the declarative `routes` form can express your needs, prefer it — the
+# resulting Caddyfile.d/ fragment is generated and validated.
+# When it can't (very rare), drop down to `caddy_fragment:` for raw DSL.
+# =============================================================================
+apiVersion: outpost.dev/v1
+kind: App
+metadata:
+  name: scm-mcp
+  description: Multi-product MCP platform (SCM Cloud / SCM 3.0 / LinkMind DI).
+spec:
+  tier: compose
+  compose:
+    image: ghcr.io/your-org/scm-mcp:latest
+    container_name: scm-mcp-app
+    env_from_outpost:
+      - ROOT_DOMAIN
+      - POSTGRES_URL
+      - REDIS_URL
+    depends_on:
+      - postgres
+      - redis
+  routes:
+    - host: "{$MCP_HOST:mcp}.{$ROOT_DOMAIN}"
+      rules:
+        # SCM Cloud (:8090) — upstream wants /mcp/ (trailing slash).
+        - path: ["/scm-cloud/mcp", "/scm-cloud/mcp/"]
+          rewrite: "/mcp/"
+          upstream: "scm-mcp-app:8090"
+        - path: ["/scm-cloud/mcp/*"]
+          rewrite_path_prefix: ["/scm-cloud", ""]
+          upstream: "scm-mcp-app:8090"
+        # SCM 3.0 (:8091) — upstream wants /mcp (no trailing slash).
+        - path: ["/scm-3/mcp", "/scm-3/mcp/"]
+          rewrite: "/mcp"
+          upstream: "scm-mcp-app:8091"
+        # LinkMind DI (:8092) — same shape as SCM 3.0.
+        - path: ["/linkmou-di/mcp", "/linkmou-di/mcp/"]
+          rewrite: "/mcp"
+          upstream: "scm-mcp-app:8092"
+        # Legacy /mcp — 30-day alias to SCM Cloud (remove once 0 traffic).
+        - path: ["/mcp", "/mcp/"]
+          rewrite: "/mcp/"
+          upstream: "scm-mcp-app:8090"
+        # Dashboard API split.
+        - path: ["/dash/api/*"]
+          upstream: "scm-mcp-app:8081"
+      # Dashboard FE catches everything else under this host.
+      default_upstream: "scm-mcp-app:8080"
