@@ -157,6 +157,18 @@ kubectl logs -n tekton-pipelines -l tekton.dev/pipelineRun=<run-name> \
   --all-containers --tail=200
 ```
 
+PipelineRun auto-cleanup (prevents kaniko buildup from exhausting node
+ephemeral-storage):
+
+- CronJob `tekton-pruner` sweeps hourly, deleting PRs whose
+  completion is older than `${OUTPOST_TEKTON_RETENTION_HOURS}` hours
+  (cascades to their TaskRuns + pods via owner-references).
+- Schedule: `${OUTPOST_TEKTON_PRUNE_SCHEDULE}` (override in `.env`).
+- Image: `${OUTPOST_TEKTON_PRUNER_IMAGE}`.
+- Manual trigger (don't wait for cron):
+  `kubectl create job --from=cronjob/tekton-pruner -n tekton-pipelines tekton-pruner-manual-$(date +%s)`
+- See [`06-troubleshooting.md` "Build pod reports Evicted"](docs/06-troubleshooting.md).
+
 ## 8. Docker Registry
 
 - Active plugin: `${REGISTRY_PLUGIN}`

@@ -1,0 +1,122 @@
+# =============================================================================
+# Tekton PipelineRun auto-pruner.
+# -----------------------------------------------------------------------------
+# Why this exists: Tekton does not GC finished PipelineRuns by default. Their
+# underlying pods (kaniko in particular) each hold 0.5–2 GB of ephemeral
+# storage in completed/Evicted state. After ~50 builds on a single-node k3d
+# host this triggers kubelet DiskPressure eviction mid-build — the symptom
+# is `step-write-url terminated, Reason: Evicted` on a fresh build pod, with
+# no application-level cause.
+#
+# This pruner sweeps once per hour by default, deleting PipelineRuns whose
+# completion time is older than ${OUTPOST_TEKTON_RETENTION_HOURS} hours. PR
+# deletion cascades to its TaskRuns + their pods via owner references, so
+# one sweep frees all the held ephemeral storage. The Tekton Dashboard still
+# shows recent runs (within the retention window) for debugging.
+#
+# RBAC scope: namespace-bound (Role, not ClusterRole). The pruner has no
+# permission outside tekton-pipelines, no ability to read Secrets, no ability
+# to touch Pipeline / Task / TriggerTemplate definitions. Compromise of the
+# pruner pod loses only the ability to delete PR/TR/pods in this one ns.
+#
+# Image: bitnami/kubectl — Docker Hub-hosted (China-accessible). Override
+# via OUTPOST_TEKTON_PRUNER_IMAGE if your operator has a private mirror.
+#
+# Script lives at scripts/tekton-prune.sh (separate file, not embedded here)
+# so it's mounted via kubectl-create-configmap-from-file at install time —
+# avoids envsubst's strict ${VAR} check tripping on shell variables.
+#
+# Tunables (.env):
+#   OUTPOST_TEKTON_RETENTION_HOURS   default 24 — keep last day for debugging
+#   OUTPOST_TEKTON_PRUNE_SCHEDULE    default "0 * * * *" — hourly
+#   OUTPOST_TEKTON_PRUNER_IMAGE      default bitnami/kubectl:1.31
+# =============================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tekton-pruner
+  namespace: tekton-pipelines
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tekton-pruner
+  namespace: tekton-pipelines
+rules:
+  - apiGroups: ["tekton.dev"]
+    resources: ["pipelineruns", "taskruns"]
+    verbs: ["get", "list", "delete"]
+  # Failed-pod sweep (defensive — owner-reference cascade should normally
+  # handle pod cleanup, but Evicted pods sometimes outlive their TaskRun).
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tekton-pruner
+  namespace: tekton-pipelines
+subjects:
+  - kind: ServiceAccount
+    name: tekton-pruner
+    namespace: tekton-pipelines
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: tekton-pruner
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: tekton-pruner
+  namespace: tekton-pipelines
+spec:
+  schedule: "${OUTPOST_TEKTON_PRUNE_SCHEDULE}"
+  # concurrencyPolicy=Forbid — a long sweep on a heavily loaded cluster
+  # must not overlap with the next tick (would race kubectl deletes).
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  # Bound how long a missed tick can chase its original schedule. 600s =
+  # 10min — if kubelet was down longer, skip the missed tick rather than
+  # firing a thundering herd on recovery.
+  startingDeadlineSeconds: 600
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          serviceAccountName: tekton-pruner
+          restartPolicy: OnFailure
+          containers:
+            - name: pruner
+              image: ${OUTPOST_TEKTON_PRUNER_IMAGE}
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/sh", "/script/tekton-prune.sh"]
+              env:
+                - name: OUTPOST_TEKTON_RETENTION_HOURS
+                  value: "${OUTPOST_TEKTON_RETENTION_HOURS}"
+              resources:
+                requests: { cpu: 50m,  memory: 64Mi }
+                limits:   { cpu: 200m, memory: 128Mi }
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 1000
+                readOnlyRootFilesystem: true
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: script
+                  mountPath: /script
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: script
+              configMap:
+                name: tekton-pruner-script
+                defaultMode: 0o555
+            - name: tmp
+              emptyDir: {}

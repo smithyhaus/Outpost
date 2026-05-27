@@ -111,6 +111,33 @@ kubectl logs -n tekton-pipelines deploy/el-build-listener --tail 200
   `kubectl -n tekton-pipelines get secret registry-credentials -o jsonpath='{.data.config\.json}' | base64 -d`
 - registry 不可达 → `kubectl exec -it <pod> -- wget -O- http://registry.<root>` 测试
 
+### Build pod 报 `Evicted` / `ephemeral-storage` 压力
+症状:fresh build 的 `step-write-url` 或 `step-build-and-push` 容器报 `Reason: Evicted` `The node was low on resource: ephemeral-storage`,代码本身没问题。
+
+根因:Tekton 默认不 GC 已完成的 PipelineRun。每个 kaniko build pod 占 0.5–2 GB ephemeral-storage,堆积到 ~50 个就把单节点 k3d 主机的 ephemeral 阈值压破,kubelet 开始 Evict 新 pod。
+
+修复方式(v0.5+ 已自动):Outpost 部署了 `tekton-pruner` CronJob,默认每小时扫一遍,删掉 24h 前完成的 PR(级联清掉它们的 TaskRun + pod,释放 ephemeral)。Dashboard 里 24h 内的 run 还能看,够调试。
+
+调参(在 `.env`):
+```env
+OUTPOST_TEKTON_RETENTION_HOURS=24       # 保留时长。资源紧张就降到 6
+OUTPOST_TEKTON_PRUNE_SCHEDULE="0 * * * *"  # 每小时;高频建议 "*/15 * * * *"
+```
+
+手动应急(被 evict 卡住 build 时):
+```bash
+# 立刻跑一次 prune(不等 cron)
+kubectl create job --from=cronjob/tekton-pruner -n tekton-pipelines tekton-pruner-manual-$(date +%s)
+# 看 prune 输出
+kubectl logs -n tekton-pipelines -l job-name=tekton-pruner-manual-...
+```
+
+确认问题真的是 ephemeral-storage:
+```bash
+kubectl describe node | grep -E "ephemeral-storage|DiskPressure"
+kubectl get pods -n tekton-pipelines --field-selector=status.phase=Failed
+```
+
 ### `admission webhook denied: tasks + finally > pipeline`
 你给 Pipeline 加了 task(或调大了某个 task 的 timeout),累加之和
 超过 `triggertemplate.yaml` 里 `timeouts.tasks` / `timeouts.finally`

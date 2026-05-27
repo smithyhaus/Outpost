@@ -155,6 +155,14 @@ kubectl logs -n tekton-pipelines -l tekton.dev/pipelineRun=<run> \
   --all-containers --tail=200
 ```
 
+PipelineRun 自动清理(防 kaniko 堆积压垮节点 ephemeral-storage):
+
+- CronJob `tekton-pruner` 每小时跑一次,删 `${OUTPOST_TEKTON_RETENTION_HOURS}` 小时前完成的 PR(级联清掉它们的 TaskRun + pod)
+- Schedule:`${OUTPOST_TEKTON_PRUNE_SCHEDULE}`(cron 表达式,可在 `.env` 改)
+- Image:`${OUTPOST_TEKTON_PRUNER_IMAGE}`
+- 手动应急(立即清一次):`kubectl create job --from=cronjob/tekton-pruner -n tekton-pipelines tekton-pruner-manual-$(date +%s)`
+- 详见 [`06-troubleshooting.md` "Build pod 报 Evicted"](docs/06-troubleshooting.md)
+
 ## 8. Docker Registry
 
 - 当前 plugin：`${REGISTRY_PLUGIN}`

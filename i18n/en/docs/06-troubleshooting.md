@@ -105,6 +105,45 @@ rejects the event.
   `kubectl -n tekton-pipelines get secret registry-credentials -o jsonpath='{.data.config\.json}' | base64 -d`
 - Registry unreachable → `kubectl exec -it <pod> -- wget -O- http://registry.<root>`
 
+### Build pod reports `Evicted` / ephemeral-storage pressure
+Symptom: a fresh build's `step-write-url` or `step-build-and-push`
+container terminates with `Reason: Evicted` and
+`The node was low on resource: ephemeral-storage`, with no application-
+level cause.
+
+Root cause: Tekton does not GC finished PipelineRuns by default. Each
+completed kaniko pod holds 0.5–2 GB of ephemeral storage. After ~50
+builds the single-node k3d host crosses the kubelet's ephemeral-storage
+threshold and starts Evicting fresh pods.
+
+Mitigation (automatic since v0.5+): Outpost installs a `tekton-pruner`
+CronJob that sweeps hourly, deleting PipelineRuns whose
+`status.completionTime` is older than 24h. PR deletion cascades to its
+TaskRuns + their pods via owner-references, releasing the held
+ephemeral storage. The Tekton Dashboard still shows runs within the
+retention window for debugging.
+
+Tunable via `.env`:
+```env
+OUTPOST_TEKTON_RETENTION_HOURS=24            # shorten if you're tight on disk
+OUTPOST_TEKTON_PRUNE_SCHEDULE="0 * * * *"    # hourly; for hot clusters try "*/15 * * * *"
+```
+
+If you're stuck mid-incident (cron next tick is too far away):
+```bash
+# Fire the pruner now without waiting for the schedule
+kubectl create job --from=cronjob/tekton-pruner -n tekton-pipelines \
+  tekton-pruner-manual-$(date +%s)
+# Watch its output
+kubectl logs -n tekton-pipelines -l job-name=tekton-pruner-manual-...
+```
+
+Confirm the diagnosis:
+```bash
+kubectl describe node | grep -E "ephemeral-storage|DiskPressure"
+kubectl get pods -n tekton-pipelines --field-selector=status.phase=Failed
+```
+
 ### `admission webhook denied: tasks + finally > pipeline`
 You added a Pipeline task (or bumped one's per-task timeout) and the
 sum exceeded `triggertemplate.yaml`'s `timeouts.tasks` /

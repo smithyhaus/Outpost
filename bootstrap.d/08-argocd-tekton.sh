@@ -115,25 +115,41 @@ log "Applying git-provider plugin: ${GIT_PROVIDER_PLUGIN}"
 render_apply "plugins/git-provider/${GIT_PROVIDER_PLUGIN}/manifest.yaml"
 ok "Git-provider plugin applied"
 
-# Catalog tasks (git-clone, kaniko) — applied as namespace-scoped Tasks in
-# tekton-pipelines. ClusterTask was removed from tekton.dev/v1 in Tekton
-# v0.50; pipeline-build.yaml references these via `kind: Task`.
+# Catalog tasks (git-clone, kaniko) — vendored under core/k8s/05-tekton/catalog/
+# to (a) avoid silent breakage when raw.githubusercontent.com/.../main/...
+# mutates, and (b) eliminate the bootstrap-time network dependency on
+# raw.githubusercontent.com (intermittently throttled/blocked in CN).
+# Regenerate with `bash scripts/vendor-tekton-catalog.sh`.
 #
-# Versions chosen for Tekton tekton.dev/v1 API compatibility:
-#   git-clone 0.10 — current v1 API, supersedes 0.9 (v1beta1)
-#   kaniko    0.7  — current v1 API. NOTE: marked deprecated upstream;
-#                    pinned executor v1.5.1 is a multi-arch manifest list
+# Versions:
+#   git-clone 0.10 — current tekton.dev/v1 API, supersedes 0.9 (v1beta1)
+#   kaniko    0.7  — current v1 API. Kaniko upstream archived 2025-06-03;
+#                    catalog task marked deprecated. Replacement tracked
+#                    in TODOS.md ("buildah / kaniko v1.20+ replacement").
+#                    Pinned executor v1.5.1 is a multi-arch manifest list
 #                    (incl. linux/arm64), so Apple Silicon k3d works.
-#                    See TODOS.md for replacement plan (buildah/kaniko v1.20+).
-kubectl apply -n tekton-pipelines \
-  -f https://raw.githubusercontent.com/tektoncd/catalog/main/task/git-clone/0.10/git-clone.yaml
-kubectl apply -n tekton-pipelines \
-  -f https://raw.githubusercontent.com/tektoncd/catalog/main/task/kaniko/0.7/kaniko.yaml
+kubectl apply -n tekton-pipelines -f core/k8s/05-tekton/catalog/git-clone-0.10.yaml
+kubectl apply -n tekton-pipelines -f core/k8s/05-tekton/catalog/kaniko-0.7.yaml
 
 # Tekton RBAC + secrets + pipeline + binding/template
 kubectl apply -f core/k8s/05-tekton/rbac.yaml
 render_apply "core/k8s/05-tekton/secrets.template.yaml"
 render_apply "core/k8s/05-tekton/pipeline-build.yaml"
+
+# Tekton PipelineRun auto-pruner. Without this CronJob, finished PRs (and
+# their kaniko build pods, ~1 GB ephemeral each) accumulate until the node
+# hits DiskPressure and starts Evicting fresh builds. Hourly sweep keeps
+# the namespace within bounded ephemeral usage. RBAC is namespace-scoped.
+#
+# Script split pattern (same as notify-fanout / update-manifest): canonical
+# source in scripts/tekton-prune.sh, mounted via ConfigMap. Re-apply on every
+# bootstrap so script edits take effect without manual surgery.
+kubectl create configmap tekton-pruner-script \
+  --from-file=tekton-prune.sh=scripts/tekton-prune.sh \
+  -n tekton-pipelines \
+  --dry-run=client -o yaml | kubectl apply -f -
+render_apply "core/k8s/05-tekton/pruner.yaml"
+ok "Tekton auto-pruner installed (retain ${OUTPOST_TEKTON_RETENTION_HOURS}h, schedule '${OUTPOST_TEKTON_PRUNE_SCHEDULE}')"
 
 # update-manifest Task is split: scripts/update-manifest.sh is the canonical
 # source, mounted into the Task via this ConfigMap. Re-apply on every run so
