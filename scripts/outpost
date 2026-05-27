@@ -64,7 +64,12 @@ $(_yellow USAGE)
 
 $(_yellow PLATFORM)
   status                            Compose + k8s overview (= status.sh)
-  verify [--app <name>]             Health checks; --app filters to one app
+  verify [--app <name>] [--namespace <ns>]
+                                    Health checks; --app filters to one app.
+                                    Namespace auto-resolves from ArgoCD
+                                    Application's spec.destination.namespace
+                                    (default 'apps' for repo's hello-world
+                                    style). Override with --namespace.
   doctor [--egress h1,h2]           Pre-bootstrap preflight — catch
                                     port/Docker/DNS/token failures up front
   open <argocd|tekton|rollouts|search|mq|registry>
@@ -144,10 +149,11 @@ cmd_doctor() {
 }
 
 cmd_verify() {
-  local app=""
+  local app="" ns_override=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --app) app="${2:-}"; shift 2 ;;
+      --namespace|-n) ns_override="${2:-}"; shift 2 ;;
       *) shift ;;
     esac
   done
@@ -160,17 +166,30 @@ cmd_verify() {
       -o jsonpath='  sync:   {.status.sync.status}{"\n  health: "}{.status.health.status}{"\n  rev:    "}{.status.sync.revision}{"\n"}' \
       2>/dev/null || echo "  (not found in argocd namespace)"
     echo ""
-    echo "Pods in apps namespace (label app=$app):"
-    kubectl get pod -n apps -l "app=$app" 2>&1 | head -20
+
+    # Resolve the app's namespace: --namespace > ArgoCD destination.namespace > 'apps'.
+    # Apps that pick a non-shared ns (e.g. an `apiVersion: v1\nkind: Namespace`
+    # in their manifest, or destination.namespace=<own-ns>) would otherwise
+    # show 'No resources found' here even when running fine — `apps` is the
+    # convention for hello-world examples, NOT a hard requirement.
+    local ns="$ns_override"
+    if [[ -z "$ns" ]]; then
+      ns="$(kubectl get application -n argocd "$app" \
+        -o jsonpath='{.spec.destination.namespace}' 2>/dev/null)"
+    fi
+    ns="${ns:-apps}"
+
+    echo "Pods in $ns namespace (label app=$app):"
+    kubectl get pod -n "$ns" -l "app=$app" 2>&1 | head -20
     echo ""
     echo "Recent PipelineRuns (label app=$app):"
     kubectl get pipelinerun -n tekton-pipelines \
       --sort-by=.metadata.creationTimestamp 2>/dev/null | grep -E "^build-${app}-" | tail -3 \
       || echo "  (none)"
     echo ""
-    echo "Recent events in $app namespace (if it exists):"
-    kubectl get events -n "$app" --sort-by=.lastTimestamp 2>/dev/null | tail -10 \
-      || echo "  (no $app namespace)"
+    echo "Recent events in $ns namespace:"
+    kubectl get events -n "$ns" --sort-by=.lastTimestamp 2>/dev/null | tail -10 \
+      || echo "  (no events)"
   else
     exec bash "$OUTPOST_HOME/verify.sh" "$@"
   fi

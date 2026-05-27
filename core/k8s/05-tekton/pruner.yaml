@@ -19,8 +19,15 @@
 # to touch Pipeline / Task / TriggerTemplate definitions. Compromise of the
 # pruner pod loses only the ability to delete PR/TR/pods in this one ns.
 #
-# Image: bitnami/kubectl — Docker Hub-hosted (China-accessible). Override
-# via OUTPOST_TEKTON_PRUNER_IMAGE if your operator has a private mirror.
+# Image: alpine/k8s — alpine-based multi-tool with kubectl + sh + jq + awk
+# already inside. Reliably available on Docker Hub and small (~80 MB).
+# Override via OUTPOST_TEKTON_PRUNER_IMAGE for a private mirror.
+#
+# Notes from picking this:
+#  - bitnami/kubectl:1.31 → 404 on Docker Hub (Bitnami restructured tags in 2024)
+#  - rancher/kubectl:v1.31.0 → scratch image, no /bin/sh, so our script
+#    (which uses POSIX sh) cannot exec inside it.
+#  alpine/k8s sidesteps both.
 #
 # Script lives at scripts/tekton-prune.sh (separate file, not embedded here)
 # so it's mounted via kubectl-create-configmap-from-file at install time —

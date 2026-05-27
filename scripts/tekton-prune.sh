@@ -2,7 +2,7 @@
 # =============================================================================
 # Tekton PipelineRun auto-pruner — run by the tekton-pruner CronJob.
 # -----------------------------------------------------------------------------
-# POSIX sh — runs in bitnami/kubectl which is minideb-based (no bash).
+# POSIX sh — runs in alpine/k8s (busybox sh, busybox date, etc).
 #
 # What it does:
 #   1. Compute UTC cutoff = now - ${OUTPOST_TEKTON_RETENTION_HOURS} hours.
@@ -26,11 +26,14 @@ set -eu
 NS=tekton-pipelines
 RETAIN_HOURS="${OUTPOST_TEKTON_RETENTION_HOURS:-24}"
 
-# GNU date (linux) supports `-d "-Nh"`; BSD date (mac) uses `-v -NH`.
-# The image is linux, so the GNU form is the working path; fallback keeps
-# the script trivially runnable in local dev for testing.
-cutoff="$(date -u -d "-${RETAIN_HOURS} hours" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
-  || date -u -v "-${RETAIN_HOURS}H" +%Y-%m-%dT%H:%M:%SZ)"
+# Compute UTC cutoff. We avoid `date -d "-Nh"` (GNU-only) and `date -v -NH`
+# (BSD-only) because the production runtime is busybox `date` in alpine/k8s,
+# which supports neither. Epoch math via `date -d @SECONDS` is POSIX-portable
+# and works in busybox, GNU coreutils, and macOS BSD date alike.
+now_s=$(date -u +%s)
+cutoff_s=$(( now_s - RETAIN_HOURS * 3600 ))
+cutoff="$(date -u -d "@${cutoff_s}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+  || date -u -r "${cutoff_s}" +%Y-%m-%dT%H:%M:%SZ)"
 
 echo "[$(date -u +%FT%TZ)] prune: cutoff=${cutoff} (retain last ${RETAIN_HOURS}h)"
 

@@ -45,12 +45,12 @@ teardown() {
 @test "pruner manifest renders cleanly with all three OUTPOST_TEKTON_* env" {
   export OUTPOST_TEKTON_RETENTION_HOURS=24
   export OUTPOST_TEKTON_PRUNE_SCHEDULE="0 * * * *"
-  export OUTPOST_TEKTON_PRUNER_IMAGE="bitnami/kubectl:1.31"
+  export OUTPOST_TEKTON_PRUNER_IMAGE="alpine/k8s:1.31.0"
   out="$TMP/pruner.yaml"
   run render_template "$MANIFEST" "$out"
   [ "$status" -eq 0 ]
   grep -q 'schedule: "0 \* \* \* \*"' "$out"
-  grep -q 'image: bitnami/kubectl:1.31' "$out"
+  grep -q 'image: alpine/k8s:1.31.0' "$out"
   grep -q 'value: "24"' "$out"
   unset OUTPOST_TEKTON_RETENTION_HOURS OUTPOST_TEKTON_PRUNE_SCHEDULE OUTPOST_TEKTON_PRUNER_IMAGE
 }
@@ -58,7 +58,7 @@ teardown() {
 @test "pruner manifest strict-render rejects missing OUTPOST_TEKTON_RETENTION_HOURS" {
   unset OUTPOST_TEKTON_RETENTION_HOURS
   export OUTPOST_TEKTON_PRUNE_SCHEDULE="0 * * * *"
-  export OUTPOST_TEKTON_PRUNER_IMAGE="bitnami/kubectl:1.31"
+  export OUTPOST_TEKTON_PRUNER_IMAGE="alpine/k8s:1.31.0"
   run render_template "$MANIFEST" "$TMP/should-not-exist.yaml"
   [ "$status" -ne 0 ]
   [[ "$output" =~ "OUTPOST_TEKTON_RETENTION_HOURS" ]]
@@ -131,7 +131,12 @@ EOF
 @test "phase 2 sets all three OUTPOST_TEKTON_* defaults" {
   grep -qE 'OUTPOST_TEKTON_RETENTION_HOURS="\$\{OUTPOST_TEKTON_RETENTION_HOURS:-24\}"' "$PHASE2"
   grep -qE 'OUTPOST_TEKTON_PRUNE_SCHEDULE="\$\{OUTPOST_TEKTON_PRUNE_SCHEDULE:-0 \* \* \* \*\}"' "$PHASE2"
-  grep -qE 'OUTPOST_TEKTON_PRUNER_IMAGE="\$\{OUTPOST_TEKTON_PRUNER_IMAGE:-bitnami/kubectl:1\.31\}"' "$PHASE2"
+  grep -qE 'OUTPOST_TEKTON_PRUNER_IMAGE="\$\{OUTPOST_TEKTON_PRUNER_IMAGE:-alpine/k8s:1\.31\.0\}"' "$PHASE2"
+  # Documentation guard: the manifest header must explain WHY we picked
+  # alpine/k8s over bitnami/rancher/etc, so a future maintainer doesn't
+  # "fix" it back into a broken image. Image needs BOTH kubectl AND /bin/sh.
+  grep -qE 'bitnami.*404|rancher.*scratch|no /bin/sh' "$MANIFEST" \
+    || fail "pruner manifest header missing the alpine/k8s rationale"
 }
 
 @test "phase 2 persists OUTPOST_TEKTON_PRUNE_SCHEDULE with quotes (spaces survive .env round-trip)" {
