@@ -1,5 +1,5 @@
 # =============================================================================
-# Resource controls on the `apps` namespace.
+# Resource controls on the `apps` namespace (multi-tenant shared ns).
 # -----------------------------------------------------------------------------
 # **Why this exists:** without quota/limits, a single runaway application
 # (Java OOM-loop, a misconfigured Stream.generate, etc.) can pin every
@@ -7,10 +7,19 @@
 # registry along the way. Outpost is positioned as "all my projects on
 # one box"; that's exactly the failure mode this defends against.
 #
+# **Design philosophy** — apps ns is a SHARED ns for multiple small/medium
+# apps. Defaults must be cheap enough to schedule, ceilings high enough
+# that real workloads aren't choked. Key insight: CPU overcommits cleanly
+# in Kubernetes (limits > requests is normal and healthy), so the quota's
+# limits.cpu can be much larger than requests.cpu without risking the
+# host. Memory does NOT overcommit safely → limits.memory stays close to
+# physical RAM minus reservations for the platform plane.
+#
 # Numbers are tuned for a 32GB Apple Silicon dev host (the project's
-# current reference platform). Edit per actual host capacity:
-#   8GB  RAM  → halve everything
-#   64GB RAM  → safe to double
+# reference platform). Adjustments per actual host:
+#   8GB  RAM  → halve memory rows, keep CPU rows
+#   64GB RAM → double memory rows, double CPU limit
+# CPU rows are deliberately generous — overcommit is a feature, not a bug.
 # =============================================================================
 apiVersion: v1
 kind: ResourceQuota
@@ -19,19 +28,30 @@ metadata:
   namespace: apps
 spec:
   hard:
-    pods: "30"
-    requests.cpu: "4"
+    # Tenant count — empirically a single dev host hosts ~5–10 apps;
+    # 50 pods leaves room for replicas + Argo Rollouts canary clones.
+    pods: "50"
+    # Requests = the kubelet's reservation guarantee. Aligned with the
+    # 8-vCPU baseline of a 2021 Apple Silicon dev host.
+    requests.cpu: "8"
     requests.memory: "8Gi"
-    limits.cpu: "8"
-    limits.memory: "16Gi"
+    # Limits = the burst ceiling. CPU overcommits — apps can claim 2 CPU
+    # limit each while requesting 100m, and the kernel CFS shares fairly
+    # under contention. limits.memory stays close to physical: 32GB host
+    # minus ~8GB for OS/Docker/k3s control plane → 24Gi for apps.
+    limits.cpu: "16"
+    limits.memory: "24Gi"
 ---
 # Default container resources — applied to every Pod that doesn't declare
 # its own. Without a LimitRange, Pods with NO requests at all get scheduled
 # anywhere and quota counts them as 0 — effectively unlimited.
 #
-# Defaults sized so a typical dev app (Go binary, small Python service,
-# Node API) fits without thinking; heavier runtimes (Java/.NET) MUST set
-# their own limits explicitly. `max` caps single-pod blast radius.
+# Defaults are deliberately small so containers can SCHEDULE cheaply:
+# Go binaries idle at ~10–30m, Node services ~50–100m, Python WSGI under
+# 50m. 50m request gets the pod placed; the 500m default limit lets it
+# burst when traffic arrives. Apps that need more (Java startup, ML
+# inference) MUST set their own resources explicitly. `max` is the
+# single-container blast-radius cap regardless of declarations.
 apiVersion: v1
 kind: LimitRange
 metadata:
@@ -41,10 +61,10 @@ spec:
   limits:
     - type: Container
       defaultRequest:
-        cpu: "100m"
-        memory: "128Mi"
+        cpu: "50m"
+        memory: "64Mi"
       default:
-        cpu: "1"
+        cpu: "500m"
         memory: "512Mi"
       max:
         cpu: "4"
