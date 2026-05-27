@@ -93,6 +93,31 @@ ROLLOUT_PLUGIN="${ROLLOUT_PLUGIN:-argo-rollouts}"
 ROLLOUTS_DASHBOARD_HOST="${ROLLOUTS_DASHBOARD_HOST:-rollouts.${ROOT_DOMAIN}}"
 NOTIFICATION_PROVIDERS="${NOTIFICATION_PROVIDERS:-}"
 
+# Apps namespace ResourceQuota + LimitRange — dynamic per host capacity.
+# Pure auto-detect from sysctl (macOS) or /proc/meminfo + nproc (Linux);
+# values can be pinned by setting OUTPOST_APPS_* in .env BEFORE bootstrap.
+# Formula in platform/lib/host-capacity.sh; mathematically:
+#   8GB / 4-CPU laptop   → quota.limits.cpu=8,  limits.memory=6Gi
+#   32GB / 8-CPU desktop → quota.limits.cpu=16, limits.memory=24Gi
+#   64GB / 16-CPU rig    → quota.limits.cpu=32, limits.memory=48Gi
+# CPU overcommits cleanly in K8s → limits.cpu is intentionally 2× host vCPU.
+# Memory does NOT overcommit safely → limits.memory stays at ~3/4 host.
+_apps_q=( $(apps_quota_defaults) )
+OUTPOST_APPS_PODS_MAX="${OUTPOST_APPS_PODS_MAX:-${_apps_q[0]}}"
+OUTPOST_APPS_REQUESTS_CPU="${OUTPOST_APPS_REQUESTS_CPU:-${_apps_q[1]}}"
+OUTPOST_APPS_LIMITS_CPU="${OUTPOST_APPS_LIMITS_CPU:-${_apps_q[2]}}"
+OUTPOST_APPS_REQUESTS_MEMORY="${OUTPOST_APPS_REQUESTS_MEMORY:-${_apps_q[3]}Gi}"
+OUTPOST_APPS_LIMITS_MEMORY="${OUTPOST_APPS_LIMITS_MEMORY:-${_apps_q[4]}Gi}"
+unset _apps_q
+# LimitRange defaults — host-independent (describes what a "small dev service"
+# looks like, not what the host can fit). Overridable for unusual app profiles.
+OUTPOST_APPS_DEFAULT_REQUEST_CPU="${OUTPOST_APPS_DEFAULT_REQUEST_CPU:-50m}"
+OUTPOST_APPS_DEFAULT_REQUEST_MEMORY="${OUTPOST_APPS_DEFAULT_REQUEST_MEMORY:-64Mi}"
+OUTPOST_APPS_DEFAULT_LIMIT_CPU="${OUTPOST_APPS_DEFAULT_LIMIT_CPU:-500m}"
+OUTPOST_APPS_DEFAULT_LIMIT_MEMORY="${OUTPOST_APPS_DEFAULT_LIMIT_MEMORY:-512Mi}"
+OUTPOST_APPS_MAX_CPU="${OUTPOST_APPS_MAX_CPU:-4}"
+OUTPOST_APPS_MAX_MEMORY="${OUTPOST_APPS_MAX_MEMORY:-8Gi}"
+
 # Tekton PipelineRun auto-pruner (CronJob in tekton-pipelines ns).
 # Without these defaults Tekton never GCs finished PipelineRuns; their
 # kaniko build pods accumulate ~1 GB ephemeral-storage each and after
@@ -227,6 +252,19 @@ fi
   echo "ROLLOUT_PLUGIN=${ROLLOUT_PLUGIN}"
   echo "ROLLOUTS_DASHBOARD_HOST=${ROLLOUTS_DASHBOARD_HOST}"
   echo "NOTIFICATION_PROVIDERS=${NOTIFICATION_PROVIDERS}"
+  # Apps ns ResourceQuota — dynamic-per-host, but persisted so subsequent
+  # bootstraps + status.sh + verify.sh agree on what's installed.
+  echo "OUTPOST_APPS_PODS_MAX=${OUTPOST_APPS_PODS_MAX}"
+  echo "OUTPOST_APPS_REQUESTS_CPU=${OUTPOST_APPS_REQUESTS_CPU}"
+  echo "OUTPOST_APPS_LIMITS_CPU=${OUTPOST_APPS_LIMITS_CPU}"
+  echo "OUTPOST_APPS_REQUESTS_MEMORY=${OUTPOST_APPS_REQUESTS_MEMORY}"
+  echo "OUTPOST_APPS_LIMITS_MEMORY=${OUTPOST_APPS_LIMITS_MEMORY}"
+  echo "OUTPOST_APPS_DEFAULT_REQUEST_CPU=${OUTPOST_APPS_DEFAULT_REQUEST_CPU}"
+  echo "OUTPOST_APPS_DEFAULT_REQUEST_MEMORY=${OUTPOST_APPS_DEFAULT_REQUEST_MEMORY}"
+  echo "OUTPOST_APPS_DEFAULT_LIMIT_CPU=${OUTPOST_APPS_DEFAULT_LIMIT_CPU}"
+  echo "OUTPOST_APPS_DEFAULT_LIMIT_MEMORY=${OUTPOST_APPS_DEFAULT_LIMIT_MEMORY}"
+  echo "OUTPOST_APPS_MAX_CPU=${OUTPOST_APPS_MAX_CPU}"
+  echo "OUTPOST_APPS_MAX_MEMORY=${OUTPOST_APPS_MAX_MEMORY}"
   echo "OUTPOST_TEKTON_RETENTION_HOURS=${OUTPOST_TEKTON_RETENTION_HOURS}"
   echo "OUTPOST_TEKTON_PRUNE_SCHEDULE=\"${OUTPOST_TEKTON_PRUNE_SCHEDULE}\""
   echo "OUTPOST_TEKTON_PRUNER_IMAGE=${OUTPOST_TEKTON_PRUNER_IMAGE}"

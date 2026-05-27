@@ -15,11 +15,15 @@
 # host. Memory does NOT overcommit safely → limits.memory stays close to
 # physical RAM minus reservations for the platform plane.
 #
-# Numbers are tuned for a 32GB Apple Silicon dev host (the project's
-# reference platform). Adjustments per actual host:
-#   8GB  RAM  → halve memory rows, keep CPU rows
-#   64GB RAM → double memory rows, double CPU limit
-# CPU rows are deliberately generous — overcommit is a feature, not a bug.
+# **Dynamic per host:** values below are env-substituted by render_apply
+# at bootstrap time. bootstrap.d/02-config.sh auto-detects host capacity
+# via sysctl (macOS) / nproc + /proc/meminfo (Linux) and computes:
+#   requests.cpu     = max(1,   host_cpu / 2)
+#   limits.cpu       = host_cpu * 2                  (overcommit OK)
+#   requests.memory  = max(1Gi, host_mem_gb / 4)Gi
+#   limits.memory    = max(3Gi, host_mem_gb * 3 / 4)Gi
+# Override any of these by setting the corresponding OUTPOST_APPS_* env
+# in .env before re-running bootstrap.sh.
 # =============================================================================
 apiVersion: v1
 kind: ResourceQuota
@@ -28,19 +32,11 @@ metadata:
   namespace: apps
 spec:
   hard:
-    # Tenant count — empirically a single dev host hosts ~5–10 apps;
-    # 50 pods leaves room for replicas + Argo Rollouts canary clones.
-    pods: "50"
-    # Requests = the kubelet's reservation guarantee. Aligned with the
-    # 8-vCPU baseline of a 2021 Apple Silicon dev host.
-    requests.cpu: "8"
-    requests.memory: "8Gi"
-    # Limits = the burst ceiling. CPU overcommits — apps can claim 2 CPU
-    # limit each while requesting 100m, and the kernel CFS shares fairly
-    # under contention. limits.memory stays close to physical: 32GB host
-    # minus ~8GB for OS/Docker/k3s control plane → 24Gi for apps.
-    limits.cpu: "16"
-    limits.memory: "24Gi"
+    pods: "${OUTPOST_APPS_PODS_MAX}"
+    requests.cpu: "${OUTPOST_APPS_REQUESTS_CPU}"
+    requests.memory: "${OUTPOST_APPS_REQUESTS_MEMORY}"
+    limits.cpu: "${OUTPOST_APPS_LIMITS_CPU}"
+    limits.memory: "${OUTPOST_APPS_LIMITS_MEMORY}"
 ---
 # Default container resources — applied to every Pod that doesn't declare
 # its own. Without a LimitRange, Pods with NO requests at all get scheduled
@@ -48,10 +44,14 @@ spec:
 #
 # Defaults are deliberately small so containers can SCHEDULE cheaply:
 # Go binaries idle at ~10–30m, Node services ~50–100m, Python WSGI under
-# 50m. 50m request gets the pod placed; the 500m default limit lets it
+# 50m. The defaultRequest gets the pod placed; the default limit lets it
 # burst when traffic arrives. Apps that need more (Java startup, ML
 # inference) MUST set their own resources explicitly. `max` is the
 # single-container blast-radius cap regardless of declarations.
+#
+# These are NOT auto-scaled with host capacity — they describe what a
+# "small dev service" looks like, which is host-independent. They're
+# still env-overridable for operators with unusual app profiles.
 apiVersion: v1
 kind: LimitRange
 metadata:
@@ -61,11 +61,11 @@ spec:
   limits:
     - type: Container
       defaultRequest:
-        cpu: "50m"
-        memory: "64Mi"
+        cpu: "${OUTPOST_APPS_DEFAULT_REQUEST_CPU}"
+        memory: "${OUTPOST_APPS_DEFAULT_REQUEST_MEMORY}"
       default:
-        cpu: "500m"
-        memory: "512Mi"
+        cpu: "${OUTPOST_APPS_DEFAULT_LIMIT_CPU}"
+        memory: "${OUTPOST_APPS_DEFAULT_LIMIT_MEMORY}"
       max:
-        cpu: "4"
-        memory: "8Gi"
+        cpu: "${OUTPOST_APPS_MAX_CPU}"
+        memory: "${OUTPOST_APPS_MAX_MEMORY}"

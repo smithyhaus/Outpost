@@ -40,5 +40,5 @@ fi
 
 kubectl wait --for=condition=Ready nodes --all --timeout=180s
 kubectl apply -f core/k8s/00-namespaces.yaml
-kubectl apply -f core/k8s/02-apps-resource-controls.yaml
+render_apply "core/k8s/02-apps-resource-controls.template.yaml"
 ok "k3s ready, namespaces + apps resource controls applied"
