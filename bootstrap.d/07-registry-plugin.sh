@@ -9,6 +9,24 @@ log "Applying registry plugin: ${REGISTRY_PLUGIN}"
 render_apply "plugins/registry/${REGISTRY_PLUGIN}/manifest.yaml"
 ok "Registry plugin applied"
 
+# Registry GC CronJob — only meaningful for self-hosted (aliyun-acr has
+# server-side retention). Without this, every CI push leaks blobs forever
+# and the 50Gi registry PVC fills, triggering kubelet DiskPressure →
+# Evicted build pods (the exact incident this lib was added in response to).
+if [[ "$REGISTRY_PLUGIN" == "self-hosted" ]]; then
+  # Both scripts live in one CM: registry-gc-outer.sh (runs in alpine/k8s
+  # cronjob pod, locates registry pod, kubectl-exec's the inner) and
+  # registry-gc.sh (runs INSIDE the registry pod for FS access + registry
+  # binary). Same split-pattern as tekton-prune.sh + notify-fanout.sh.
+  kubectl create configmap registry-gc-script \
+    --from-file=registry-gc-outer.sh=scripts/registry-gc-outer.sh \
+    --from-file=registry-gc.sh=scripts/registry-gc.sh \
+    -n registry \
+    --dry-run=client -o yaml | kubectl apply -f -
+  render_apply "plugins/registry/self-hosted/gc.yaml"
+  ok "Registry GC installed (keep ${OUTPOST_REGISTRY_KEEP_TAGS_PER_REPO} tags/repo, schedule '${OUTPOST_REGISTRY_GC_SCHEDULE}')"
+fi
+
 # Configure containerd to use the in-cluster docker-registry as a mirror for
 # `registry.${ROOT_DOMAIN}`. Without this, k8s pulls go through cloudflared,
 # which has an HTTP/2 PROTOCOL_ERROR ceiling on large blob transfers

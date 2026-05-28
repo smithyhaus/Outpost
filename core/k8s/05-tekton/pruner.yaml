@@ -96,6 +96,15 @@ spec:
         spec:
           serviceAccountName: tekton-pruner
           restartPolicy: OnFailure
+          # Tolerate DiskPressure NoSchedule taint — this pod's job is to
+          # relieve DiskPressure by deleting old PRs + their pods. Without
+          # this toleration, kubelet's taint blocks the pruner from
+          # scheduling and the only recovery is manual intervention. Same
+          # rationale as registry-gc — see plugins/registry/self-hosted/gc.yaml.
+          tolerations:
+            - key: node.kubernetes.io/disk-pressure
+              operator: Exists
+              effect: NoSchedule
           containers:
             - name: pruner
               image: ${OUTPOST_TEKTON_PRUNER_IMAGE}
@@ -104,9 +113,18 @@ spec:
               env:
                 - name: OUTPOST_TEKTON_RETENTION_HOURS
                   value: "${OUTPOST_TEKTON_RETENTION_HOURS}"
+                - name: OUTPOST_TEKTON_KEEP_LAST_N
+                  value: "${OUTPOST_TEKTON_KEEP_LAST_N}"
               resources:
-                requests: { cpu: 50m,  memory: 64Mi }
-                limits:   { cpu: 200m, memory: 128Mi }
+                # ephemeral-storage request is essential: this pod's job
+                # is to RELIEVE DiskPressure by deleting old PRs. Without
+                # this request, kubelet evicts the pruner FIRST under
+                # pressure — chicken-and-egg failure mode hit during the
+                # incident that motivated the pruner in the first place.
+                # 100Mi is enough for kubectl + logs; the actual deletes
+                # don't write to our pod's FS.
+                requests: { cpu: 50m,  memory: 64Mi,  ephemeral-storage: 100Mi }
+                limits:   { cpu: 200m, memory: 128Mi, ephemeral-storage: 256Mi }
               securityContext:
                 runAsNonRoot: true
                 runAsUser: 1000

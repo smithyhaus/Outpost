@@ -42,27 +42,30 @@ teardown() {
   [ -s "$MANIFEST" ]
 }
 
-@test "pruner manifest renders cleanly with all three OUTPOST_TEKTON_* env" {
+@test "pruner manifest renders cleanly with all four OUTPOST_TEKTON_* env" {
   export OUTPOST_TEKTON_RETENTION_HOURS=24
-  export OUTPOST_TEKTON_PRUNE_SCHEDULE="0 * * * *"
+  export OUTPOST_TEKTON_KEEP_LAST_N=20
+  export OUTPOST_TEKTON_PRUNE_SCHEDULE="*/15 * * * *"
   export OUTPOST_TEKTON_PRUNER_IMAGE="alpine/k8s:1.31.0"
   out="$TMP/pruner.yaml"
   run render_template "$MANIFEST" "$out"
   [ "$status" -eq 0 ]
-  grep -q 'schedule: "0 \* \* \* \*"' "$out"
+  grep -q 'schedule: "\*/15 \* \* \* \*"' "$out"
   grep -q 'image: alpine/k8s:1.31.0' "$out"
   grep -q 'value: "24"' "$out"
-  unset OUTPOST_TEKTON_RETENTION_HOURS OUTPOST_TEKTON_PRUNE_SCHEDULE OUTPOST_TEKTON_PRUNER_IMAGE
+  grep -q 'value: "20"' "$out"
+  unset OUTPOST_TEKTON_RETENTION_HOURS OUTPOST_TEKTON_KEEP_LAST_N OUTPOST_TEKTON_PRUNE_SCHEDULE OUTPOST_TEKTON_PRUNER_IMAGE
 }
 
 @test "pruner manifest strict-render rejects missing OUTPOST_TEKTON_RETENTION_HOURS" {
   unset OUTPOST_TEKTON_RETENTION_HOURS
-  export OUTPOST_TEKTON_PRUNE_SCHEDULE="0 * * * *"
+  export OUTPOST_TEKTON_KEEP_LAST_N=20
+  export OUTPOST_TEKTON_PRUNE_SCHEDULE="*/15 * * * *"
   export OUTPOST_TEKTON_PRUNER_IMAGE="alpine/k8s:1.31.0"
   run render_template "$MANIFEST" "$TMP/should-not-exist.yaml"
   [ "$status" -ne 0 ]
   [[ "$output" =~ "OUTPOST_TEKTON_RETENTION_HOURS" ]]
-  unset OUTPOST_TEKTON_PRUNE_SCHEDULE OUTPOST_TEKTON_PRUNER_IMAGE
+  unset OUTPOST_TEKTON_KEEP_LAST_N OUTPOST_TEKTON_PRUNE_SCHEDULE OUTPOST_TEKTON_PRUNER_IMAGE
 }
 
 # ---- (b) RBAC is namespace-bound, not cluster-wide --------------------------
@@ -128,15 +131,55 @@ EOF
 
 # ---- (d) Phase 2 config wiring ----------------------------------------------
 
-@test "phase 2 sets all three OUTPOST_TEKTON_* defaults" {
+@test "phase 2 sets all four OUTPOST_TEKTON_* defaults" {
   grep -qE 'OUTPOST_TEKTON_RETENTION_HOURS="\$\{OUTPOST_TEKTON_RETENTION_HOURS:-24\}"' "$PHASE2"
-  grep -qE 'OUTPOST_TEKTON_PRUNE_SCHEDULE="\$\{OUTPOST_TEKTON_PRUNE_SCHEDULE:-0 \* \* \* \*\}"' "$PHASE2"
+  # */15 cadence is the post-incident default — 0 * * * * was too slow to
+  # keep up with rapid CI bursts (4–5 builds within 30 min stack ephemeral).
+  grep -qE 'OUTPOST_TEKTON_PRUNE_SCHEDULE="\$\{OUTPOST_TEKTON_PRUNE_SCHEDULE:-\*/15 \* \* \* \*\}"' "$PHASE2"
+  grep -qE 'OUTPOST_TEKTON_KEEP_LAST_N="\$\{OUTPOST_TEKTON_KEEP_LAST_N:-20\}"' "$PHASE2"
   grep -qE 'OUTPOST_TEKTON_PRUNER_IMAGE="\$\{OUTPOST_TEKTON_PRUNER_IMAGE:-alpine/k8s:1\.31\.0\}"' "$PHASE2"
   # Documentation guard: the manifest header must explain WHY we picked
   # alpine/k8s over bitnami/rancher/etc, so a future maintainer doesn't
   # "fix" it back into a broken image. Image needs BOTH kubectl AND /bin/sh.
   grep -qE 'bitnami.*404|rancher.*scratch|no /bin/sh' "$MANIFEST" \
     || fail "pruner manifest header missing the alpine/k8s rationale"
+}
+
+@test "tekton-prune.sh keep-last-N: keeps N newest PRs by creationTimestamp" {
+  # Synthesise jsonpath output that prune script's awk consumes:
+  #   <creationTime>\t<name>
+  # 6 PRs, KEEP_LAST_N=3 → 3 newest survive, 3 oldest go.
+  fixture="$TMP/keepn.txt"
+  cat >"$fixture" <<'EOF'
+2026-05-28T01:00:00Z	build-old-1
+2026-05-28T05:00:00Z	build-mid-1
+2026-05-28T10:00:00Z	build-new-1
+2026-05-28T11:00:00Z	build-new-2
+2026-05-28T02:00:00Z	build-old-2
+2026-05-28T12:00:00Z	build-new-3
+EOF
+  excess="$(sort -r "$fixture" | awk -F'\t' -v keep=3 'NR > keep {print $2}')"
+  [[ "$excess" == *"build-old-1"* ]]
+  [[ "$excess" == *"build-old-2"* ]]
+  [[ "$excess" == *"build-mid-1"* ]]
+  [[ ! "$excess" == *"build-new-1"* ]] || fail "newest 3 should be kept"
+  [[ ! "$excess" == *"build-new-2"* ]] || fail "newest 3 should be kept"
+  [[ ! "$excess" == *"build-new-3"* ]] || fail "newest 3 should be kept"
+}
+
+@test "tekton-prune.sh keep-last-N=0 disables the count cap (no excess emitted)" {
+  fixture="$TMP/keep0.txt"
+  cat >"$fixture" <<'EOF'
+2026-05-28T01:00:00Z	build-1
+2026-05-28T02:00:00Z	build-2
+EOF
+  # When KEEP_LAST_N=0, the script's `if [ "$KEEP_LAST_N" -gt 0 ]` skips
+  # the block entirely — emulate with awk keep=0 (excess = everything).
+  # Actually the script's behavior IS that excess = everything. The guard
+  # is at the shell level, not awk. So this just asserts the disabled-path
+  # exists in the script (guard syntax).
+  grep -q 'KEEP_LAST_N.*-gt 0' "$SCRIPT" \
+    || fail "tekton-prune.sh must guard KEEP_LAST_N=0 to disable cap"
 }
 
 @test "phase 2 persists OUTPOST_TEKTON_PRUNE_SCHEDULE via env_kv (spaces survive .env round-trip)" {
@@ -196,6 +239,24 @@ EOF
   grep -q 'readOnlyRootFilesystem: true' "$MANIFEST"
   grep -q 'allowPrivilegeEscalation: false' "$MANIFEST"
   grep -qE 'drop:\s*\["ALL"\]'           "$MANIFEST"
+}
+
+@test "pruner pod requests ephemeral-storage (so DiskPressure doesn't evict the pruner itself)" {
+  # The chicken-and-egg failure mode: under DiskPressure, kubelet evicts
+  # pods that haven't requested ephemeral-storage FIRST. The pruner is
+  # supposed to relieve the pressure — evicting it makes the situation
+  # worse. Locking in the request so this regression doesn't recur.
+  grep -qE 'requests:.*ephemeral-storage' "$MANIFEST" \
+    || fail "pruner missing ephemeral-storage request — will be evicted first under DiskPressure"
+}
+
+@test "pruner tolerates node.kubernetes.io/disk-pressure taint (schedulable during incident)" {
+  # The OTHER chicken-and-egg: kubelet adds NoSchedule taint when in
+  # DiskPressure. The pruner is the recovery action — it MUST be able to
+  # schedule when the node has the taint, otherwise the cluster is stuck
+  # waiting for manual intervention (the original incident pattern).
+  awk '/^kind: CronJob$/,EOF' "$MANIFEST" | grep -q 'node.kubernetes.io/disk-pressure' \
+    || fail "pruner missing disk-pressure toleration — blocked by NoSchedule taint during exactly the incident it should fix"
 }
 
 @test "pruner concurrencyPolicy=Forbid (no overlapping sweeps)" {

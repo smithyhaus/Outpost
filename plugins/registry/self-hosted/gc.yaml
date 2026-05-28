@@ -1,0 +1,140 @@
+# =============================================================================
+# Registry GC — periodic tag prune + blob garbage-collect.
+# -----------------------------------------------------------------------------
+# Why this exists: the docker-registry has no built-in GC and never deletes
+# anything on its own. Every CI build pushes a new <repo>:<sha> tag. After
+# ~10–20 builds per app the PVC fills up. On a single-node k3d host that
+# means kubelet DiskPressure and Evicted build pods (which is the failure
+# mode that motivated this CronJob).
+#
+# Design: a small outer CronJob (alpine/k8s — has kubectl + sh) runs every
+# ${OUTPOST_REGISTRY_GC_SCHEDULE} and does:
+#   1. Locate the docker-registry pod by label.
+#   2. Cat scripts/registry-gc.sh from a ConfigMap and pipe it through
+#      `kubectl exec -i <registry-pod> -- sh -s` so it runs INSIDE the
+#      registry pod (which has both the storage PVC mounted and the
+#      `registry` binary for blob garbage-collect).
+#   3. The exec'd script:
+#       a. Walk each repo, sort tags by FS mtime, DELETE all but the
+#          most-recent ${OUTPOST_REGISTRY_KEEP_TAGS_PER_REPO} via the
+#          registry HTTP DELETE API (REGISTRY_STORAGE_DELETE_ENABLED=true
+#          is set by the registry plugin manifest).
+#       b. Run `registry garbage-collect --delete-untagged` to reclaim
+#          blob storage from orphaned manifests.
+#
+# Only deployed when REGISTRY_PLUGIN=self-hosted (aliyun-acr has its own
+# server-side retention story). 07-registry-plugin.sh checks this.
+#
+# Tunables (.env):
+#   OUTPOST_REGISTRY_GC_SCHEDULE          default "0 */6 * * *" — every 6h
+#   OUTPOST_REGISTRY_KEEP_TAGS_PER_REPO   default 5 — most-recent per repo
+#   OUTPOST_TEKTON_PRUNER_IMAGE           shared image (alpine/k8s) — reused
+# =============================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: registry-gc
+  namespace: registry
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: registry-gc
+  namespace: registry
+rules:
+  # Discover the registry pod by label, exec into it. Read-only on pod
+  # metadata, exec is namespace-scoped to `registry` only.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  # Read the script ConfigMap.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: registry-gc
+  namespace: registry
+subjects:
+  - kind: ServiceAccount
+    name: registry-gc
+    namespace: registry
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: registry-gc
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: registry-gc
+  namespace: registry
+spec:
+  schedule: "${OUTPOST_REGISTRY_GC_SCHEDULE}"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  startingDeadlineSeconds: 600
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          serviceAccountName: registry-gc
+          restartPolicy: OnFailure
+          # Tolerate the DiskPressure taint — this pod EXISTS to relieve
+          # DiskPressure, so it MUST be schedulable when the node has it.
+          # Without this, kubelet's `node.kubernetes.io/disk-pressure`
+          # NoSchedule taint blocks the cleanup pod and the only way out
+          # is manual operator intervention (the exact incident this
+          # CronJob was added to prevent).
+          tolerations:
+            - key: node.kubernetes.io/disk-pressure
+              operator: Exists
+              effect: NoSchedule
+          containers:
+            - name: gc
+              image: ${OUTPOST_TEKTON_PRUNER_IMAGE}
+              imagePullPolicy: IfNotPresent
+              # Both the outer driver and the inner GC body live in scripts/
+              # and are mounted via ConfigMap-from-file (see bootstrap.d/
+              # 07-registry-plugin.sh). Keeping the shell out of YAML means
+              # envsubst never gets the chance to silently eat a bare $VAR
+              # (the bug that broke the first cluster run).
+              command: ["/bin/sh", "/script/registry-gc-outer.sh"]
+              env:
+                - name: OUTPOST_REGISTRY_KEEP_TAGS_PER_REPO
+                  value: "${OUTPOST_REGISTRY_KEEP_TAGS_PER_REPO}"
+              resources:
+                # ephemeral-storage requests are essential here: this pod
+                # exists to relieve DiskPressure, but without a request it
+                # gets evicted FIRST under pressure (chicken-and-egg). 100Mi
+                # is enough for kubectl + script + logs; the GC body runs
+                # in the registry pod's filesystem, not ours.
+                requests: { cpu: 50m,  memory: 64Mi,  ephemeral-storage: 100Mi }
+                limits:   { cpu: 200m, memory: 128Mi, ephemeral-storage: 256Mi }
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 1000
+                readOnlyRootFilesystem: true
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: script
+                  mountPath: /script
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: script
+              configMap:
+                name: registry-gc-script
+                defaultMode: 0o555
+            - name: tmp
+              emptyDir: {}

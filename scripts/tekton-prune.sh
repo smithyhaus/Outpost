@@ -25,6 +25,9 @@ set -eu
 
 NS=tekton-pipelines
 RETAIN_HOURS="${OUTPOST_TEKTON_RETENTION_HOURS:-24}"
+# Hard cap on PR count regardless of age. Defends against rapid-CI bursts
+# (30+ PRs in an hour, all within retention window). 0 disables the cap.
+KEEP_LAST_N="${OUTPOST_TEKTON_KEEP_LAST_N:-20}"
 
 # Compute UTC cutoff. We avoid `date -d "-Nh"` (GNU-only) and `date -v -NH`
 # (BSD-only) because the production runtime is busybox `date` in alpine/k8s,
@@ -51,6 +54,24 @@ if [ -n "$victims" ]; then
   echo "$victims" | xargs -r kubectl -n "$NS" delete pipelinerun --ignore-not-found
 else
   echo "[$(date -u +%FT%TZ)] prune: no PipelineRuns past cutoff"
+fi
+
+# Hard count cap. Independent of completionTime (catches rapid-CI bursts
+# where many fresh PRs are all under the retention window). We sort all PRs
+# by creationTimestamp newest-first and keep the top KEEP_LAST_N, deleting
+# the rest. KEEP_LAST_N=0 disables the cap (useful for debugging).
+if [ "$KEEP_LAST_N" -gt 0 ]; then
+  excess="$(
+    kubectl -n "$NS" get pipelinerun \
+      -o=jsonpath='{range .items[*]}{.metadata.creationTimestamp}{"\t"}{.metadata.name}{"\n"}{end}' \
+    | sort -r \
+    | awk -F'\t' -v keep="$KEEP_LAST_N" 'NR > keep {print $2}'
+  )"
+  if [ -n "$excess" ]; then
+    count=$(echo "$excess" | wc -l | tr -d ' ')
+    echo "[$(date -u +%FT%TZ)] prune: keeping only ${KEEP_LAST_N} most-recent PRs (deleting ${count} excess)"
+    echo "$excess" | xargs -r kubectl -n "$NS" delete pipelinerun --ignore-not-found
+  fi
 fi
 
 # Defensive: kill leftover Evicted / Failed pods. The owner-reference

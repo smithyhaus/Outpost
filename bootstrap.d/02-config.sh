@@ -124,8 +124,25 @@ OUTPOST_APPS_MAX_MEMORY="${OUTPOST_APPS_MAX_MEMORY:-8Gi}"
 # ~50 builds the node hits DiskPressure → mid-build Evicted. See
 # core/k8s/05-tekton/pruner.yaml for full rationale + RBAC scope.
 OUTPOST_TEKTON_RETENTION_HOURS="${OUTPOST_TEKTON_RETENTION_HOURS:-24}"
-OUTPOST_TEKTON_PRUNE_SCHEDULE="${OUTPOST_TEKTON_PRUNE_SCHEDULE:-0 * * * *}"
+# Schedule: every 15 minutes by default. Active CI can stack 4–5 build pods
+# (each ~0.5–2 GB ephemeral) within 30 min on a single-node k3d host;
+# hourly sweep was too slow to keep the node out of DiskPressure.
+OUTPOST_TEKTON_PRUNE_SCHEDULE="${OUTPOST_TEKTON_PRUNE_SCHEDULE:-*/15 * * * *}"
+# Hard cap on PR count regardless of age — even fresh PRs get pruned if the
+# count exceeds this. Belt for the retention-by-age suspenders: a rapid CI
+# burst can produce 30 PRs in an hour, all within the retention window,
+# all holding ephemeral. Keep-last-N keeps the ceiling bounded.
+OUTPOST_TEKTON_KEEP_LAST_N="${OUTPOST_TEKTON_KEEP_LAST_N:-20}"
 OUTPOST_TEKTON_PRUNER_IMAGE="${OUTPOST_TEKTON_PRUNER_IMAGE:-alpine/k8s:1.31.0}"
+
+# Registry GC — periodic tag prune + blob garbage-collect for self-hosted
+# registry plugin only. The docker-registry has no built-in GC; without
+# this CronJob, every CI push leaks blobs forever and the 50Gi PVC fills.
+# Schedule defaults to every 6h (GC is heavier than Tekton's pod pruner).
+# Keep 5 most-recent tags per repo by default — adequate for active CI +
+# easy rollback window. Override via .env for unusual workloads.
+OUTPOST_REGISTRY_GC_SCHEDULE="${OUTPOST_REGISTRY_GC_SCHEDULE:-0 */6 * * *}"
+OUTPOST_REGISTRY_KEEP_TAGS_PER_REPO="${OUTPOST_REGISTRY_KEEP_TAGS_PER_REPO:-5}"
 DINGTALK_WEBHOOK_URL="${DINGTALK_WEBHOOK_URL:-}"
 DINGTALK_SIGN_SECRET="${DINGTALK_SIGN_SECRET:-}"
 FEISHU_WEBHOOK_URL="${FEISHU_WEBHOOK_URL:-}"
@@ -269,8 +286,11 @@ fi
   echo "OUTPOST_APPS_MAX_CPU=${OUTPOST_APPS_MAX_CPU}"
   echo "OUTPOST_APPS_MAX_MEMORY=${OUTPOST_APPS_MAX_MEMORY}"
   echo "OUTPOST_TEKTON_RETENTION_HOURS=${OUTPOST_TEKTON_RETENTION_HOURS}"
+  echo "OUTPOST_TEKTON_KEEP_LAST_N=${OUTPOST_TEKTON_KEEP_LAST_N}"
   env_kv OUTPOST_TEKTON_PRUNE_SCHEDULE "${OUTPOST_TEKTON_PRUNE_SCHEDULE}"
   echo "OUTPOST_TEKTON_PRUNER_IMAGE=${OUTPOST_TEKTON_PRUNER_IMAGE}"
+  env_kv OUTPOST_REGISTRY_GC_SCHEDULE "${OUTPOST_REGISTRY_GC_SCHEDULE}"
+  echo "OUTPOST_REGISTRY_KEEP_TAGS_PER_REPO=${OUTPOST_REGISTRY_KEEP_TAGS_PER_REPO}"
   # Webhook URLs commonly contain `&` (e.g. ?access_token=x&sign=y) — unquoted
   # those would re-source as two commands. env_kv guards every URL field.
   [[ -n "${DINGTALK_WEBHOOK_URL:-}" ]]   && env_kv DINGTALK_WEBHOOK_URL   "${DINGTALK_WEBHOOK_URL}"
