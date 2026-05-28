@@ -93,7 +93,7 @@ bats tests/schema/
 |---|---|---|
 | `lint` | every push + PR | shellcheck (`-S warning`) + yamllint + docker-compose-config |
 | `test-matrix` | every push + PR | bats unit + regression on `ubuntu-latest` |
-| `e2e` | nightly cron + `[e2e]` in commit message + manual dispatch | fresh `bash bootstrap.sh` (full mode) on `ubuntu-latest` via k3d-in-Docker, asserts every resilience layer is present in the resulting cluster |
+| `e2e` | nightly cron + `[ci-e2e]` in commit subject + manual dispatch | fresh `bash bootstrap.sh` (full mode) on `ubuntu-latest` via k3d-in-Docker, asserts every resilience layer is present in the resulting cluster |
 
 The `e2e` job is the only one that catches runtime bugs (Tekton param
 coercion, kaniko CLI typos, .env corruption on re-source, etc.) — the
