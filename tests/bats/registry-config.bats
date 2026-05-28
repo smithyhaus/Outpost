@@ -47,6 +47,33 @@ setup() {
   [[ "$KANIKO_EXTRA_ARGS" == *"docker-registry.registry.svc.cluster.local:5000/cache"* ]]
 }
 
+@test "self-hosted: KANIKO_EXTRA_ARGS includes ephemeral-compression flags" {
+  # --single-snapshot is the highest-impact lever for ephemeral on
+  # single-node k3d (cuts per-build transient by ~half for multi-RUN
+  # Dockerfiles). Lock it in — removing it would re-introduce the
+  # DiskPressure-evicted-mid-build failure mode that motivated this layer.
+  export REGISTRY_PLUGIN="self-hosted"
+  resolve_registry_config
+  [[ "$KANIKO_EXTRA_ARGS" == *"--single-snapshot"* ]] \
+    || fail "missing --single-snapshot — kaniko will burn ephemeral per command"
+  [[ "$KANIKO_EXTRA_ARGS" == *"--snapshot-mode=redo"* ]] \
+    || fail "missing --snapshot-mode=redo — slower + more RAM than necessary"
+  [[ "$KANIKO_EXTRA_ARGS" == *"--use-new-run"* ]] \
+    || fail "missing --use-new-run — older execution mode, more memory"
+}
+
+@test "aliyun-acr: KANIKO_EXTRA_ARGS includes ephemeral-compression flags" {
+  # Same compression applies regardless of registry backend — the limiting
+  # factor is the k3d node's ephemeral budget, not the registry.
+  export REGISTRY_PLUGIN="aliyun-acr"
+  export ALIYUN_ACR_REGISTRY="registry.cn-test.aliyuncs.com"
+  export ALIYUN_ACR_NAMESPACE="t"
+  resolve_registry_config
+  [[ "$KANIKO_EXTRA_ARGS" == *"--single-snapshot"* ]]
+  [[ "$KANIKO_EXTRA_ARGS" == *"--snapshot-mode=redo"* ]]
+  [[ "$KANIKO_EXTRA_ARGS" == *"--use-new-run"* ]]
+}
+
 @test "self-hosted: KANIKO_EXTRA_ARGS is space-separated (NOT JSON array)" {
   export REGISTRY_PLUGIN="self-hosted"
   resolve_registry_config
