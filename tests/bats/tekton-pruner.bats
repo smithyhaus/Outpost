@@ -139,10 +139,12 @@ EOF
     || fail "pruner manifest header missing the alpine/k8s rationale"
 }
 
-@test "phase 2 persists OUTPOST_TEKTON_PRUNE_SCHEDULE with quotes (spaces survive .env round-trip)" {
-  # The cron expression has spaces; without explicit quoting in the heredoc,
-  # `source .env` would word-split it.
-  grep -qE 'echo "OUTPOST_TEKTON_PRUNE_SCHEDULE=\\"\$\{OUTPOST_TEKTON_PRUNE_SCHEDULE\}\\""' "$PHASE2"
+@test "phase 2 persists OUTPOST_TEKTON_PRUNE_SCHEDULE via env_kv (spaces survive .env round-trip)" {
+  # The cron expression has spaces; without `env_kv` (printf %q quoting),
+  # `source .env` would word-split it. Round-trip is enforced separately
+  # by tests/bats/env-kv-roundtrip.bats — here we just guard that the
+  # phase script doesn't drop back to bare `echo "KEY=$VAR"`.
+  grep -qE 'env_kv OUTPOST_TEKTON_PRUNE_SCHEDULE' "$PHASE2"
 }
 
 @test "phase 2 persists OUTPOST_TEKTON_RETENTION_HOURS and OUTPOST_TEKTON_PRUNER_IMAGE" {

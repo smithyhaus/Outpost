@@ -237,9 +237,12 @@ fi
   echo "ARGOCD_HOST=${ARGOCD_HOST}"
   echo "HOOKS_HOST=${HOOKS_HOST}"
   echo "REGISTRY_SUBDOMAIN=${REGISTRY_SUBDOMAIN}"
-  echo "KANIKO_EXTRA_ARGS=${KANIKO_EXTRA_ARGS:-}"
-  echo "WEBHOOK_REPO_WHITELIST=${WEBHOOK_REPO_WHITELIST:-}"
-  echo "CEL_WHITELIST_LIST=${CEL_WHITELIST_LIST:-[]}"
+  # Values that may contain shell metacharacters (spaces, &, =, [, ", etc).
+  # env_kv runs printf '%q' so round-trip through `source` is safe. See
+  # platform/lib/portable.sh for the why + concrete failure modes.
+  env_kv KANIKO_EXTRA_ARGS       "${KANIKO_EXTRA_ARGS:-}"
+  env_kv WEBHOOK_REPO_WHITELIST  "${WEBHOOK_REPO_WHITELIST:-}"
+  env_kv CEL_WHITELIST_LIST      "${CEL_WHITELIST_LIST:-[]}"
   # ACR specifics carried through if set
   [[ -n "${ALIYUN_ACR_REGISTRY:-}" ]]  && echo "ALIYUN_ACR_REGISTRY=${ALIYUN_ACR_REGISTRY}"
   [[ -n "${ALIYUN_ACR_NAMESPACE:-}" ]] && echo "ALIYUN_ACR_NAMESPACE=${ALIYUN_ACR_NAMESPACE}"
@@ -266,15 +269,17 @@ fi
   echo "OUTPOST_APPS_MAX_CPU=${OUTPOST_APPS_MAX_CPU}"
   echo "OUTPOST_APPS_MAX_MEMORY=${OUTPOST_APPS_MAX_MEMORY}"
   echo "OUTPOST_TEKTON_RETENTION_HOURS=${OUTPOST_TEKTON_RETENTION_HOURS}"
-  echo "OUTPOST_TEKTON_PRUNE_SCHEDULE=\"${OUTPOST_TEKTON_PRUNE_SCHEDULE}\""
+  env_kv OUTPOST_TEKTON_PRUNE_SCHEDULE "${OUTPOST_TEKTON_PRUNE_SCHEDULE}"
   echo "OUTPOST_TEKTON_PRUNER_IMAGE=${OUTPOST_TEKTON_PRUNER_IMAGE}"
-  [[ -n "${DINGTALK_WEBHOOK_URL:-}" ]]   && echo "DINGTALK_WEBHOOK_URL=${DINGTALK_WEBHOOK_URL}"
-  [[ -n "${DINGTALK_SIGN_SECRET:-}" ]]   && echo "DINGTALK_SIGN_SECRET=${DINGTALK_SIGN_SECRET}"
-  [[ -n "${FEISHU_WEBHOOK_URL:-}" ]]     && echo "FEISHU_WEBHOOK_URL=${FEISHU_WEBHOOK_URL}"
-  [[ -n "${FEISHU_SIGN_SECRET:-}" ]]     && echo "FEISHU_SIGN_SECRET=${FEISHU_SIGN_SECRET}"
-  [[ -n "${WECOM_WEBHOOK_URL:-}" ]]      && echo "WECOM_WEBHOOK_URL=${WECOM_WEBHOOK_URL}"
-  [[ -n "${GENERIC_WEBHOOK_URL:-}" ]]    && echo "GENERIC_WEBHOOK_URL=${GENERIC_WEBHOOK_URL}"
-  [[ -n "${GENERIC_WEBHOOK_BEARER:-}" ]] && echo "GENERIC_WEBHOOK_BEARER=${GENERIC_WEBHOOK_BEARER}"
+  # Webhook URLs commonly contain `&` (e.g. ?access_token=x&sign=y) — unquoted
+  # those would re-source as two commands. env_kv guards every URL field.
+  [[ -n "${DINGTALK_WEBHOOK_URL:-}" ]]   && env_kv DINGTALK_WEBHOOK_URL   "${DINGTALK_WEBHOOK_URL}"
+  [[ -n "${DINGTALK_SIGN_SECRET:-}" ]]   && env_kv DINGTALK_SIGN_SECRET   "${DINGTALK_SIGN_SECRET}"
+  [[ -n "${FEISHU_WEBHOOK_URL:-}" ]]     && env_kv FEISHU_WEBHOOK_URL     "${FEISHU_WEBHOOK_URL}"
+  [[ -n "${FEISHU_SIGN_SECRET:-}" ]]     && env_kv FEISHU_SIGN_SECRET     "${FEISHU_SIGN_SECRET}"
+  [[ -n "${WECOM_WEBHOOK_URL:-}" ]]      && env_kv WECOM_WEBHOOK_URL      "${WECOM_WEBHOOK_URL}"
+  [[ -n "${GENERIC_WEBHOOK_URL:-}" ]]    && env_kv GENERIC_WEBHOOK_URL    "${GENERIC_WEBHOOK_URL}"
+  [[ -n "${GENERIC_WEBHOOK_BEARER:-}" ]] && env_kv GENERIC_WEBHOOK_BEARER "${GENERIC_WEBHOOK_BEARER}"
 } > .env
 chmod 600 .env
 

@@ -240,6 +240,29 @@ render_apply() {
   kubectl apply -f "$tmp"
 }
 
+# ---- env_kv — write a shell-safe KEY=VALUE line for .env --------------------
+# Why: a naive `echo "KEY=$VAR" >> .env` silently corrupts values that
+# contain shell metacharacters. Concrete failure modes the project has hit:
+#   - URLs with `&`: `URL=https://x?a=1&b=2` re-sources as TWO commands
+#     (`URL=https://x?a=1` then `&b=2` in the background), dropping the
+#     tail of the URL.
+#   - Args with spaces: `--build-arg=K=V --skip-tls` re-sources as
+#     `KANIKO_EXTRA_ARGS=--build-arg=K=V` then executing `--skip-tls`.
+#   - JSON arrays `["a","b"]`: the embedded `"` confuses outer quoting.
+#
+# `printf '%q'` produces a bash-quoted representation that survives a
+# round-trip through `source` regardless of content. Bash 3.2+ has %q
+# (works on macOS default bash) so this is portable across the project's
+# supported runtimes.
+#
+# Usage:
+#   env_kv KANIKO_EXTRA_ARGS "${KANIKO_EXTRA_ARGS:-}"   # writes to stdout
+#   Caller is responsible for redirecting to the .env file.
+env_kv() {
+  local key="$1" val="${2:-}"
+  printf '%s=%s\n' "$key" "$(printf '%q' "$val")"
+}
+
 # ---- Confirmation helper ----------------------------------------------------
 confirm() {
   local prompt="${1:-Continue?}"
