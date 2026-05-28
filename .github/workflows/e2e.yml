@@ -20,7 +20,15 @@
 # When does it run:
 #   - schedule: 16:00 UTC daily = 00:00 Beijing
 #   - workflow_dispatch: manual button on the Actions tab
-#   - push to main when commit message subject contains [ci-e2e]
+#
+# No `push:` trigger by design. A commit-message-tag trigger sounded
+# clever but two consecutive iterations (`[e2e]`, then `[ci-e2e]`)
+# self-collided — the commit body that DOCUMENTED the new tag
+# necessarily contained the tag substring, which contains() matched.
+# Documentation about the trigger string IS unavoidable, so any
+# substring-based trigger has a built-in foot-gun. Manual dispatch
+# via the Actions tab covers the "I want to run e2e on this commit
+# now" use case with one click and zero collision risk.
 #
 # Why NOT every push:
 #   ~15 min/run on ubuntu-latest; the maintainer pushes frequently in
@@ -30,12 +38,6 @@
 #   cron + on-demand catches actual breakage with ~16h max latency, which
 #   matches the project's "single operator deploys interactively next
 #   morning" cadence.
-#
-# Why `[ci-e2e]` and not `[e2e]`:
-#   The bare "[e2e]" string collides with itself — earlier-draft trigger
-#   was [e2e] which matched the substring inside this very workflow's
-#   commit message body that DOCUMENTED the trigger. `[ci-e2e]` is
-#   unique enough to not appear in normal commit narrative.
 # =============================================================================
 name: e2e
 
@@ -43,11 +45,6 @@ on:
   schedule:
     - cron: '0 16 * * *'      # 00:00 Beijing daily
   workflow_dispatch:           # manual button on the Actions tab
-  push:
-    branches: [main]
-    # Only fire on push when the commit subject contains [ci-e2e] —
-    # opt-in for the maintainer when they want immediate verification
-    # before cron picks it up.
 
 jobs:
   bootstrap:
@@ -56,13 +53,7 @@ jobs:
     # cold-cache on a fresh runner). Image cache between runs helps when
     # GitHub schedules the same runner pool — typical re-runs ~15 min.
     timeout-minutes: 25
-    # Multi-line if is one GH expression. `[ci-e2e]` is unique enough to
-    # never appear in normal commit narrative. Workflow_dispatch and
-    # schedule always bypass the substring check.
-    if: |
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch' ||
-      contains(github.event.head_commit.message, '[ci-e2e]')
+    # No if-guard needed — workflow only fires on schedule + manual dispatch.
 
     steps:
       - uses: actions/checkout@v4
