@@ -1,0 +1,201 @@
+# =============================================================================
+# e2e — fresh `bash bootstrap.sh` (full mode) in k3d-on-ubuntu.
+# -----------------------------------------------------------------------------
+# Why this workflow exists:
+#   The other workflows (lint / test-matrix) are static checks. They catch
+#   syntax + structural regressions, but EVERY user-facing bug from the
+#   past two months (Tekton JSON coercion, .env quote corruption, pruner
+#   self-eviction, kaniko --snapshotMode typo, apps-quota too small,
+#   registry leak) bit at RUNTIME and would have been invisible to static
+#   analysis. The only way to catch them ahead of an operator push is to
+#   actually run bootstrap.sh against a real cluster.
+#
+#   This job does exactly that on ubuntu-latest using k3d-in-Docker. Fake
+#   but plausible credentials drive full mode through every phase 1–10.
+#   Cloudflared and ArgoCD app-sync don't actually work end-to-end (no
+#   real CF tunnel, no real manifest repo), but the BOOTSTRAP itself —
+#   including all our resilience layers (pruner, registry-gc, apps-quota,
+#   kaniko args, webhook patches) — is exercised.
+#
+# When does it run:
+#   - schedule: 16:00 UTC daily = 00:00 Beijing
+#   - workflow_dispatch: manual button on the Actions tab
+#   - push to main when commit message contains [e2e]
+#
+# Why NOT every push:
+#   ~15 min/run on ubuntu-latest; the maintainer pushes frequently in
+#   rapid-iteration cycles. Running every push would block the queue and
+#   burn the project's free-tier minutes for no informational gain (the
+#   previous push's e2e result is still relevant to the next push). Daily
+#   cron + on-demand catches actual breakage with ~16h max latency, which
+#   matches the project's "single operator deploys interactively next
+#   morning" cadence.
+# =============================================================================
+name: e2e
+
+on:
+  schedule:
+    - cron: '0 16 * * *'      # 00:00 Beijing daily
+  workflow_dispatch:           # manual button on the Actions tab
+  push:
+    branches: [main]
+    # Only fire on push when the commit message contains [e2e] — opt-in
+    # for the maintainer when they want immediate verification before
+    # cron picks it up.
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    # 25 min budget: kaniko/argocd/tekton image pulls dominate (~10 min
+    # cold-cache on a fresh runner). Image cache between runs helps when
+    # GitHub schedules the same runner pool — typical re-runs ~15 min.
+    timeout-minutes: 25
+    if: |
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[e2e]')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Tooling ────────────────────────────────────────────────────────
+      - name: Install k3d + kubectl + helm + envsubst + yq
+        run: |
+          set -euo pipefail
+          # k3d (k3s in Docker) — Linux is its primary target so no surprises.
+          curl -sL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh \
+            | TAG=v5.8.3 bash
+          k3d version
+
+          # kubectl pinned to a known-good minor that matches the project's
+          # other tooling (alpine/k8s:1.31.0 in the pruner image).
+          KCTL_VER="$(curl -sL https://dl.k8s.io/release/stable.txt)"
+          curl -sL "https://dl.k8s.io/release/${KCTL_VER}/bin/linux/amd64/kubectl" -o /usr/local/bin/kubectl
+          sudo chmod +x /usr/local/bin/kubectl
+          kubectl version --client=true
+
+          # helm for the Phase 9 testkube install.
+          curl -sL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+          # yq (mikefarah v4) + jq + envsubst + bats already present on ubuntu-latest
+          # except yq which we install pinned.
+          YQ_VER=v4.44.6
+          sudo curl -sL "https://github.com/mikefarah/yq/releases/download/${YQ_VER}/yq_linux_amd64" \
+            -o /usr/local/bin/yq
+          sudo chmod +x /usr/local/bin/yq
+
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gettext-base jq
+
+      # ── Synthetic credentials — full mode through every phase ─────────
+      # These look real enough to pass envsubst's strict ${VAR} check but
+      # the external services they reference (cloudflared, gitee, ACR)
+      # are unreachable from CI. That's intentional — the bootstrap should
+      # complete every PHASE regardless, and the resilience-layer
+      # resources it creates are what we assert on.
+      - name: Render .env for full-mode CI bootstrap
+        run: |
+          cat > .env <<EOF
+          OUTPOST_MODE=full
+          OUTPOST_K3D_CLUSTER=outpost-e2e
+          ROOT_DOMAIN=e2e.outpost.test
+          CF_TUNNEL_TOKEN=ci-fake-token-not-used
+          GIT_USER=ci-test-user
+          GIT_TOKEN=ci-fake-token
+          MANIFEST_REPO_URL=https://github.com/dummy/manifests.git
+          MANIFEST_REPO_BRANCH=main
+          REGISTRY_PLUGIN=self-hosted
+          GIT_PROVIDER_PLUGIN=gitee
+          NOTIFICATION_PROVIDERS=
+          # Skip testkube cloud (no real key); use OSS mode.
+          TEST_RUNNER=testkube
+          TESTKUBE_MODE=oss
+          ROLLOUT_PLUGIN=argo-rollouts
+          EOF
+          chmod 600 .env
+
+      # ── The actual bootstrap ─────────────────────────────────────────
+      # We run the production bootstrap.sh as-is — same entrypoint a real
+      # operator uses. Anything that breaks here breaks for real users too.
+      - name: bash bootstrap.sh (full mode)
+        run: bash bootstrap.sh
+        # No `|| true` — if bootstrap exits non-zero, the test fails.
+
+      # ── Assertions on the resilience layers ──────────────────────────
+      # The layers we shipped over the last 10 commits all live in cluster
+      # state. Static analysis can't see them; we have to query the apiserver.
+      - name: Assert all 4 resilience layers are present
+        run: |
+          set -euo pipefail
+          fail() { echo "FAIL: $*"; exit 1; }
+
+          echo "═══ L1: Tekton auto-pruner ═══"
+          kubectl -n tekton-pipelines get cronjob tekton-pruner >/dev/null \
+            || fail "tekton-pruner CronJob missing"
+          sched=$(kubectl -n tekton-pipelines get cronjob tekton-pruner -o jsonpath='{.spec.schedule}')
+          [[ "$sched" == "*/15 * * * *" ]] || fail "pruner schedule wrong: $sched"
+
+          echo "═══ L1: Registry GC ═══"
+          kubectl -n registry get cronjob registry-gc >/dev/null \
+            || fail "registry-gc CronJob missing"
+
+          echo "═══ L2: ephemeral-storage requests + disk-pressure tolerations ═══"
+          for ns_cj in "tekton-pipelines/tekton-pruner" "registry/registry-gc"; do
+            ns="${ns_cj%/*}"; cj="${ns_cj#*/}"
+            eph=$(kubectl -n "$ns" get cronjob "$cj" \
+              -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].resources.requests.ephemeral-storage}')
+            [[ -n "$eph" ]] || fail "$cj missing ephemeral-storage request"
+            tol=$(kubectl -n "$ns" get cronjob "$cj" \
+              -o jsonpath='{.spec.jobTemplate.spec.template.spec.tolerations[*].key}')
+            [[ "$tol" == *"node.kubernetes.io/disk-pressure"* ]] \
+              || fail "$cj missing disk-pressure toleration"
+          done
+
+          echo "═══ L3: kaniko --single-snapshot in Pipeline default-extra-args ═══"
+          args=$(kubectl -n tekton-pipelines get pipeline build-and-deploy \
+            -o jsonpath='{.spec.tasks[?(@.name=="read-build-config")].params[?(@.name=="default-extra-args")].value}')
+          [[ "$args" == *"--single-snapshot"* ]] \
+            || fail "Pipeline missing --single-snapshot (got: $args)"
+          [[ "$args" == *"--snapshotMode=redo"* ]] \
+            || fail "Pipeline missing --snapshotMode=redo"
+
+          echo "═══ ArgoCD webhook receiver enabled ═══"
+          secret=$(kubectl -n argocd get cm argocd-cm -o jsonpath='{.data.webhook\.gitee\.secret}')
+          [[ -n "$secret" ]] || fail "argocd-cm missing webhook.gitee.secret"
+
+          echo "═══ Dynamic apps-quota ═══"
+          lim=$(kubectl get resourcequota apps-quota -n apps -o jsonpath='{.spec.hard.limits\.cpu}')
+          [[ -n "$lim" ]] || fail "apps-quota.limits.cpu unset"
+          echo "  apps-quota.limits.cpu = $lim (auto-derived from runner host)"
+
+          echo "═══ Core platform pods Running ═══"
+          for ns in argocd tekton-pipelines registry argo-rollouts; do
+            kubectl -n "$ns" wait --for=condition=Ready pod --all --timeout=180s \
+              || fail "pods in $ns not all Ready"
+          done
+
+          echo "═══ ALL ASSERTIONS PASS ═══"
+
+      # ── Diagnostics when something fails ─────────────────────────────
+      - name: Collect diagnostics on failure
+        if: failure()
+        run: |
+          mkdir -p /tmp/diag
+          kubectl get all -A > /tmp/diag/all.txt 2>&1 || true
+          kubectl describe nodes > /tmp/diag/nodes.txt 2>&1 || true
+          kubectl get events -A --sort-by=.lastTimestamp > /tmp/diag/events.txt 2>&1 || true
+          for ns in argocd tekton-pipelines registry; do
+            kubectl -n "$ns" get pods -o wide > "/tmp/diag/${ns}-pods.txt" 2>&1 || true
+            for p in $(kubectl -n "$ns" get pods -o name 2>/dev/null); do
+              kubectl -n "$ns" describe "$p" > "/tmp/diag/${ns}-$(basename $p)-desc.txt" 2>&1 || true
+              kubectl -n "$ns" logs "$p" --all-containers > "/tmp/diag/${ns}-$(basename $p).log" 2>&1 || true
+            done
+          done
+
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-diagnostics
+          path: /tmp/diag/
+          retention-days: 7

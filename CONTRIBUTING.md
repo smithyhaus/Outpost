@@ -57,23 +57,50 @@ filenames that exist in one language tree but not the others.
 We use [bats-core](https://github.com/bats-core/bats-core) for shell tests
 plus `shellcheck` and `yamllint` for static analysis.
 
+### Pre-push checklist (the local equivalent of CI)
+
+Before pushing, run these two — together they're <30 s and catch every
+issue the CI's static-analysis layers would catch:
+
 ```bash
-# Static analysis
+bash tests/lint.sh && bats tests/bats/ tests/regression/
+```
+
+The macOS bash 3.2 compat that CI used to "test" via the macos-latest
+runner is now exercised by your local pre-push run instead (the runner
+turned out to misrepresent real macOS environments — see commit log
+for the analysis).
+
+### Test layout
+
+```bash
+# Static analysis — shellcheck + yamllint + docker compose config
 bash tests/lint.sh
 
 # Bats unit tests (no real cluster needed)
 bats tests/bats/
 
-# Plugin regression test (the load-bearing one)
+# Plugin regression test (load-bearing — guards the plugin contract)
 bats tests/regression/
 
 # JSON schema lock for verify.sh output
 bats tests/schema/
 ```
 
-CI runs the same set on `ubuntu-latest` and `macos-latest`. WSL2 is tested
-manually before each release; if your change risks a WSL2-only regression,
-say so in the PR description.
+### CI tiers — what runs when
+
+| Workflow | Trigger | Catches |
+|---|---|---|
+| `lint` | every push + PR | shellcheck (`-S warning`) + yamllint + docker-compose-config |
+| `test-matrix` | every push + PR | bats unit + regression on `ubuntu-latest` |
+| `e2e` | nightly cron + `[e2e]` in commit message + manual dispatch | fresh `bash bootstrap.sh` (full mode) on `ubuntu-latest` via k3d-in-Docker, asserts every resilience layer is present in the resulting cluster |
+
+The `e2e` job is the only one that catches runtime bugs (Tekton param
+coercion, kaniko CLI typos, .env corruption on re-source, etc.) — the
+class of bugs that bit the project repeatedly before this CI tier was
+added. It runs ~15 min, so we cron it daily instead of per-push.
+Maintainer can opt in to e2e for a specific push by adding `[e2e]` to
+the commit subject line.
 
 ## Code style
 

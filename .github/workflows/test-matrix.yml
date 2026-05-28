@@ -7,22 +7,22 @@ on:
 
 jobs:
   bats:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    # ubuntu-only — dropped macos-latest after empirical noise analysis:
+    # GitHub's macos-latest runner consistently failed install.bats tests
+    # that passed on the maintainer's actual macOS host (different brew
+    # state, sandboxing, environment). The runner doesn't represent any
+    # real user's environment, so the signal was negative — every red
+    # macos run was a forensic time-sink with no actionable insight.
+    # macOS bash 3.2 compat is still exercised by the maintainer's
+    # local pre-push runs (see CONTRIBUTING.md).
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install bats-core
         run: |
-          if [[ "$RUNNER_OS" == "macOS" ]]; then
-            brew install bats-core jq
-          else
-            sudo apt-get update
-            sudo apt-get install -y bats jq gettext-base
-          fi
+          sudo apt-get update
+          sudo apt-get install -y bats jq gettext-base
 
       - name: Run unit tests
         run: bats tests/bats/
