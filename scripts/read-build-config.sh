@@ -56,6 +56,64 @@ fi
 CFG="${SRC}/outpost.build.yaml"
 mkdir -p "$OUT"
 
+# Normalize DEFAULTS into a JSON array (yq-mergeable shape). Three input
+# forms are supported, in order of preference:
+#
+#   (1) Space-separated tokens — the canonical v0.5+ shape produced by
+#       platform/lib/registry-config.sh. Example:
+#         "--skip-tls-verify --cache=true --cache-repo=foo"
+#       Chosen because Tekton's v0.50+ ParamValue handler does NOT coerce
+#       plain strings, only flow-array-shaped ones. This is the only form
+#       that survives the full bash → envsubst → Tekton → env-var chain
+#       without silent corruption. See registry-config.sh header for the
+#       full root-cause writeup.
+#
+#   (2) Broken JSON-shape `[a,b,c]` (no inner quotes) — what Tekton emits
+#       when an older bootstrap stored KANIKO_EXTRA_ARGS as a JSON array
+#       string. Kept as a defensive belt-and-suspenders fallback: if a
+#       future regression reintroduces JSON shape, this branch repairs it
+#       and emits a stderr warning so operators see the upstream issue.
+#
+#   (3) Valid JSON `["a","b","c"]` — accepted as-is for completeness.
+#
+# The unified output goes back into $DEFAULTS as a valid JSON array string.
+case "$DEFAULTS" in
+  '['*)
+    # Forms (2) or (3) — already in [...] shape. Decide between them by
+    # checking for embedded quotes.
+    inner=$(printf '%s' "$DEFAULTS" | sed -e 's/^\[//' -e 's/\]$//')
+    case "$inner" in
+      *'"'*) : ;;  # form (3): already-quoted, trust input
+      '')    : ;;  # empty array
+      *)
+        # form (2): broken-by-Tekton. Re-quote, warn so the regression is
+        # discoverable.
+        echo "read-build-config: WARNING — defaults param arrived in broken JSON shape '[a,b]'" >&2
+        echo "  This means KANIKO_EXTRA_ARGS upstream is JSON-formatted again," >&2
+        echo "  triggering Tekton ParamValue coercion. Check registry-config.sh." >&2
+        normalized=$(printf '%s' "$inner" | awk -v RS=',' '{
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
+          if (length($0)) printf "%s\"%s\"", (NR>1 ? "," : ""), $0
+        }')
+        DEFAULTS="[${normalized}]"
+        ;;
+    esac
+    ;;
+  '')
+    # Treat empty value as empty array.
+    DEFAULTS='[]'
+    ;;
+  *)
+    # Form (1): space-separated tokens — primary v0.5+ shape. Convert to
+    # JSON array by quoting each whitespace-delimited token.
+    DEFAULTS=$(printf '%s' "$DEFAULTS" | awk '{
+      printf "["
+      for (i=1; i<=NF; i++) printf "%s\"%s\"", (i>1 ? "," : ""), $i
+      printf "]"
+    }')
+    ;;
+esac
+
 DOCKERFILE="./Dockerfile"
 CONTEXT="./"
 BUILD_ARGS_JSON='[]'

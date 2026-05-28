@@ -36,23 +36,33 @@ setup() {
 @test "self-hosted: KANIKO_EXTRA_ARGS includes --skip-tls-verify + --insecure" {
   export REGISTRY_PLUGIN="self-hosted"
   resolve_registry_config
-  [[ "$KANIKO_EXTRA_ARGS" == *"\"--skip-tls-verify\""* ]]
-  [[ "$KANIKO_EXTRA_ARGS" == *"\"--insecure\""* ]]
+  [[ "$KANIKO_EXTRA_ARGS" == *"--skip-tls-verify"* ]]
+  [[ "$KANIKO_EXTRA_ARGS" == *"--insecure"* ]]
 }
 
 @test "self-hosted: KANIKO_EXTRA_ARGS includes cache flags" {
   export REGISTRY_PLUGIN="self-hosted"
   resolve_registry_config
-  [[ "$KANIKO_EXTRA_ARGS" == *"\"--cache=true\""* ]]
+  [[ "$KANIKO_EXTRA_ARGS" == *"--cache=true"* ]]
   [[ "$KANIKO_EXTRA_ARGS" == *"docker-registry.registry.svc.cluster.local:5000/cache"* ]]
 }
 
-@test "self-hosted: KANIKO_EXTRA_ARGS is valid JSON-shape" {
+@test "self-hosted: KANIKO_EXTRA_ARGS is space-separated (NOT JSON array)" {
   export REGISTRY_PLUGIN="self-hosted"
   resolve_registry_config
-  # Must start with [ and end with ] — flow-style JSON array, envsubst-safe.
-  [[ "$KANIKO_EXTRA_ARGS" == \[* ]]
-  [[ "$KANIKO_EXTRA_ARGS" == *\] ]]
+  # Tekton v0.50+ coerces flow-array-shaped strings, stripping inner quotes.
+  # Space-separated tokens avoid that coercion entirely. Any future change
+  # to JSON-array form would re-introduce the silent-corruption class of
+  # bugs — see registry-config.sh header for the full root cause.
+  ! [[ "$KANIKO_EXTRA_ARGS" == \[* ]] \
+    || fail "KANIKO_EXTRA_ARGS is [...]-shaped — Tekton WILL coerce it"
+  ! [[ "$KANIKO_EXTRA_ARGS" == *\] ]] \
+    || fail "KANIKO_EXTRA_ARGS ends with ] — Tekton WILL coerce it"
+  ! [[ "$KANIKO_EXTRA_ARGS" =~ \" ]] \
+    || fail "KANIKO_EXTRA_ARGS contains \" — must be plain tokens"
+  # Sanity: tokens separated by single spaces.
+  [[ "$KANIKO_EXTRA_ARGS" =~ " " ]] \
+    || fail "KANIKO_EXTRA_ARGS has no spaces — not multi-arg"
   # Must NOT have stray ${VAR} from incomplete envsubst.
   ! [[ "$KANIKO_EXTRA_ARGS" =~ \$\{ ]]
 }

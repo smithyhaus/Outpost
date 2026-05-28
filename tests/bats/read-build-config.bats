@@ -70,6 +70,61 @@ teardown() {
   [ "$(cat "$OUT/extra-args")" = "[]" ]
 }
 
+# ---- 2b. Input-shape coverage (Tekton coercion-immunity) --------------------
+# The chain bash → envsubst → Tekton ParamValue → env var has historically
+# mangled the canonical JSON-array shape (Tekton ≥0.50 strips inner quotes
+# on flow-array-shaped strings). Verifying ALL three input shapes resolve
+# to the same valid JSON output guarantees the script is invariant to
+# however upstream chooses to encode the value.
+
+@test "input shape (1) space-separated tokens (canonical v0.5+) → valid JSON array" {
+  # Primary input form from registry-config.sh — never tripped by Tekton.
+  run sh "$SCRIPT" "$SRC" '--skip-tls-verify --insecure --cache=true' "$OUT"
+  [ "$status" -eq 0 ]
+  out="$(cat "$OUT/extra-args")"
+  [ "$out" = '["--skip-tls-verify","--insecure","--cache=true"]' ]
+}
+
+@test "input shape (1) single token (no spaces) round-trips" {
+  run sh "$SCRIPT" "$SRC" '--skip-tls-verify' "$OUT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$OUT/extra-args")" = '["--skip-tls-verify"]' ]
+}
+
+@test "input shape (2) Tekton-broken JSON [a,b,c] → repaired + warning to stderr" {
+  # The defensive fallback. If a future regression brings JSON form back,
+  # this branch keeps builds working WHILE emitting a discoverable warning.
+  run sh "$SCRIPT" "$SRC" '[--skip-tls-verify,--insecure,--cache=true]' "$OUT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$OUT/extra-args")" = '["--skip-tls-verify","--insecure","--cache=true"]' ]
+  [[ "$output" =~ "WARNING" ]] || fail "broken JSON repair must emit a warning"
+  [[ "$output" =~ "registry-config.sh" ]] || fail "warning should point at the upstream file"
+}
+
+@test "input shape (3) already-valid JSON [\"a\",\"b\"] → passes through" {
+  run sh "$SCRIPT" "$SRC" '["--cache=true","--cache-repo=foo"]' "$OUT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$OUT/extra-args")" = '["--cache=true","--cache-repo=foo"]' ]
+  # Valid-JSON path must NOT emit a warning (would be alert fatigue).
+  ! [[ "$output" =~ "WARNING" ]]
+}
+
+@test "input shape: empty string → []" {
+  run sh "$SCRIPT" "$SRC" '' "$OUT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$OUT/extra-args")" = "[]" ]
+}
+
+@test "input shape: token with = (--cache-repo=host:port/path) survives" {
+  # The actual self-hosted defaults contain a long URL-like token.
+  run sh "$SCRIPT" "$SRC" \
+    '--skip-tls-verify --cache-repo=docker-registry.registry.svc.cluster.local:5000/cache' \
+    "$OUT"
+  [ "$status" -eq 0 ]
+  out="$(cat "$OUT/extra-args")"
+  [[ "$out" == *'docker-registry.registry.svc.cluster.local:5000/cache'* ]]
+}
+
 # ---- 3. Per-app overrides ----------------------------------------------------
 
 @test "outpost.build.yaml dockerfile/context override defaults" {
