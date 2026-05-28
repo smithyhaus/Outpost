@@ -13,8 +13,17 @@ setup() {
   INFRA_ROOT="$(cd "${BATS_TEST_DIRNAME}/../.." && pwd)"
   # shellcheck source=../../platform/lib/portable.sh
   source "${INFRA_ROOT}/platform/lib/portable.sh"
+  # shellcheck source=../../platform/lib/registry-config.sh
+  source "${INFRA_ROOT}/platform/lib/registry-config.sh"
   TMP=$(mktemp -d)
   export ROOT_DOMAIN="example.test"
+  # The self-hosted manifest references ${REGISTRY_HOST}, which is a DERIVED
+  # var computed by resolve_registry_config (not a raw .env value). The
+  # bootstrap caller invokes that resolver in phase 2 before rendering;
+  # the regression test has to do the same or render_template's strict
+  # ${VAR} check rejects.
+  export REGISTRY_PLUGIN="self-hosted"
+  resolve_registry_config
 }
 teardown() { rm -rf "$TMP"; }
 

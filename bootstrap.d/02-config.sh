@@ -102,7 +102,10 @@ NOTIFICATION_PROVIDERS="${NOTIFICATION_PROVIDERS:-}"
 #   64GB / 16-CPU rig    → quota.limits.cpu=32, limits.memory=48Gi
 # CPU overcommits cleanly in K8s → limits.cpu is intentionally 2× host vCPU.
 # Memory does NOT overcommit safely → limits.memory stays at ~3/4 host.
-_apps_q=( $(apps_quota_defaults) )
+# apps_quota_defaults emits five space-separated integers on a single line.
+# read -r -a does word-splitting without shellcheck's SC2207 warning that
+# bare `array=( $(...) )` would trip.
+read -r -a _apps_q <<< "$(apps_quota_defaults)"
 OUTPOST_APPS_PODS_MAX="${OUTPOST_APPS_PODS_MAX:-${_apps_q[0]}}"
 OUTPOST_APPS_REQUESTS_CPU="${OUTPOST_APPS_REQUESTS_CPU:-${_apps_q[1]}}"
 OUTPOST_APPS_LIMITS_CPU="${OUTPOST_APPS_LIMITS_CPU:-${_apps_q[2]}}"

@@ -22,6 +22,7 @@ jobs:
         run: |
           set -euo pipefail
           source platform/lib/portable.sh
+          source platform/lib/registry-config.sh
 
           # Existing plugin envs
           export ROOT_DOMAIN=smoke.example.test
@@ -32,6 +33,14 @@ jobs:
           export ALIYUN_ACR_NAMESPACE=smoke
           export ALIYUN_ACR_USER=smoke
           export ALIYUN_ACR_PASSWORD=smokepass
+
+          # plugins/registry/self-hosted/manifest.yaml references ${REGISTRY_HOST},
+          # which is a DERIVED variable computed by resolve_registry_config (NOT
+          # a raw .env value). bootstrap.sh's phase 2 calls this resolver before
+          # rendering anything; the smoke job has to do the same or render_template's
+          # strict ${VAR} check will reject self-hosted's manifest.
+          export REGISTRY_PLUGIN=self-hosted
+          resolve_registry_config
 
           # New plugin envs (test-runner / rollout / notification)
           export TESTKUBE_MODE=oss

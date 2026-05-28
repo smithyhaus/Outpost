@@ -56,8 +56,8 @@ setup() {
   resolve_registry_config
   [[ "$KANIKO_EXTRA_ARGS" == *"--single-snapshot"* ]] \
     || fail "missing --single-snapshot — kaniko will burn ephemeral per command"
-  [[ "$KANIKO_EXTRA_ARGS" == *"--snapshot-mode=redo"* ]] \
-    || fail "missing --snapshot-mode=redo — slower + more RAM than necessary"
+  [[ "$KANIKO_EXTRA_ARGS" == *"--snapshotMode=redo"* ]] \
+    || fail "missing --snapshotMode=redo — slower + more RAM than necessary"
   [[ "$KANIKO_EXTRA_ARGS" == *"--use-new-run"* ]] \
     || fail "missing --use-new-run — older execution mode, more memory"
 }
@@ -70,7 +70,7 @@ setup() {
   export ALIYUN_ACR_NAMESPACE="t"
   resolve_registry_config
   [[ "$KANIKO_EXTRA_ARGS" == *"--single-snapshot"* ]]
-  [[ "$KANIKO_EXTRA_ARGS" == *"--snapshot-mode=redo"* ]]
+  [[ "$KANIKO_EXTRA_ARGS" == *"--snapshotMode=redo"* ]]
   [[ "$KANIKO_EXTRA_ARGS" == *"--use-new-run"* ]]
 }
 

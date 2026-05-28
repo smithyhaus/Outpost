@@ -27,7 +27,10 @@ set -eu
 
 KEEP_N="${OUTPOST_REGISTRY_KEEP_TAGS_PER_REPO:-5}"
 ROOT=/var/lib/registry/docker/registry/v2/repositories
-REG_URL=http://localhost:5000
+# Note: HTTP DELETEs go via raw nc to localhost:5000 (see the DELETE block
+# below). registry:2's alpine image lacks curl, and busybox wget doesn't
+# support DELETE. No REG_URL constant needed — the host/port is in the
+# request line itself.
 
 now="$(date -u +%FT%TZ)"
 echo "[${now}] registry-gc: starting (keep ${KEEP_N} most-recent tags per repo)"

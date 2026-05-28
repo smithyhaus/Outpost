@@ -32,7 +32,7 @@
 #     Trade-off: final image has fewer layers, slightly less cross-build
 #     layer cache reuse on pull side — acceptable for dev CI/CD where
 #     builds run on the same host that already has the layers cached.
-#   --snapshot-mode=redo: detect file changes via filesystem mtime instead
+#   --snapshotMode=redo: detect file changes via filesystem mtime instead
 #     of inode metadata. Less RAM + faster.
 #   --use-new-run: kaniko's newer file-change tracker (recommended).
 #   These are platform defaults — if a future app NEEDS the full per-
@@ -53,14 +53,14 @@ resolve_registry_config() {
       # Insecure (HTTP, anonymous) + cache under /cache. Space-separated —
       # see header for why this MUST NOT be a JSON array. Ephemeral-
       # compression flags (single-snapshot et al) — see header for why.
-      KANIKO_EXTRA_ARGS='--skip-tls-verify --insecure --cache=true --cache-repo=docker-registry.registry.svc.cluster.local:5000/cache --single-snapshot --snapshot-mode=redo --use-new-run'
+      KANIKO_EXTRA_ARGS='--skip-tls-verify --insecure --cache=true --cache-repo=docker-registry.registry.svc.cluster.local:5000/cache --single-snapshot --snapshotMode=redo --use-new-run'
       ;;
     aliyun-acr)
       REGISTRY_HOST="${ALIYUN_ACR_REGISTRY}/${ALIYUN_ACR_NAMESPACE}"
       REGISTRY_PUSH_HOST="${ALIYUN_ACR_REGISTRY}/${ALIYUN_ACR_NAMESPACE}"
       # ACR is HTTPS-only — no --insecure (would force HTTP, which ACR refuses).
       # Same ephemeral-compression rationale as self-hosted — see header.
-      KANIKO_EXTRA_ARGS="--cache=true --cache-repo=${ALIYUN_ACR_REGISTRY}/${ALIYUN_ACR_NAMESPACE}/cache --single-snapshot --snapshot-mode=redo --use-new-run"
+      KANIKO_EXTRA_ARGS="--cache=true --cache-repo=${ALIYUN_ACR_REGISTRY}/${ALIYUN_ACR_NAMESPACE}/cache --single-snapshot --snapshotMode=redo --use-new-run"
       ;;
     *)
       err "REGISTRY_PLUGIN '${REGISTRY_PLUGIN:-(unset)}' lacks a kaniko config block in platform/lib/registry-config.sh"
