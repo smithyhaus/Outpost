@@ -16,7 +16,8 @@
 # is preserved unless OUTPOST_FORCE_ENV=1.
 #
 # What it does, in order:
-#   1. Preflight: bash 4+ ? git ? docker ? On macOS/Linux/WSL2 ?
+#   1. Preflight: git/bash present? OS supported? Docker present — auto-installed
+#      on Linux/WSL2 via get.docker.com if missing (macOS → Docker Desktop).
 #   2. Clone (or update) the infras repo to OUTPOST_DIR (default: ~/outpost).
 #   3. Render .env from env vars provided by the caller (no interactive prompt
 #      when stdin is a pipe — required for `curl | bash`). Local mode needs
@@ -60,16 +61,55 @@ die()  { printf '%s\n' "${C_RED}ERROR:${C_RESET} $*" >&2; exit 1; }
 # --- preflight ---------------------------------------------------------------
 preflight() {
   log "preflight"
-  command -v git >/dev/null 2>&1   || die "git is required (install: brew/apt/dnf install git)"
+  command -v git >/dev/null 2>&1   || die "git is required (install: apt/dnf/brew install git)"
   command -v bash >/dev/null 2>&1  || die "bash is required"
-  command -v docker >/dev/null 2>&1 || die "docker is required (https://docs.docker.com/get-docker/)"
-  if ! docker info >/dev/null 2>&1; then
-    warn "docker daemon not reachable — bootstrap will fail when it tries to compose up"
-  fi
   case "$(uname -s)" in
     Darwin|Linux) : ;;
     *) die "unsupported OS: $(uname -s) — outpost targets macOS, Linux, and WSL2" ;;
   esac
+  ensure_docker
+}
+
+# Ensure a working Docker engine. On Linux/WSL2, auto-install via the official
+# get.docker.com script when absent — this is what lets the canonical
+# `curl … | bash` one-liner work from a bare WSL2 with no manual prep. On macOS
+# we cannot script Docker Desktop, so we point the user at its installer.
+#
+# Note: this intentionally duplicates a little of platform/lib/linux.sh —
+# preflight runs BEFORE the repo is cloned, so that library isn't on disk yet.
+ensure_docker() {
+  if docker info >/dev/null 2>&1; then ok "docker ready"; return 0; fi
+  if ! command -v docker >/dev/null 2>&1; then
+    case "$(uname -s)" in
+      Linux)  _install_docker_engine ;;
+      Darwin) die "Docker Desktop is required on macOS — install it first:
+  https://docs.docker.com/desktop/install/mac-install/" ;;
+      *)      die "unsupported OS: $(uname -s)" ;;
+    esac
+  else
+    # Binary present but daemon down — try to bring it up.
+    sudo systemctl enable --now docker 2>/dev/null || sudo service docker start 2>/dev/null || true
+  fi
+  if docker info >/dev/null 2>&1; then ok "docker ready"; return 0; fi
+  # Daemon still unreachable in THIS shell. Right after a fresh install the usual
+  # cause is the 'docker' group not being active yet — worth failing on with a
+  # clear fix *before* we actually bootstrap. For env-render-only runs
+  # (OUTPOST_SKIP_BOOTSTRAP=1) or other transient cases, warn and let bootstrap
+  # bring the daemon up — matching the installer's older, lenient behavior.
+  if id -nG "$USER" 2>/dev/null | grep -qw docker && [[ "${OUTPOST_SKIP_BOOTSTRAP:-0}" != "1" ]]; then
+    warn "Docker is installed but the 'docker' group is not active in this shell yet."
+    die  "Open a NEW shell (or run 'newgrp docker'), then re-run the same install command — it is idempotent."
+  fi
+  warn "docker daemon not reachable yet — bootstrap will try to start it"
+  return 0
+}
+
+# Install the Docker engine on Linux/WSL2. Isolated so tests can stub it.
+_install_docker_engine() {
+  log "Docker not found — installing via get.docker.com (Linux/WSL2)…"
+  curl -fsSL https://get.docker.com | sh || die "docker install failed"
+  sudo usermod -aG docker "$USER" 2>/dev/null || true
+  sudo systemctl enable --now docker 2>/dev/null || sudo service docker start 2>/dev/null || true
 }
 
 # --- clone or update ---------------------------------------------------------
@@ -222,4 +262,8 @@ main() {
   summary
 }
 
-main "$@"
+# Run only when actually invoked (executed, or piped via `curl | bash`) — not
+# when a test harness sources this file. Tests set OUTPOST_INSTALL_SOURCE_ONLY=1.
+if [[ -z "${OUTPOST_INSTALL_SOURCE_ONLY:-}" ]]; then
+  main "$@"
+fi
