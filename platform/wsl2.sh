@@ -13,6 +13,28 @@ _PLATFORM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./linux.sh
 source "${_PLATFORM_DIR}/linux.sh"
 
+# WSL2 preflight: docker + k3s install both drive `systemctl enable --now`.
+# If the distro was NOT booted with systemd as init (older WSL, or systemd not
+# yet enabled in /etc/wsl.conf), every systemctl call downstream fails in a
+# confusing, half-applied way mid-bootstrap. Fail fast here with the exact
+# remediation instead. Read-only and idempotent.
+#
+# /run/systemd/system only exists when systemd is PID 1. SK_SYSTEMD_MARKER is
+# overridable so the check is unit-testable without a live systemd.
+sk_assert_systemd() {
+  local marker="${SK_SYSTEMD_MARKER:-/run/systemd/system}"
+  if [[ -d "$marker" ]]; then
+    ok "systemd is active (WSL2)"
+    return 0
+  fi
+  err "systemd is not the init system in this WSL2 distro."
+  err "Outpost needs systemd to manage docker + k3s. Enable it, then retry:"
+  err "  1) printf '[boot]\\nsystemd=true\\n' | sudo tee /etc/wsl.conf"
+  err "  2) from Windows PowerShell:  wsl --shutdown"
+  err "  3) reopen this distro, then re-run ./bootstrap.sh"
+  return 1
+}
+
 # WSL2 autostart: services started inside WSL die when the distro shuts down.
 # We can't register a true Windows service from here, but we can:
 #   1) make sure WSL has systemd enabled (so docker/k3s autostart inside WSL)

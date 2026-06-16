@@ -78,6 +78,18 @@ ingress:
     service: tcp://rabbitmq:5672
 
   # -------------------------------------------------------------------------
+  # k8s API(原生 k3s,经 host-gateway 到宿主 6443 — TCP 透传,不经 caddy)
+  # 远程 k9s / kubectl(开发机跨网络):
+  #   cloudflared access tcp --hostname k8s.<ROOT_DOMAIN> --url localhost:6443
+  # 之后 kubeconfig 的 server 仍指 https://127.0.0.1:6443 —— k3s 默认证书已
+  # 覆盖 127.0.0.1,所以【无需】给 k3s 加 --tls-san。
+  # ⚠️ 这条路由暴露的是整个集群控制面,务必在 Cloudflare Access(Zero Trust)
+  #    后面加身份白名单,只允许你本人的邮箱/设备建立 TCP 会话。
+  # -------------------------------------------------------------------------
+  - hostname: k8s.${ROOT_DOMAIN}
+    service: tcp://host.docker.internal:6443
+
+  # -------------------------------------------------------------------------
   # 应用兜底通配(catch-all for *-apps.<ROOT_DOMAIN> 及其它未列名子域)
   # → k3s Traefik,由各 app 自己的 IngressRoute 按 Host header 落到具体 Service
   # -------------------------------------------------------------------------

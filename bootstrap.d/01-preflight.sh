@@ -16,6 +16,12 @@ ok "OS detected: $SK_OS"
 # shellcheck source=/dev/null
 source "${INFRA_ROOT}/platform/${SK_OS}.sh"
 
+# WSL2: docker + k3s install drive systemctl. Bail out early (with the exact
+# fix) if systemd is not the active init, rather than failing half-applied.
+if [[ "$SK_OS" == "wsl2" ]]; then
+  sk_assert_systemd || exit 1
+fi
+
 # Docker
 sk_install_docker
 
