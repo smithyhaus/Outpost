@@ -38,7 +38,11 @@ services:
     image: cloudflare/cloudflared:latest
     container_name: cloudflared
     restart: unless-stopped
-    command: tunnel --no-autoupdate run --token ${CF_TUNNEL_TOKEN}
+    # CF_TUNNEL_PROTOCOL: default `auto` (QUIC, http2 fallback). On restricted
+    # networks that block QUIC's UDP/7844, set CF_TUNNEL_PROTOCOL=http2 in .env
+    # so the connector registers over TCP. (Note: http2 cannot serve `cloudflared
+    # access` TCP routes — expose TCP services via an HTTP reverse proxy instead.)
+    command: tunnel --no-autoupdate run --protocol ${CF_TUNNEL_PROTOCOL:-auto} --token ${CF_TUNNEL_TOKEN}
     networks:
       - infra
     # cloudflared needs to reach host:30080 (k3s Traefik NodePort).
@@ -55,6 +59,10 @@ services:
     image: caddy:2-alpine
     container_name: caddy
     restart: unless-stopped
+    # Lets caddy reach host-bound services (e.g. the k3s API on :6443) for
+    # reverse-proxy fragments in Caddyfile.d/. Mirrors cloudflared's mapping.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       # ROOT_DOMAIN is required (host matchers depend on it).
       # The remaining vars are optional — Caddyfile uses {$VAR:default}
