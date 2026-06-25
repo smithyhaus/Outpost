@@ -79,17 +79,31 @@ preflight() {
 # preflight runs BEFORE the repo is cloned, so that library isn't on disk yet.
 ensure_docker() {
   if docker info >/dev/null 2>&1; then ok "docker ready"; return 0; fi
-  if ! command -v docker >/dev/null 2>&1; then
-    case "$(uname -s)" in
-      Linux)  _install_docker_engine ;;
-      Darwin) die "Docker Desktop is required on macOS — install it first:
+
+  # Decide per-OS BEFORE touching the engine: macOS can't be scripted (point the
+  # user at Docker Desktop), anything non-Linux is unsupported.
+  case "$(uname -s)" in
+    Darwin) die "Docker Desktop is required on macOS — install it first:
   https://docs.docker.com/desktop/install/mac-install/" ;;
-      *)      die "unsupported OS: $(uname -s)" ;;
-    esac
-  else
-    # Binary present but daemon down — try to bring it up.
+    Linux)  ;;
+    *)      die "unsupported OS: $(uname -s)" ;;
+  esac
+
+  # Linux/WSL2 needs a NATIVE engine: a dockerd this distro's systemd manages.
+  # `dockerd` present is the real signal — NOT a bare `docker` on PATH, which is
+  # often just a Docker Desktop WSL-integration shim (/usr/bin/docker -> /mnt/wsl/
+  # docker-desktop/…) or a dangling leftover after Desktop was uninstalled. A shim
+  # gives no local daemon, no docker.service and no systemd autostart, so when
+  # dockerd is missing we clear any shim and install the real engine. (This is the
+  # class of failure where the old "group not active" hint fired misleadingly.)
+  if command -v dockerd >/dev/null 2>&1; then
+    # Native engine present but daemon down — try to bring it up.
     sudo systemctl enable --now docker 2>/dev/null || sudo service docker start 2>/dev/null || true
+  else
+    _purge_desktop_docker_shim
+    _install_docker_engine
   fi
+
   if docker info >/dev/null 2>&1; then ok "docker ready"; return 0; fi
   # Daemon still unreachable in THIS shell. Right after a fresh install the usual
   # cause is the 'docker' group not being active yet — worth failing on with a
@@ -97,16 +111,30 @@ ensure_docker() {
   # (OUTPOST_SKIP_BOOTSTRAP=1) or other transient cases, warn and let bootstrap
   # bring the daemon up — matching the installer's older, lenient behavior.
   if id -nG "$USER" 2>/dev/null | grep -qw docker && [[ "${OUTPOST_SKIP_BOOTSTRAP:-0}" != "1" ]]; then
-    warn "Docker is installed but the 'docker' group is not active in this shell yet."
+    warn "Docker engine is installed but the 'docker' group is not active in this shell yet."
     die  "Open a NEW shell (or run 'newgrp docker'), then re-run the same install command — it is idempotent."
   fi
   warn "docker daemon not reachable yet — bootstrap will try to start it"
   return 0
 }
 
+# Remove a Docker Desktop WSL-integration shim (or its dangling leftover) so the
+# native engine can own /usr/bin/docker. Only ever removes a symlink that points
+# into Docker Desktop's mount or no longer resolves — never a real binary.
+_purge_desktop_docker_shim() {
+  local d=/usr/bin/docker
+  [[ -L "$d" ]] || return 0
+  local link; link="$(readlink "$d" 2>/dev/null || true)"
+  if [[ "$link" == *docker-desktop* || ! -e "$d" ]]; then
+    log "removing Docker Desktop docker shim: $d -> ${link:-?}"
+    sudo rm -f "$d" 2>/dev/null || true
+    hash -r 2>/dev/null || true
+  fi
+}
+
 # Install the Docker engine on Linux/WSL2. Isolated so tests can stub it.
 _install_docker_engine() {
-  log "Docker not found — installing via get.docker.com (Linux/WSL2)…"
+  log "Installing native Docker engine via get.docker.com (Linux/WSL2)…"
   curl -fsSL https://get.docker.com | sh || die "docker install failed"
   sudo usermod -aG docker "$USER" 2>/dev/null || true
   sudo systemctl enable --now docker 2>/dev/null || sudo service docker start 2>/dev/null || true

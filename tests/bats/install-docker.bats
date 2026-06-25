@@ -35,14 +35,33 @@ setup() {
     export OUTPOST_INSTALL_SOURCE_ONLY=1
     source "'"$INSTALL_SH"'"
     docker() { return 1; }                 # info fails (not installed)
-    command() { return 1; }                # `command -v docker` -> not found
+    command() { return 1; }                # no docker, no dockerd
     uname() { echo Linux; }
     id() { echo "u docker g"; }            # pretend group active after install
+    _purge_desktop_docker_shim() { :; }    # nothing to purge in this case
     _install_docker_engine() { echo "INSTALL-CALLED"; docker() { return 0; }; }
     ensure_docker
   '
   [ "$status" -eq 0 ]
   [[ "$output" =~ "INSTALL-CALLED" ]]
+  [[ "$output" =~ "docker ready" ]]
+}
+
+@test "ensure_docker installs the native engine when only a Docker Desktop CLI shim is present" {
+  run bash -c '
+    export OUTPOST_INSTALL_SOURCE_ONLY=1
+    source "'"$INSTALL_SH"'"
+    docker() { return 1; }                 # info fails — shim has no local daemon
+    command() { [[ "$2" == dockerd ]] && return 1; return 0; }  # docker CLI yes, dockerd no
+    uname() { echo Linux; }
+    id() { echo "u docker g"; }
+    _purge_desktop_docker_shim() { echo "PURGE-CALLED"; }
+    _install_docker_engine() { echo "INSTALL-CALLED"; docker() { return 0; }; }
+    ensure_docker
+  '
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "PURGE-CALLED" ]]      # shim cleared first
+  [[ "$output" =~ "INSTALL-CALLED" ]]    # then native engine installed
   [[ "$output" =~ "docker ready" ]]
 }
 
@@ -64,7 +83,8 @@ setup() {
     export OUTPOST_INSTALL_SOURCE_ONLY=1
     source "'"$INSTALL_SH"'"
     docker() { return 1; }                 # info keeps failing this shell
-    command() { return 0; }                # binary present
+    command() { return 0; }                # dockerd present (native engine installed)
+    uname() { echo Linux; }
     sudo() { return 0; }
     systemctl() { return 0; }
     id() { echo "u docker g"; }            # user IS in docker group
