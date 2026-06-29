@@ -19,6 +19,15 @@
       params:
         - name: filter
           value: "header.match('X-Git-Oschina-Event', 'Push Hook')"
+    # Multi-provider defense-in-depth: on a stacked EventListener, reject a
+    # forged request that ALSO carries another provider's push headers, so one
+    # delivery can't fire two PipelineRuns. header.match is null-safe on absent
+    # headers (relied on by the self-routing design above).
+    - ref:
+        name: cel
+      params:
+        - name: filter
+          value: "!header.match('X-Gitlab-Event', 'Push Hook') && !header.match('X-GitHub-Event', 'push')"
     - ref:
         name: cel
       params:

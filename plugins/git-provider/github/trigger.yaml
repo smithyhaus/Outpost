@@ -23,6 +23,14 @@
             secretKey: secretToken
         - name: eventTypes
           value: ["push"]
+    # Multi-provider defense-in-depth: on a stacked EventListener, reject a
+    # request that ALSO carries another provider's push headers, so one delivery
+    # can't fire two PipelineRuns. header.match is null-safe on absent headers.
+    - ref:
+        name: cel
+      params:
+        - name: filter
+          value: "!header.match('X-Git-Oschina-Event', 'Push Hook') && !header.match('X-Gitlab-Event', 'Push Hook')"
     - ref:
         name: cel
       params:

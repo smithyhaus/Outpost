@@ -40,13 +40,14 @@ Every plugin directory **must** contain:
 | `README.md`       | What it does, when to use it, what it costs                | yes      |
 | `values.example`  | Sample values / annotated env block                        | optional |
 
-`bootstrap.sh` selects exactly one plugin per kind based on `.env`. Some
-kinds (notification) accept a comma-separated list — fan out to multiple
-channels.
+`bootstrap.sh` selects one plugin per kind based on `.env`. Two kinds accept a
+comma-separated list — `notification` (fan out to multiple channels) and
+`git-provider` (stack every provider's trigger onto the single
+`el-build-listener`, so gitee + github + gitlab webhooks all build).
 
 ```env
 REGISTRY_PLUGIN=self-hosted
-GIT_PROVIDER_PLUGIN=gitee
+GIT_PROVIDER_PLUGIN=gitee                     # or a comma-list: gitee,github,gitlab
 TEST_RUNNER=testkube
 ROLLOUT_PLUGIN=argo-rollouts
 NOTIFICATION_PROVIDERS=dingtalk,feishu       # comma-list, optional

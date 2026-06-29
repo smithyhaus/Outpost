@@ -65,6 +65,10 @@ export GIT_HOST
 # Defaults shared by both modes
 REGISTRY_PLUGIN="${REGISTRY_PLUGIN:-self-hosted}"
 GIT_PROVIDER_PLUGIN="${GIT_PROVIDER_PLUGIN:-gitee}"
+# Optional extra clone credentials for private app repos on hosts OTHER than
+# MANIFEST_REPO_URL's. Comma-separated `host|user|token`; empty = single-host.
+# Consumed by platform/lib/git-credentials.sh in Phase 8 (full mode only).
+GIT_CREDENTIALS_EXTRA="${GIT_CREDENTIALS_EXTRA:-}"
 MANIFEST_REPO_BRANCH="${MANIFEST_REPO_BRANCH:-main}"
 
 # Built-in service subdomain prefixes (joined with .${ROOT_DOMAIN}).
@@ -177,11 +181,31 @@ if [[ "$OUTPOST_MODE" == "full" ]]; then
     err "Available: $(ls plugins/registry)"
     exit 1
   fi
-  if [[ ! -d "plugins/git-provider/${GIT_PROVIDER_PLUGIN}" ]]; then
-    err "Unknown GIT_PROVIDER_PLUGIN: ${GIT_PROVIDER_PLUGIN}"
+  # GIT_PROVIDER_PLUGIN accepts a comma-separated list (mirror of
+  # NOTIFICATION_PROVIDERS). Every selected provider's trigger is spliced into
+  # the one EventListener, so gitee + github + gitlab webhooks can all trigger
+  # builds on the same el-build-listener. Validate each entry exists.
+  IFS=',' read -ra _gp <<< "${GIT_PROVIDER_PLUGIN}"
+  _found=0
+  for _p in "${_gp[@]}"; do
+    _p="${_p// /}"
+    [[ -z "$_p" ]] && continue
+    if [[ ! -d "plugins/git-provider/${_p}" ]]; then
+      err "Unknown GIT_PROVIDER_PLUGIN entry '$_p'"
+      err "Available: $(ls plugins/git-provider)"
+      exit 1
+    fi
+    _found=$((_found + 1))
+  done
+  # Unlike NOTIFICATION_PROVIDERS, git-provider is NOT optional — an empty or
+  # all-blank list (GIT_PROVIDER_PLUGIN= or ,,) would pass here and only fail
+  # late in Phase 8's assembler with an opaque usage error. Fail loud now.
+  if [[ "$_found" -eq 0 ]]; then
+    err "GIT_PROVIDER_PLUGIN must list at least one provider (got '${GIT_PROVIDER_PLUGIN}')"
     err "Available: $(ls plugins/git-provider)"
     exit 1
   fi
+  unset _gp _p _found
 
   # Resolve registry-plugin-aware Pipeline params + webhook repo whitelist.
   # All actual logic lives in platform/lib/{registry-config,cel-helpers}.sh
@@ -239,6 +263,9 @@ fi
   echo "RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD}"
   echo "GIT_USER=${GIT_USER}"
   echo "GIT_TOKEN=${GIT_TOKEN}"
+  # Contains `|` and `,` field/entry separators (and a PAT) — env_kv printf %q
+  # so it round-trips through `source .env` intact.
+  env_kv GIT_CREDENTIALS_EXTRA "${GIT_CREDENTIALS_EXTRA:-}"
   echo "GIT_WEBHOOK_SECRET=${GIT_WEBHOOK_SECRET}"
   echo "ARGOCD_WEBHOOK_SECRET=${ARGOCD_WEBHOOK_SECRET}"
   echo "OUTPOST_DASHBOARD_USER=${OUTPOST_DASHBOARD_USER}"
@@ -315,7 +342,13 @@ ok ".env written (perm 600)"
 if [[ "$OUTPOST_MODE" == "full" ]]; then
   log "Running plugin preflight checks..."
   ( set -a; source .env; set +a; bash "plugins/registry/${REGISTRY_PLUGIN}/preflight.sh" )
-  ( set -a; source .env; set +a; bash "plugins/git-provider/${GIT_PROVIDER_PLUGIN}/preflight.sh" )
+  IFS=',' read -ra _gp <<< "${GIT_PROVIDER_PLUGIN}"
+  for _p in "${_gp[@]}"; do
+    _p="${_p// /}"
+    [[ -z "$_p" ]] && continue
+    ( set -a; source .env; set +a; bash "plugins/git-provider/${_p}/preflight.sh" )
+  done
+  unset _gp _p
   ( set -a; source .env; set +a; bash "plugins/test-runner/${TEST_RUNNER}/preflight.sh" )
   ( set -a; source .env; set +a; bash "plugins/rollout/${ROLLOUT_PLUGIN}/preflight.sh" )
   if [[ -n "${NOTIFICATION_PROVIDERS}" ]]; then

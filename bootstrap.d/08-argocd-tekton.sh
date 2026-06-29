@@ -111,9 +111,20 @@ kubectl label --overwrite ns tekton-pipelines \
 
 # Now that Tekton CRDs (incl. triggers.tekton.dev) are registered, apply the
 # git-provider plugin (it contributes a TriggerBinding the EventListener uses).
-log "Applying git-provider plugin: ${GIT_PROVIDER_PLUGIN}"
-render_apply "plugins/git-provider/${GIT_PROVIDER_PLUGIN}/manifest.yaml"
-ok "Git-provider plugin applied"
+# GIT_PROVIDER_PLUGIN is a comma-separated list — apply every selected
+# provider's manifest. Each contributes a uniquely-named TriggerBinding
+# (gitee-/github-/gitlab-push-binding); github additionally contributes its own
+# github-webhook-secret Secret. No resource-name collisions across providers,
+# so stacking them is safe.
+IFS=',' read -ra _gp <<< "${GIT_PROVIDER_PLUGIN}"
+for _p in "${_gp[@]}"; do
+  _p="${_p// /}"
+  [[ -z "$_p" ]] && continue
+  log "Applying git-provider plugin: ${_p}"
+  render_apply "plugins/git-provider/${_p}/manifest.yaml"
+done
+unset _gp _p
+ok "Git-provider plugin(s) applied: ${GIT_PROVIDER_PLUGIN}"
 
 # Catalog tasks (git-clone, kaniko) — vendored under core/k8s/05-tekton/catalog/
 # to (a) avoid silent breakage when raw.githubusercontent.com/.../main/...
@@ -134,6 +145,35 @@ kubectl apply -n tekton-pipelines -f core/k8s/05-tekton/catalog/kaniko-0.7.yaml
 # Tekton RBAC + secrets + pipeline + binding/template
 kubectl apply -f core/k8s/05-tekton/rbac.yaml
 render_apply "core/k8s/05-tekton/secrets.template.yaml"
+# Multi-host clone credentials (opt-in). When GIT_CREDENTIALS_EXTRA is set,
+# overwrite the single-host git-credentials Secret with one that carries a
+# tekton.dev/git-N annotation + .git-credentials line per extra host — required
+# to clone PRIVATE app repos living on a host other than MANIFEST_REPO's. The
+# secret YAML carries cleartext PATs, so render to a 0600 temp file (never log
+# it) and apply from there. Default (empty) leaves the single-host secret above.
+if [[ -n "${GIT_CREDENTIALS_EXTRA:-}" ]]; then
+  log "Applying multi-host git clone credentials (GIT_CREDENTIALS_EXTRA)..."
+  _GC_OUT=$(mktemp)
+  chmod 0600 "$_GC_OUT"   # enforce, don't rely on mktemp's default umask
+  if ! render_git_credentials_extra > "$_GC_OUT"; then
+    rm -f "$_GC_OUT"
+    unset _GC_OUT
+    err "Failed to render multi-host git-credentials"
+    exit 1
+  fi
+  # SECURITY: $_GC_OUT holds cleartext PATs. Under `set -euo pipefail` a failed
+  # apply would exit before a trailing rm — so clean up on the failure path too,
+  # never leaving the token file in /tmp.
+  if ! kubectl apply -f "$_GC_OUT"; then
+    rm -f "$_GC_OUT"
+    unset _GC_OUT
+    err "kubectl apply for multi-host git-credentials failed"
+    exit 1
+  fi
+  rm -f "$_GC_OUT"
+  unset _GC_OUT
+  ok "Multi-host git-credentials applied (primary + extras)"
+fi
 render_apply "core/k8s/05-tekton/pipeline-build.yaml"
 
 # Tekton PipelineRun auto-pruner. Without this CronJob, finished PRs (and
@@ -178,19 +218,32 @@ render_apply "core/k8s/05-tekton/triggertemplate.yaml"
 # Inline cleanup (no EXIT trap) because Phase 9 sets its own EXIT trap and
 # would override ours — the EL_OUT temp file would then leak. Apply
 # then delete in the same block.
-log "Assembling EventListener for git-provider: ${GIT_PROVIDER_PLUGIN}"
+log "Assembling EventListener for git-provider(s): ${GIT_PROVIDER_PLUGIN}"
 EL_OUT=$(mktemp -t outpost-eventlistener.XXXXXX)
-if ! assemble_eventlistener \
-      "plugins/git-provider/${GIT_PROVIDER_PLUGIN}/trigger.yaml" \
+# Collect every selected provider's trigger.yaml; assemble_eventlistener_multi
+# stacks them under the single `triggers:` list. Each trigger self-routes by
+# its provider-specific header filter, so they coexist without conflict.
+_trigger_files=()
+IFS=',' read -ra _gp <<< "${GIT_PROVIDER_PLUGIN}"
+for _p in "${_gp[@]}"; do
+  _p="${_p// /}"
+  [[ -z "$_p" ]] && continue
+  _trigger_files+=( "plugins/git-provider/${_p}/trigger.yaml" )
+done
+unset _gp _p
+if ! assemble_eventlistener_multi \
       "core/k8s/05-tekton/eventlistener-base.yaml" \
-      "$EL_OUT"; then
+      "$EL_OUT" \
+      "${_trigger_files[@]}"; then
   rm -f "$EL_OUT"
+  unset _trigger_files
   err "EventListener assembly failed"
   exit 1
 fi
+unset _trigger_files
 kubectl apply -f "$EL_OUT"
 rm -f "$EL_OUT"
-ok "EventListener applied (provider=${GIT_PROVIDER_PLUGIN}, service=el-build-listener)"
+ok "EventListener applied (provider(s)=${GIT_PROVIDER_PLUGIN}, service=el-build-listener)"
 
 # Tekton Dashboard — Web UI for PipelineRuns / TaskRuns / logs.
 # release-full.yaml gives read+write (cancel run, delete PR, etc).

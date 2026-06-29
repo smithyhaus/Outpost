@@ -176,3 +176,62 @@ EOF
   [ "$status" -ne 0 ]
   [[ "$output" =~ GIT_WEBHOOK_SECRET ]]
 }
+
+# ---- 4. multi-provider (GIT_PROVIDER_PLUGIN comma-list) ----------------------
+
+@test "assemble_multi: all three providers stack onto one EventListener" {
+  OUT=$(mktemp)
+  run assemble_eventlistener_multi "$BASE" "$OUT" \
+    "${INFRA_ROOT}/plugins/git-provider/gitee/trigger.yaml" \
+    "${INFRA_ROOT}/plugins/git-provider/github/trigger.yaml" \
+    "${INFRA_ROOT}/plugins/git-provider/gitlab/trigger.yaml"
+  [ "$status" -eq 0 ]
+  # Exactly ONE EventListener + ONE listener service — not three copies.
+  [ "$(grep -c '^kind: EventListener' "$OUT")" -eq 1 ]
+  [ "$(grep -c 'name: build-listener' "$OUT")" -eq 1 ]
+  [ "$(grep -c 'name: el-build-listener' "$OUT")" -eq 1 ]
+  # All three triggers present, each with its own binding.
+  grep -q "name: gitee-push"  "$OUT"
+  grep -q "name: github-push" "$OUT"
+  grep -q "name: gitlab-push" "$OUT"
+  grep -q "ref: gitee-push-binding"  "$OUT"
+  grep -q "ref: github-push-binding" "$OUT"
+  grep -q "ref: gitlab-push-binding" "$OUT"
+  # Provider-specific auth survived for each.
+  grep -q "X-Gitee-Token"        "$OUT"
+  grep -q "secretName: github-webhook-secret" "$OUT"
+  grep -q "X-Gitlab-Token"       "$OUT"
+  # Cross-provider guards survived the splice (a forged dual-header request
+  # can't double-fire). Each provider rejects the OTHER two providers' headers.
+  grep -qF "!header.match('X-Gitlab-Event', 'Push Hook') && !header.match('X-GitHub-Event', 'push')" "$OUT"
+  grep -qF "!header.match('X-Git-Oschina-Event', 'Push Hook') && !header.match('X-GitHub-Event', 'push')" "$OUT"
+  grep -qF "!header.match('X-Git-Oschina-Event', 'Push Hook') && !header.match('X-Gitlab-Event', 'Push Hook')" "$OUT"
+}
+
+@test "assemble_multi: single-element list equals single-provider assembly" {
+  OUT=$(mktemp)
+  run assemble_eventlistener_multi "$BASE" "$OUT" \
+    "${INFRA_ROOT}/plugins/git-provider/gitee/trigger.yaml"
+  [ "$status" -eq 0 ]
+  grep -q "name: gitee-push" "$OUT"
+  grep -q "ref: gitee-push-binding" "$OUT"
+  [ "$(grep -c '^kind: EventListener' "$OUT")" -eq 1 ]
+  ! grep -q "name: github-push" "$OUT"
+  ! grep -q "name: gitlab-push" "$OUT"
+}
+
+@test "assemble_multi: zero triggers is a usage error (no silent empty listener)" {
+  OUT=$(mktemp)
+  run assemble_eventlistener_multi "$BASE" "$OUT"
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ usage ]]
+}
+
+@test "assemble_multi: a nonexistent trigger in the list fails clearly" {
+  OUT=$(mktemp)
+  run assemble_eventlistener_multi "$BASE" "$OUT" \
+    "${INFRA_ROOT}/plugins/git-provider/gitee/trigger.yaml" \
+    "/no/such/trigger.yaml"
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "not readable" ]]
+}

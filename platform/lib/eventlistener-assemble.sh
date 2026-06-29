@@ -98,3 +98,55 @@ assemble_eventlistener() {
   rm -f "$rendered_trigger" "$rendered_base"
   return 0
 }
+
+# =============================================================================
+# assemble_eventlistener_multi — splice MORE THAN ONE provider trigger.
+# -----------------------------------------------------------------------------
+# Why this exists:
+#   GIT_PROVIDER_PLUGIN accepts a comma-separated list (gitee,github,gitlab) so
+#   one cluster can ingest webhooks from every provider on the single
+#   `el-build-listener`. The EventListener's `triggers:` field is a LIST, and
+#   each provider's trigger.yaml short-circuits on its own header-type filter
+#   (X-Gitee-Token / X-Hub-Signature-256 / X-Gitlab-Event), so stacking them is
+#   safe — an inbound push matches exactly one trigger and the rest no-op.
+#
+# How:
+#   Concatenate the raw plugin trigger files (each a `- name: <provider>-push`
+#   YAML list item) into one combined trigger source, then delegate to
+#   assemble_eventlistener — so the render + marker-uniqueness + splice logic
+#   has exactly ONE implementation. A newline is forced between files so a
+#   trigger that lacks a trailing newline can't fuse its last line onto the
+#   next file's first line.
+#
+# Contract:
+#   assemble_eventlistener_multi <base_template> <output> <trigger1> [trigger2 ...]
+#     - At least one trigger file is required (empty list is a usage error —
+#       a webhook listener with zero triggers silently drops every push).
+#     - Returns 0 on success; non-zero (with stderr context) on failure.
+# =============================================================================
+assemble_eventlistener_multi() {
+  local base_src="$1" out="$2"
+  shift 2 || true
+
+  if [[ -z "$base_src" || -z "$out" || $# -eq 0 ]]; then
+    err "assemble_eventlistener_multi: usage: <base_template> <output> <trigger1> [trigger2 ...]"
+    return 1
+  fi
+
+  local combined t
+  combined=$(mktemp)
+  for t in "$@"; do
+    if [[ ! -r "$t" ]]; then
+      err "assemble_eventlistener_multi: plugin trigger not readable: $t"
+      rm -f "$combined"
+      return 1
+    fi
+    cat "$t" >> "$combined"
+    printf '\n' >> "$combined"
+  done
+
+  assemble_eventlistener "$combined" "$base_src" "$out"
+  local rc=$?
+  rm -f "$combined"
+  return $rc
+}
