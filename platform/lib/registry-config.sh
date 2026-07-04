@@ -53,7 +53,11 @@ resolve_registry_config() {
       # Insecure (HTTP, anonymous) + cache under /cache. Space-separated —
       # see header for why this MUST NOT be a JSON array. Ephemeral-
       # compression flags (single-snapshot et al) — see header for why.
-      KANIKO_EXTRA_ARGS='--skip-tls-verify --insecure --cache=true --cache-repo=docker-registry.registry.svc.cluster.local:5000/cache --single-snapshot --snapshotMode=redo --use-new-run'
+      # --registry-mirror: Dockerfile base images (FROM node:22-alpine, …) live
+      # on Docker Hub (index.docker.io), which is reset/unreachable in CN — route
+      # those pulls through the DaoCloud Docker Hub mirror. kaniko falls back to
+      # index.docker.io if the mirror misses. Drop this flag for non-CN clusters.
+      KANIKO_EXTRA_ARGS='--skip-tls-verify --insecure --registry-mirror=docker.m.daocloud.io --cache=true --cache-repo=docker-registry.registry.svc.cluster.local:5000/cache --single-snapshot --snapshotMode=redo --use-new-run'
       ;;
     aliyun-acr)
       REGISTRY_HOST="${ALIYUN_ACR_REGISTRY}/${ALIYUN_ACR_NAMESPACE}"
