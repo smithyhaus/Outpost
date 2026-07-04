@@ -16,7 +16,13 @@ phase "Phase 6 / 10 sealed-secrets"
 # -----------------------------------------------------------------------------
 if [[ -f secrets-backup/sealed-secrets-master.key.yaml ]]; then
   log "Restoring sealed-secrets master key from secrets-backup/..."
-  kubectl apply -f secrets-backup/sealed-secrets-master.key.yaml >/dev/null
+  # The backup is `kubectl get -o yaml` output, which pins the server-managed
+  # resourceVersion at export time. On a rerun where the key already exists the
+  # live object has advanced past it, so a plain apply fails optimistic-lock
+  # ("the object has been modified"). Strip resourceVersion so restore is
+  # idempotent — apply then no-ops (key present) or recreates it (fresh reset).
+  sed -E '/^[[:space:]]*resourceVersion:/d' secrets-backup/sealed-secrets-master.key.yaml \
+    | kubectl apply -f - >/dev/null
   ok "  master key restored — old SealedSecrets will decrypt on this cluster"
 fi
 
