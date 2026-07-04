@@ -59,7 +59,8 @@ data:
         publish: $authenticated
         proxy: npmmirror
     log: { type: stdout, format: pretty, level: warn }
-    listen: 0.0.0.0:4873
+    # listen is set by the image entrypoint from VERDACCIO_PORT (pinned to 4873
+    # in the Deployment); K8s service-link env injection is disabled there too.
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -80,6 +81,11 @@ spec:
       labels:
         app: verdaccio
     spec:
+      # The Service is named `verdaccio`, so kubelet would inject
+      # VERDACCIO_PORT=tcp://<clusterIP>:4873 as a legacy service-link env var,
+      # which verdaccio reads as its listen address and crashes ("Invalid
+      # address"). Disable service-link injection entirely.
+      enableServiceLinks: false
       securityContext:
         # verdaccio image runs as uid/gid 10001; fsGroup makes the RWO PVC writable.
         runAsUser: 10001
@@ -88,6 +94,11 @@ spec:
       containers:
         - name: verdaccio
           image: docker.m.daocloud.io/verdaccio/verdaccio:6
+          env:
+            # Pin the listen port explicitly (belt-and-suspenders with
+            # enableServiceLinks:false) so the entrypoint always binds 4873.
+            - name: VERDACCIO_PORT
+              value: "4873"
           ports:
             - containerPort: 4873
           volumeMounts:
