@@ -110,9 +110,16 @@ rm -rf repo
 git clone --depth 1 --branch "$MANIFEST_BRANCH" "$MANIFEST_REPO_URL" repo
 cd repo
 
-APP_DIR="apps/$APP_NAME"
-if [ ! -d "$APP_DIR" ]; then
-  echo "ERROR: $APP_DIR not found in manifest repo." >&2
+# Resolve the manifest app dir. The GitHub repo name (APP_NAME) often carries an
+# `fst-` prefix or `-web` suffix that the manifest dir drops
+# (fst-product-service -> product-service, fst-admin-web -> fst-admin,
+# fst-bff-ops -> bff-ops). Try the known name variants in order.
+APP_DIR=""
+for _cand in "$APP_NAME" "${APP_NAME#fst-}" "${APP_NAME%-web}"; do
+  if [ -d "apps/$_cand" ]; then APP_DIR="apps/$_cand"; break; fi
+done
+if [ -z "$APP_DIR" ]; then
+  echo "ERROR: no manifest dir for '$APP_NAME' (tried apps/$APP_NAME, apps/${APP_NAME#fst-}, apps/${APP_NAME%-web})." >&2
   echo "       Add the directory with either kustomization.yaml or deployment.yaml first." >&2
   exit 1
 fi
