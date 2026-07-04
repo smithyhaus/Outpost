@@ -54,13 +54,14 @@ for d in packages/*/ ; do
   name=$(node -p "require('./$d/package.json').name" 2>/dev/null || echo "?")
   priv=$(node -p "!!require('./$d/package.json').private" 2>/dev/null || echo false)
   [[ "$priv" == "true" ]] && { echo "  skip (private): $name"; continue; }
-  out=$( (cd "$d" && npm publish --registry "${REG}" 2>&1) || true )
-  if grep -qiE 'npm notice|\+ .*@' <<<"$out" && ! grep -qiE 'error|EPUBLISHCONFLICT|cannot publish over' <<<"$out"; then
+  # Trust npm's exit code, not output text — the notice lists tarball contents,
+  # so grepping for "error" false-matches filenames like error-codes.ts.
+  if out=$( (cd "$d" && npm publish --registry "${REG}") 2>&1 ); then
     echo "  published: $name"; published=$((published+1))
-  elif grep -qiE 'cannot publish over|EPUBLISHCONFLICT|already exists|409' <<<"$out"; then
+  elif grep -qiE 'cannot publish over|EPUBLISHCONFLICT|already .*present|409' <<<"$out"; then
     echo "  exists   : $name (version already present — bump to republish)"; skipped=$((skipped+1))
   else
-    echo "  FAILED   : $name"; echo "$out" | tail -3 | sed 's/^/      /'; failed=$((failed+1))
+    echo "  FAILED   : $name"; echo "$out" | tail -4 | sed 's/^/      /'; failed=$((failed+1))
   fi
 done
 
