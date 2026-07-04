@@ -24,6 +24,14 @@ DST="core/k8s/05-tekton/catalog"
 BASE="https://raw.githubusercontent.com/tektoncd/catalog/main/task"
 API="https://api.github.com/repos/tektoncd/catalog/commits"
 
+# Image mirror for registries with no CN egress. The kaniko task's BUILDER_IMAGE
+# (gcr.io) and WRITER_IMAGE (docker.io) are unreachable from the cluster —
+# Tekton's controller does an entrypoint lookup at pod-creation time and fails
+# `PodCreationFailed: Get https://gcr.io/v2/: i/o timeout`. Rewrite them to a
+# pull-through mirror. git-clone uses ghcr.io (reachable) and never matches.
+# Set TEKTON_IMAGE_MIRROR= (empty) to keep stock upstream refs.
+MIRROR_PREFIX="${TEKTON_IMAGE_MIRROR-m.daocloud.io}"
+
 mkdir -p "$DST"
 
 today="$(date -u +%Y-%m-%d)"
@@ -51,6 +59,15 @@ for entry in "${TASKS[@]}"; do
   if [[ -z "$body" ]]; then
     echo "  ERROR: empty body from ${BASE}/${remote_path}"
     exit 1
+  fi
+
+  # Mirror unreachable image refs (see MIRROR_PREFIX): scoped to `default:` lines
+  # and the two kaniko image paths, so git-clone (ghcr.io) is never rewritten.
+  if [[ -n "$MIRROR_PREFIX" ]]; then
+    body="$(printf '%s' "$body" | sed -E \
+      "/^[[:space:]]*default:/ s#(gcr\.io/kaniko-project/executor)#${MIRROR_PREFIX}/\1#; \
+       /^[[:space:]]*default:/ s#(docker\.io/library/bash)#${MIRROR_PREFIX}/\1#")"
+    echo "  mirror: gcr.io/docker.io defaults → ${MIRROR_PREFIX}/…"
   fi
 
   cat >"$out" <<EOF

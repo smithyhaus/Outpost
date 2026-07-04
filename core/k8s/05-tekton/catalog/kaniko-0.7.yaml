@@ -10,6 +10,14 @@
 # in TODOS.md ("buildah / kaniko v1.20+ replacement"). Until then this
 # vendored copy is our pinned source of truth — the upstream version dir
 # is still served by raw.githubusercontent.com but no longer maintained.
+#
+# LOCAL TRANSFORM (not upstream): the BUILDER_IMAGE (gcr.io) and WRITER_IMAGE
+# (docker.io) defaults below are rewritten to the m.daocloud.io pull-through
+# mirror. The cluster has no CN egress to gcr.io; Tekton's controller does an
+# image entrypoint lookup at pod-creation time and fails with
+# `PodCreationFailed: Get https://gcr.io/v2/: i/o timeout` on the stock refs.
+# The identical rewrite lives in scripts/vendor-tekton-catalog.sh (MIRROR_PREFIX)
+# so re-vendoring preserves it. git-clone uses ghcr.io (reachable) — untouched.
 # =============================================================================
 apiVersion: tekton.dev/v1
 kind: Task
@@ -43,10 +51,10 @@ spec:
       default: []
     - name: BUILDER_IMAGE
       description: The image on which builds will run (default is v1.5.1)
-      default: gcr.io/kaniko-project/executor:v1.5.1@sha256:c6166717f7fe0b7da44908c986137ecfeab21f31ec3992f6e128fff8a94be8a5
+      default: m.daocloud.io/gcr.io/kaniko-project/executor:v1.5.1@sha256:c6166717f7fe0b7da44908c986137ecfeab21f31ec3992f6e128fff8a94be8a5
     - name: WRITER_IMAGE
       description: The image on which the write-url step will run (default is docker.io/library/bash:5.1.4@sha256:c523c636b722339f41b6a431b44588ab2f762c5de5ec3bd7964420ff982fb1d9)
-      default: docker.io/library/bash:5.1.4@sha256:c523c636b722339f41b6a431b44588ab2f762c5de5ec3bd7964420ff982fb1d9
+      default: m.daocloud.io/docker.io/library/bash:5.1.4@sha256:c523c636b722339f41b6a431b44588ab2f762c5de5ec3bd7964420ff982fb1d9
   workspaces:
     - name: source
       description: Holds the context and Dockerfile
