@@ -57,7 +57,13 @@ resolve_registry_config() {
       # on Docker Hub (index.docker.io), which is reset/unreachable in CN — route
       # those pulls through the DaoCloud Docker Hub mirror. kaniko falls back to
       # index.docker.io if the mirror misses. Drop this flag for non-CN clusters.
-      KANIKO_EXTRA_ARGS='--skip-tls-verify --insecure --registry-mirror=docker.m.daocloud.io --cache=true --cache-repo=docker-registry.registry.svc.cluster.local:5000/cache --single-snapshot --snapshotMode=redo --use-new-run'
+      # --build-arg HY_REGISTRY: app Dockerfiles fetch the private @hy/* packages
+      # from a Verdaccio registry (ARG HY_REGISTRY, dev-default
+      # host.docker.internal:4873 — unresolvable in a build pod). Point every
+      # build at the in-cluster Verdaccio (core/k8s/07-verdaccio). Overridable
+      # via HY_REGISTRY in .env (unlike KANIKO_EXTRA_ARGS, which is unconditional).
+      HY_REGISTRY="${HY_REGISTRY:-http://verdaccio.registry.svc.cluster.local:4873/}"
+      KANIKO_EXTRA_ARGS="--skip-tls-verify --insecure --registry-mirror=docker.m.daocloud.io --build-arg=HY_REGISTRY=${HY_REGISTRY} --cache=true --cache-repo=docker-registry.registry.svc.cluster.local:5000/cache --single-snapshot --snapshotMode=redo --use-new-run"
       ;;
     aliyun-acr)
       REGISTRY_HOST="${ALIYUN_ACR_REGISTRY}/${ALIYUN_ACR_NAMESPACE}"
@@ -72,5 +78,5 @@ resolve_registry_config() {
       return 1
       ;;
   esac
-  export REGISTRY_HOST REGISTRY_PUSH_HOST KANIKO_EXTRA_ARGS
+  export REGISTRY_HOST REGISTRY_PUSH_HOST KANIKO_EXTRA_ARGS HY_REGISTRY
 }

@@ -1,0 +1,138 @@
+# =============================================================================
+# In-cluster Verdaccio — serves the private @hy/* npm packages to Tekton builds.
+# -----------------------------------------------------------------------------
+# WHY: the app Dockerfiles fetch @hy/* from a Verdaccio registry at build time
+# (ARG HY_REGISTRY). The dev default host.docker.internal:4873 does not resolve
+# inside a k3s build pod, and pointing at the host node IP couples every build
+# to a host process. Running Verdaccio in-cluster gives builds a stable ClusterIP
+# (verdaccio.registry.svc.cluster.local:4873) and caches to a PVC.
+#
+# @hy/* are PUBLISHED here (see scripts/publish-hy-to-verdaccio.sh) — no host
+# uplink — so the cluster is self-contained. Public packages ('**') proxy the
+# npmmirror CN mirror as a safety net (builds normally fetch public deps from
+# their own default registry; only the @hy scope points here).
+#
+# ns `registry` is reused (docker-registry already lives there). Apply with:
+#   kubectl apply -f core/k8s/07-verdaccio/verdaccio.yaml
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: verdaccio-storage
+  namespace: registry
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: verdaccio-config
+  namespace: registry
+data:
+  config.yaml: |
+    storage: /verdaccio/storage/data
+    web:
+      title: HY Verdaccio
+      enable: true
+    auth:
+      htpasswd:
+        file: /verdaccio/storage/htpasswd
+        # -1 disables interactive user registration; @hy/* publish is granted
+        # anonymously by the package ACL below (cluster-internal ClusterIP only).
+        max_users: -1
+    uplinks:
+      npmmirror:
+        url: https://registry.npmmirror.com/
+        cache: true
+        max_fails: 8
+        timeout: 60s
+    packages:
+      '@hy/*':
+        access: $all
+        publish: $all
+        unpublish: $all
+      '**':
+        access: $all
+        publish: $authenticated
+        proxy: npmmirror
+    log: { type: stdout, format: pretty, level: warn }
+    listen: 0.0.0.0:4873
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: verdaccio
+  namespace: registry
+  labels:
+    app: verdaccio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: verdaccio
+  strategy:
+    type: Recreate            # PVC is RWO — never run two writers
+  template:
+    metadata:
+      labels:
+        app: verdaccio
+    spec:
+      securityContext:
+        # verdaccio image runs as uid/gid 10001; fsGroup makes the RWO PVC writable.
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: verdaccio
+          image: docker.m.daocloud.io/verdaccio/verdaccio:6
+          ports:
+            - containerPort: 4873
+          volumeMounts:
+            - name: config
+              mountPath: /verdaccio/conf
+            - name: storage
+              mountPath: /verdaccio/storage
+          readinessProbe:
+            httpGet:
+              path: /-/ping
+              port: 4873
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /-/ping
+              port: 4873
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+      volumes:
+        - name: config
+          configMap:
+            name: verdaccio-config
+        - name: storage
+          persistentVolumeClaim:
+            claimName: verdaccio-storage
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: verdaccio
+  namespace: registry
+  labels:
+    app: verdaccio
+spec:
+  selector:
+    app: verdaccio
+  ports:
+    - name: http
+      port: 4873
+      targetPort: 4873
