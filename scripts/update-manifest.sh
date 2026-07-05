@@ -70,8 +70,14 @@ if ! command -v "$YQ_BIN" >/dev/null 2>&1 && ! [ -x "$YQ_BIN" ]; then
     aarch64|arm64) YQ_ARCH="arm64" ;;
     *) echo "ERROR: unsupported arch $ARCH for yq install" >&2; exit 2 ;;
   esac
-  curl -sSL "https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_${YQ_ARCH}" \
-    -o "$YQ_BIN"
+  YQ_REL="mikefarah/yq/releases/download/v4.44.3/yq_linux_${YQ_ARCH}"
+  # CN egress to github.com is flaky (SSL eof / connect timeout). Prefer the
+  # DaoCloud github-release file mirror, fall back to github directly, each with
+  # retries for transient flakes.
+  for _u in "https://files.m.daocloud.io/github.com/${YQ_REL}" "https://github.com/${YQ_REL}"; do
+    if curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 20 -o "$YQ_BIN" "$_u"; then break; fi
+  done
+  [ -s "$YQ_BIN" ] || { echo "ERROR: failed to download yq from mirror + github" >&2; exit 2; }
   chmod +x "$YQ_BIN"
 fi
 
