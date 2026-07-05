@@ -105,6 +105,11 @@ spec:
       # Per-task budget. Pulling source over HTTPS clone is normally
       # under a minute; allow 10m for large repos / slow networks.
       timeout: "10m"
+      # CN egress to github.com is intermittent: a clone can hit a ~130s connect
+      # timeout even when github is reachable seconds later. A single transient
+      # failure must NOT fail the whole build — Tekton re-runs the TaskRun in a
+      # fresh pod, riding out the flap. Each attempt keeps the 10m per-run cap.
+      retries: 3
       taskRef:
         name: git-clone
         kind: Task
@@ -156,6 +161,8 @@ spec:
       # Multi-stage Dockerfiles (Java/Maven, .NET SDK) on slow networks
       # easily blow past 60min during base-image pulls. 90min cap.
       timeout: "90m"
+      # Transient base-image / verdaccio / registry-push hiccups: one retry.
+      retries: 1
       runAfter:
         - read-build-config
       taskRef:
@@ -211,6 +218,9 @@ spec:
     - name: update-manifest
       # yq edit + git commit + push — well under a minute normally.
       timeout: "5m"
+      # Manifest-repo clone + yq download + push all hit github/mirrors over the
+      # same flaky CN egress. Retry transient failures.
+      retries: 2
       runAfter:
         - run-tests
       taskRef:
