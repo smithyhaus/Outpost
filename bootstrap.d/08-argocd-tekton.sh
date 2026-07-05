@@ -280,6 +280,27 @@ ok "Tekton Dashboard installed (https://tekton.${ROOT_DOMAIN}) — auth required
 kubectl apply -f core/k8s/06-bridges/
 ok "ArgoCD + Tekton + bridges applied"
 
+# host.docker.internal resolution for k3s + containerd (e.g. WSL).
+# The infra-bridges Services are ExternalName → host.docker.internal. Unlike
+# Docker Desktop, k3s/containerd does NOT hand that name to pods, so every
+# DB/Redis/RMQ lookup is ENOTFOUND and every app pod CrashLoops. Inject a
+# CoreDNS custom server block resolving host.docker.internal → the node's
+# InternalIP (the host, reachable from pods). k3s CoreDNS imports
+# /etc/coredns/custom/*.server from the optional coredns-custom configmap.
+NODE_IP="$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)"
+if [ -n "$NODE_IP" ]; then
+  kubectl -n kube-system create configmap coredns-custom \
+    --from-literal=hostdockerinternal.server="host.docker.internal:53 {
+    hosts {
+        ${NODE_IP} host.docker.internal
+    }
+}" --dry-run=client -o yaml | kubectl apply -f -
+  kubectl -n kube-system rollout restart deploy/coredns >/dev/null 2>&1 || true
+  ok "CoreDNS host.docker.internal → ${NODE_IP} (infra-bridges DB/Redis/RMQ resolvable)"
+else
+  warn "node InternalIP not found; host.docker.internal will not resolve → app pods CrashLoop"
+fi
+
 # Get ArgoCD admin password
 ARGOCD_ADMIN_PASSWORD=$(kubectl -n argocd get secret argocd-initial-admin-secret \
   -o jsonpath='{.data.password}' 2>/dev/null | base64 -d || echo '(not yet ready)')
