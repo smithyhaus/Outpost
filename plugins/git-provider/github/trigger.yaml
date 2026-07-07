@@ -1,16 +1,19 @@
 # ============================================================================
-# GitHub Trigger — spliced into the EventListener envelope by Phase 8.
+# GitHub Triggers — spliced into the EventListener envelope by Phase 8.
+#
+# Two triggers, distinguished by repo name:
+#   1. github-push          — application repos: build image + GitOps deploy
+#                             (template: build-template). EXCLUDES the library
+#                             repos in OUTPOST_LIBRARY_REPOS so they don't run
+#                             the image pipeline (they have no Dockerfile).
+#   2. github-push-publish  — library repos (OUTPOST_LIBRARY_REPOS, default
+#                             fst-foundation): pnpm -r publish @hy/* to
+#                             Verdaccio (template: publish-template).
 #
 # Auth: Tekton's built-in `github` interceptor verifies X-Hub-Signature-256
-# (HMAC-SHA256) using the github-webhook-secret Secret created by this
-# plugin's manifest.yaml. Stronger than plain-token compare.
-#
-# Order matters — each interceptor short-circuits on false:
-#   1. GitHub HMAC + event-type filter (rejects forged or non-push events)
-#   2. Repo whitelist (rejects out-of-scope repos; opt-in via .env)
-#   3. Ref filter — deploy branch only (OUTPOST_DEPLOY_BRANCH, default main);
-#      also rejects tag pushes + branch deletions
-#   4. short_sha overlay (computes 7-char SHA used as image tag)
+# (HMAC-SHA256) using the github-webhook-secret Secret from this plugin's
+# manifest.yaml. Each interceptor short-circuits on false; order matters.
+# The library-repo set is a CEL list literal; edit inline to add more libs.
 # ============================================================================
 - name: github-push
   interceptors:
@@ -23,9 +26,6 @@
             secretKey: secretToken
         - name: eventTypes
           value: ["push"]
-    # Multi-provider defense-in-depth: on a stacked EventListener, reject a
-    # request that ALSO carries another provider's push headers, so one delivery
-    # can't fire two PipelineRuns. header.match is null-safe on absent headers.
     - ref:
         name: cel
       params:
@@ -44,6 +44,11 @@
     - ref:
         name: cel
       params:
+        - name: filter
+          value: "!(body.repository.name in ['fst-foundation'])"
+    - ref:
+        name: cel
+      params:
         - name: overlays
           value:
             - key: short_sha
@@ -52,3 +57,40 @@
     - ref: github-push-binding
   template:
     ref: build-template
+- name: github-push-publish
+  interceptors:
+    - ref:
+        name: github
+      params:
+        - name: secretRef
+          value:
+            secretName: github-webhook-secret
+            secretKey: secretToken
+        - name: eventTypes
+          value: ["push"]
+    - ref:
+        name: cel
+      params:
+        - name: filter
+          value: "!header.match('X-Git-Oschina-Event', 'Push Hook') && !header.match('X-Gitlab-Event', 'Push Hook')"
+    - ref:
+        name: cel
+      params:
+        - name: filter
+          value: "body.ref == 'refs/heads/${OUTPOST_DEPLOY_BRANCH}' && body.after != '0000000000000000000000000000000000000000'"
+    - ref:
+        name: cel
+      params:
+        - name: filter
+          value: "body.repository.name in ['fst-foundation']"
+    - ref:
+        name: cel
+      params:
+        - name: overlays
+          value:
+            - key: short_sha
+              expression: "body.after.substring(0, 7)"
+  bindings:
+    - ref: github-push-binding
+  template:
+    ref: publish-template

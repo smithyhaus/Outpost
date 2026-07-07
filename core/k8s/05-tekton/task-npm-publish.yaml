@@ -1,0 +1,50 @@
+# ============================================================================
+# outpost-npm-publish — publish @hy/* workspace packages to Verdaccio.
+# Used by the `publish-npm-packages` pipeline for LIBRARY repos (e.g.
+# fst-foundation) that ship no deployable image. `pnpm -r publish` publishes
+# only packages whose version is NOT already on the registry and skips the
+# rest (not an error), so the flow is: a dev bumps a package's version ->
+# push -> CI publishes it -> consumers pinned to ^x.y.z pick it up on their
+# next build. No commit-back to the repo, so no webhook loop.
+# ============================================================================
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: outpost-npm-publish
+  namespace: tekton-pipelines
+spec:
+  params:
+    - name: source-subdir
+      type: string
+      default: source
+    - name: registry
+      type: string
+      description: Verdaccio registry URL to install-from and publish-to.
+      default: ${HY_REGISTRY}
+    - name: packages-filter
+      type: string
+      description: pnpm --filter selector for packages to publish.
+      default: "./packages/*"
+  workspaces:
+    - name: source
+  steps:
+    - name: publish
+      image: node:22-alpine
+      workingDir: $(workspaces.source.path)/$(params.source-subdir)
+      env:
+        - name: REG
+          value: $(params.registry)
+      script: |
+        #!/usr/bin/env sh
+        set -eu
+        corepack enable
+        echo "[publish] registry = ${REG}"
+        # Scope @hy to Verdaccio and route all installs through it (Verdaccio
+        # uplinks to npmjs for public deps, same as the app Docker builds).
+        printf '@hy:registry=%s\nregistry=%s\n' "${REG}" "${REG}" > .npmrc
+        pnpm install --frozen-lockfile=false
+        pnpm -r build
+        # -r publish skips versions already on the registry and publishes only
+        # newly-bumped ones. A real publish error fails the task (notify fires).
+        pnpm -r --filter "$(params.packages-filter)" publish \
+          --registry "${REG}" --no-git-checks

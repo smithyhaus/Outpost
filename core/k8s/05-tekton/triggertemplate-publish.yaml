@@ -1,0 +1,58 @@
+# ============================================================================
+# publish-template — creates a publish-npm-packages PipelineRun.
+# Referenced by the `github-push-publish` trigger (library repos only).
+# Same workspaces as build-template minus dockerconfig (no image push).
+# ============================================================================
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: publish-template
+  namespace: tekton-pipelines
+spec:
+  params:
+    - name: repo-url
+    - name: repo-name
+    - name: branch
+    - name: revision
+    - name: short-revision
+    - name: pusher
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1beta1
+      kind: PipelineRun
+      metadata:
+        generateName: publish-$(tt.params.repo-name)-
+        namespace: tekton-pipelines
+      spec:
+        serviceAccountName: tekton-triggers-sa
+        timeouts:
+          pipeline: "45m"
+          tasks: "40m"
+          finally: "5m"
+        pipelineRef:
+          name: publish-npm-packages
+        params:
+          - name: repo-url
+            value: $(tt.params.repo-url)
+          - name: repo-name
+            value: $(tt.params.repo-name)
+          - name: branch
+            value: $(tt.params.branch)
+          - name: revision
+            value: $(tt.params.revision)
+          - name: image-tag
+            value: $(tt.params.short-revision)
+          - name: pusher
+            value: $(tt.params.pusher)
+        workspaces:
+          - name: shared-workspace
+            volumeClaimTemplate:
+              spec:
+                accessModes:
+                  - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 5Gi
+                storageClassName: local-path
+          - name: git-creds
+            secret:
+              secretName: git-credentials

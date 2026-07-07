@@ -1,0 +1,95 @@
+# ============================================================================
+# publish-npm-packages — Pipeline for LIBRARY repos (no deployable image).
+#   1. fetch-source  git clone
+#   2. npm-publish    pnpm -r publish newly-bumped @hy/* packages to Verdaccio
+# finally: notify-on-failure (same pattern as build-and-deploy).
+# Routed to only by the `github-push-publish` trigger (fst-foundation).
+# ============================================================================
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: publish-npm-packages
+  namespace: tekton-pipelines
+spec:
+  params:
+    - name: repo-url
+      type: string
+    - name: repo-name
+      type: string
+    - name: branch
+      type: string
+      default: main
+    - name: revision
+      type: string
+    - name: image-tag
+      type: string
+      description: short SHA (notification context only)
+    - name: pusher
+      type: string
+      default: ""
+    - name: registry
+      type: string
+      default: ${HY_REGISTRY}
+  workspaces:
+    - name: shared-workspace
+    - name: git-creds
+  tasks:
+    - name: notify-on-start
+      taskRef:
+        name: outpost-notify
+        kind: Task
+      params:
+        - name: payload
+          value: |
+            {"event":"tekton.pipelinerun.started","level":"info","app":"$(params.repo-name)","env":"dev","commit":"$(params.image-tag)","ref":"$(params.branch)","url":"https://tekton.${ROOT_DOMAIN}/#/namespaces/tekton-pipelines/pipelineruns/$(context.pipelineRun.name)","text":"Publish started for $(params.repo-name)@$(params.image-tag)","pusher":"$(params.pusher)"}
+        - name: providers
+          value: "${NOTIFICATION_PROVIDERS}"
+    - name: fetch-source
+      timeout: "10m"
+      taskRef:
+        name: git-clone
+        kind: Task
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+        - name: basic-auth
+          workspace: git-creds
+      params:
+        - name: url
+          value: $(params.repo-url)
+        - name: revision
+          value: $(params.revision)
+        - name: subdirectory
+          value: source
+        - name: deleteExisting
+          value: "true"
+    - name: npm-publish
+      timeout: "30m"
+      runAfter:
+        - fetch-source
+      taskRef:
+        name: outpost-npm-publish
+        kind: Task
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      params:
+        - name: source-subdir
+          value: source
+        - name: registry
+          value: $(params.registry)
+  finally:
+    - name: notify-on-failure
+      when:
+        - input: "$(tasks.status)"
+          operator: in
+          values: ["Failed"]
+      taskRef:
+        name: outpost-notify
+        kind: Task
+      params:
+        - name: payload
+          value: |
+            {"event":"tekton.pipelinerun.failed","level":"error","app":"$(params.repo-name)","env":"dev","commit":"$(params.image-tag)","ref":"$(params.branch)","url":"https://tekton.${ROOT_DOMAIN}/#/namespaces/tekton-pipelines/pipelineruns/$(context.pipelineRun.name)","text":"Publish PipelineRun failed — open the link for logs","pusher":"$(params.pusher)"}
+        - name: providers
+          value: "${NOTIFICATION_PROVIDERS}"
