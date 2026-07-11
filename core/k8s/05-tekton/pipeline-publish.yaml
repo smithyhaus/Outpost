@@ -46,6 +46,12 @@ spec:
           value: "${NOTIFICATION_PROVIDERS}"
     - name: fetch-source
       timeout: "10m"
+      # CN egress to github.com is intermittent: a clone can hit a ~130s connect
+      # timeout even when github is reachable seconds later. A single transient
+      # failure must NOT fail the publish — Tekton re-runs the TaskRun in a
+      # fresh pod, riding out the flap. Each attempt keeps the 10m per-run cap.
+      # (Same hardening as build-and-deploy's fetch-source.)
+      retries: 3
       taskRef:
         name: git-clone
         kind: Task
@@ -65,6 +71,9 @@ spec:
           value: "true"
     - name: npm-publish
       timeout: "30m"
+      # pnpm install / corepack still reach the network (via Verdaccio uplink);
+      # one retry rides out a transient flap without masking real failures.
+      retries: 1
       runAfter:
         - fetch-source
       taskRef:

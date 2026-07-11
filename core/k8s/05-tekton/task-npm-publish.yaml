@@ -37,6 +37,10 @@ spec:
       script: |
         #!/usr/bin/env sh
         set -eu
+        # corepack fetches the pnpm tarball itself and does NOT read .npmrc —
+        # without this it goes straight to registry.npmjs.org (flaky CN egress).
+        # Route it through Verdaccio like everything else (uplink -> npmmirror).
+        export COREPACK_NPM_REGISTRY="${REG%/}"
         corepack enable
         echo "[publish] registry = ${REG}"
         # Scope @hy to Verdaccio and route all installs through it (Verdaccio
