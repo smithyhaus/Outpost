@@ -119,13 +119,16 @@ cd repo
 # Resolve the manifest app dir. The GitHub repo name (APP_NAME) often carries an
 # `fst-` prefix or `-web` suffix that the manifest dir drops
 # (fst-product-service -> product-service, fst-admin-web -> fst-admin,
-# fst-bff-ops -> bff-ops). Try the known name variants in order.
+# fst-bff-ops -> bff-ops). The BFFs live INSIDE their frontend's app dir
+# (fst-bff-admin -> apps/fst-admin, fst-bff-miniapp -> apps/fst-miniapp),
+# hence the fst-bff-* -> fst-* variant. Try the known variants in order.
 APP_DIR=""
-for _cand in "$APP_NAME" "${APP_NAME#fst-}" "${APP_NAME%-web}"; do
+_bff_cand=$(printf '%s' "$APP_NAME" | sed 's/^fst-bff-/fst-/')
+for _cand in "$APP_NAME" "${APP_NAME#fst-}" "${APP_NAME%-web}" "$_bff_cand"; do
   if [ -d "apps/$_cand" ]; then APP_DIR="apps/$_cand"; break; fi
 done
 if [ -z "$APP_DIR" ]; then
-  echo "ERROR: no manifest dir for '$APP_NAME' (tried apps/$APP_NAME, apps/${APP_NAME#fst-}, apps/${APP_NAME%-web})." >&2
+  echo "ERROR: no manifest dir for '$APP_NAME' (tried apps/$APP_NAME, apps/${APP_NAME#fst-}, apps/${APP_NAME%-web}, apps/$_bff_cand)." >&2
   echo "       Add the directory with either kustomization.yaml or deployment.yaml first." >&2
   exit 1
 fi
