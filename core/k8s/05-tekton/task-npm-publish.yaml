@@ -46,6 +46,12 @@ spec:
         # Scope @hy to Verdaccio and route all installs through it (Verdaccio
         # uplinks to npmjs for public deps, same as the app Docker builds).
         printf '@hy:registry=%s\nregistry=%s\n' "${REG}" "${REG}" > .npmrc
+        # npm/pnpm refuse to publish with no credential at all (client-side
+        # ENEEDAUTH) even though Verdaccio's '@hy/*' ACL grants publish to
+        # $all (verified live: unauthenticated PUT returns 201). A dummy
+        # token satisfies the client; the server does not validate it.
+        _reg_host="${REG#*://}"; _reg_host="${_reg_host%/}"
+        printf '//%s/:_authToken=anonymous\n' "${_reg_host}" >> .npmrc
         pnpm install --frozen-lockfile=false
         pnpm -r build
         # -r publish skips versions already on the registry and publishes only
