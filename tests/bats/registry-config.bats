@@ -47,29 +47,33 @@ setup() {
   [[ "$KANIKO_EXTRA_ARGS" == *"docker-registry.registry.svc.cluster.local:5000/cache"* ]]
 }
 
-@test "self-hosted: KANIKO_EXTRA_ARGS includes ephemeral-compression flags" {
-  # --single-snapshot is the highest-impact lever for ephemeral on
-  # single-node k3d (cuts per-build transient by ~half for multi-RUN
-  # Dockerfiles). Lock it in — removing it would re-introduce the
-  # DiskPressure-evicted-mid-build failure mode that motivated this layer.
+@test "self-hosted: KANIKO_EXTRA_ARGS favors caching (NO --single-snapshot)" {
+  # --single-snapshot is MUTUALLY EXCLUSIVE with --cache=true: a single
+  # end-of-build snapshot writes no per-command layers to the cache-repo, so
+  # nothing is ever cached (measured CACHE HIT=0). It was removed to restore
+  # per-layer caching. The cost is more transient ephemeral per build; hosts
+  # with a tight ephemeral budget can add --single-snapshot back via
+  # KANIKO_EXTRA_ARGS in .env. Lock the caching default in.
   export REGISTRY_PLUGIN="self-hosted"
   resolve_registry_config
-  [[ "$KANIKO_EXTRA_ARGS" == *"--single-snapshot"* ]] \
-    || fail "missing --single-snapshot — kaniko will burn ephemeral per command"
+  [[ "$KANIKO_EXTRA_ARGS" != *"--single-snapshot"* ]] \
+    || fail "--single-snapshot present — it defeats --cache=true (CACHE HIT=0)"
+  [[ "$KANIKO_EXTRA_ARGS" == *"--cache-copy-layers"* ]] \
+    || fail "missing --cache-copy-layers — COPY layers (package.json gate) won't cache"
   [[ "$KANIKO_EXTRA_ARGS" == *"--snapshotMode=redo"* ]] \
     || fail "missing --snapshotMode=redo — slower + more RAM than necessary"
   [[ "$KANIKO_EXTRA_ARGS" == *"--use-new-run"* ]] \
     || fail "missing --use-new-run — older execution mode, more memory"
 }
 
-@test "aliyun-acr: KANIKO_EXTRA_ARGS includes ephemeral-compression flags" {
-  # Same compression applies regardless of registry backend — the limiting
-  # factor is the k3d node's ephemeral budget, not the registry.
+@test "aliyun-acr: KANIKO_EXTRA_ARGS favors caching (NO --single-snapshot)" {
+  # Same caching default regardless of registry backend.
   export REGISTRY_PLUGIN="aliyun-acr"
   export ALIYUN_ACR_REGISTRY="registry.cn-test.aliyuncs.com"
   export ALIYUN_ACR_NAMESPACE="t"
   resolve_registry_config
-  [[ "$KANIKO_EXTRA_ARGS" == *"--single-snapshot"* ]]
+  [[ "$KANIKO_EXTRA_ARGS" != *"--single-snapshot"* ]]
+  [[ "$KANIKO_EXTRA_ARGS" == *"--cache-copy-layers"* ]]
   [[ "$KANIKO_EXTRA_ARGS" == *"--snapshotMode=redo"* ]]
   [[ "$KANIKO_EXTRA_ARGS" == *"--use-new-run"* ]]
 }

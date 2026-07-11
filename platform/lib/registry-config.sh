@@ -24,20 +24,27 @@
 #   bugs the project has hit twice already; the only correct change here
 #   is space-separated tokens.
 #
-# Ephemeral-compression flags — IMPORTANT, single-node k3d dev hosts:
-#   --single-snapshot: kaniko takes ONE filesystem snapshot at the end
-#     instead of one per Dockerfile command. Cuts per-build transient
-#     ephemeral by roughly half for multi-RUN Dockerfiles (e.g. SCM
-#     MCP's Python+Node multi-stage was ~2 GB per build before this).
-#     Trade-off: final image has fewer layers, slightly less cross-build
-#     layer cache reuse on pull side — acceptable for dev CI/CD where
-#     builds run on the same host that already has the layers cached.
+# Cache + snapshot flags — IMPORTANT:
+#   NO --single-snapshot. It was here to halve per-build transient ephemeral
+#     (one final snapshot instead of one per command), but it is MUTUALLY
+#     EXCLUSIVE with --cache=true/--cache-repo: with a single end-of-build
+#     snapshot kaniko never writes per-command layers to the cache-repo, so
+#     nothing is ever cached — measured CACHE HIT=0 on a 41-min build. Removing
+#     it restores per-layer caching, so an unchanged-lockfile rebuild reuses the
+#     (7.8min + 20.7min) pnpm-install layers instead of re-downloading. The cost
+#     is more transient ephemeral per build (was ~2 GB for the worst Python+Node
+#     multi-stage); bump the shared-workspace volumeClaimTemplate in
+#     triggertemplate.yaml if a large build hits the 5Gi cap.
+#   --cache-copy-layers: also cache COPY layers (the `COPY package.json
+#     pnpm-lock.yaml` layer that gates the install cache), not just RUN.
 #   --snapshotMode=redo: detect file changes via filesystem mtime instead
 #     of inode metadata. Less RAM + faster.
 #   --use-new-run: kaniko's newer file-change tracker (recommended).
-#   These are platform defaults — if a future app NEEDS the full per-
-#   command snapshot semantics (e.g. weird COPY semantics across stages),
-#   they can override by setting KANIKO_EXTRA_ARGS in .env before bootstrap.
+#   NOTE on correctness: layer caching is only safe when the deps install is
+#     reproducible. App Dockerfiles that do `pnpm update "@hy/*"` float internal
+#     packages and, once cached, ship STALE @hy/* — pin @hy/* in the lockfile
+#     and drop the `pnpm update` line (app-repo change) before relying on cache.
+#   Override by setting KANIKO_EXTRA_ARGS in .env before bootstrap.
 # =============================================================================
 
 resolve_registry_config() {
@@ -60,8 +67,8 @@ resolve_registry_config() {
       # Push to in-cluster Service to bypass cloudflared HTTP/2 large-blob limit.
       REGISTRY_PUSH_HOST="docker-registry.registry.svc.cluster.local:5000"
       # Insecure (HTTP, anonymous) + cache under /cache. Space-separated —
-      # see header for why this MUST NOT be a JSON array. Ephemeral-
-      # compression flags (single-snapshot et al) — see header for why.
+      # see header for why this MUST NOT be a JSON array. Caching flags
+      # (NO --single-snapshot, +--cache-copy-layers) — see header for why.
       # --registry-mirror: Dockerfile base images (FROM node:22-alpine, …) live
       # on Docker Hub (index.docker.io), which is reset/unreachable in CN — route
       # those pulls through the DaoCloud Docker Hub mirror. kaniko falls back to
@@ -72,14 +79,14 @@ resolve_registry_config() {
       # build at the in-cluster Verdaccio (core/k8s/07-verdaccio). Overridable
       # via HY_REGISTRY in .env (unlike KANIKO_EXTRA_ARGS, which is unconditional).
       # (HY_REGISTRY itself is defaulted above the case — plugin-independent.)
-      KANIKO_EXTRA_ARGS="--skip-tls-verify --insecure --registry-mirror=docker.m.daocloud.io --build-arg=HY_REGISTRY=${HY_REGISTRY} --cache=true --cache-repo=docker-registry.registry.svc.cluster.local:5000/cache --single-snapshot --snapshotMode=redo --use-new-run"
+      KANIKO_EXTRA_ARGS="--skip-tls-verify --insecure --registry-mirror=docker.m.daocloud.io --build-arg=HY_REGISTRY=${HY_REGISTRY} --cache=true --cache-repo=docker-registry.registry.svc.cluster.local:5000/cache --cache-copy-layers --snapshotMode=redo --use-new-run"
       ;;
     aliyun-acr)
       REGISTRY_HOST="${ALIYUN_ACR_REGISTRY}/${ALIYUN_ACR_NAMESPACE}"
       REGISTRY_PUSH_HOST="${ALIYUN_ACR_REGISTRY}/${ALIYUN_ACR_NAMESPACE}"
       # ACR is HTTPS-only — no --insecure (would force HTTP, which ACR refuses).
       # Same ephemeral-compression rationale as self-hosted — see header.
-      KANIKO_EXTRA_ARGS="--cache=true --cache-repo=${ALIYUN_ACR_REGISTRY}/${ALIYUN_ACR_NAMESPACE}/cache --single-snapshot --snapshotMode=redo --use-new-run"
+      KANIKO_EXTRA_ARGS="--cache=true --cache-repo=${ALIYUN_ACR_REGISTRY}/${ALIYUN_ACR_NAMESPACE}/cache --cache-copy-layers --snapshotMode=redo --use-new-run"
       ;;
     *)
       err "REGISTRY_PLUGIN '${REGISTRY_PLUGIN:-(unset)}' lacks a kaniko config block in platform/lib/registry-config.sh"
