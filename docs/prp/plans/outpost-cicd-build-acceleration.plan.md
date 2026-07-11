@@ -1,200 +1,125 @@
-# Plan: CI/CD Build Acceleration (kaniko→buildkit + persistent cache + base prewarm)
+# Plan: CI/CD Build Acceleration — buildkit + persistent pnpm store + concurrency cap
 
-> **Status: DESIGN — needs cluster validation. NOT yet implemented.**
-> The fail-fast reorder (run-tests before build) and webhook auto-registration
-> shipped separately and are live. This plan covers the remaining per-build
-> latency wins, all of which mutate the live build path and therefore must be
-> validated on the WSL2 cluster before merge. Do not mark done from a laptop.
+> **Status: DESIGN, adversarially reviewed. Partially validated on cluster.**
+> Supersedes the first draft. Incorporates: live diagnosis (kaniko CACHE HIT=0),
+> the real app Dockerfile, a multi-agent research pass, and an adversarial
+> verify that found 3 blockers + several holes (folded in below). Execution is
+> staged behind a flag; each stage has a measurable gate. Cluster changes apply
+> via kubectl/render_apply from the operator machine; only a full re-clone +
+> bootstrap on the WSL host needs the user.
 
-## Summary
+## Diagnosis (measured, not assumed)
 
-After moving Gate A (`run-tests`) ahead of the image build, the dominant
-remaining latency is the image build itself. Root causes, evidence-anchored:
+`build-and-push` (kaniko v1.5.1, archived) is 12–41 min = ~85% of pipeline. Live
+TaskRun log of a 41-min build: **kaniko CACHE HIT = 0**, CACHE MISS = 4. Timeline:
+first `pnpm install` ~7.8 min, prod-deps `pnpm install` ~20.7 min. Base-image
+pull is fast. So the cost is **dependency install re-run every build with zero
+layer-cache reuse**.
 
-1. **kaniko v1.5.1** (`core/k8s/05-tekton/catalog/kaniko-0.7.yaml:54`) — pinned to
-   a 2021 build of an **archived** project (`tekton.dev/deprecated: "true"`,
-   line 34). Slow layer snapshotting on multi-stage Dockerfiles; the 90-min
-   task budget (`pipeline-build.yaml`) exists because of it.
-2. **Fresh empty workspace per run** (`triggertemplate.yaml:64-72`) — every
-   PipelineRun gets a new 5Gi `local-path` PVC. No on-disk dependency cache
-   (npm/maven/nuget) survives between builds; only kaniko's registry-backed
-   layer cache (`--cache-repo`) helps, and only when layers are unchanged.
-3. **Base-image pulls over the CN mirror every cold build**
-   (`m.daocloud.io` in `kaniko-0.7.yaml:54-57`) — the single biggest slice of a
-   cold Java/.NET build.
+Two root causes, from the real Dockerfile (`smithyhaus/fst-procurement-service`,
+Node22·pnpm·NestJS+Prisma, 4 stages deps/build/prod-deps/runtime):
 
-This plan replaces kaniko with **buildkit** (native parallelism + registry
-`mode=max` cache + inline cache), adds a **persistent dependency-cache
-workspace**, and **prewarms base images** into the in-cluster registry.
+1. **`--single-snapshot` defeats `--cache=true`.** `platform/lib/registry-config.sh`
+   builds `KANIKO_EXTRA_ARGS="… --cache=true --cache-repo=… --single-snapshot …"`.
+   `--single-snapshot` collapses the build to ONE final-filesystem layer, so kaniko
+   never writes/reads per-command cache layers → CACHE HIT=0 by construction. The
+   Dockerfile is otherwise cache-friendly (`COPY package.json pnpm-lock.yaml* ./`
+   BEFORE `pnpm install`), so per-layer caching *would* hit on an unchanged lockfile.
 
-## Problem → Solution
+2. **`pnpm update "@hy/*"` floats internal packages every build** (in both deps and
+   prod-deps RUN lines). This is a deliberate "always take latest internal package"
+   pattern. It is *correctness-incompatible with layer caching*: once the install
+   layer caches, the update is frozen and builds ship stale `@hy/*`. So **any**
+   layer-cache win (kaniko OR buildkit registry cache) is unsafe for these apps
+   until `@hy/*` is pinned in the lockfile and the `pnpm update` line removed —
+   an app-repo change.
 
-**Current**: serial kaniko build, cold every time, base images re-pulled over a
-flaky CN mirror. Multi-stage builds routinely approach the 90-min cap.
+## Why buildkit (not just the kaniko flag fix)
 
-**Desired**: buildkit builds with warm layer + dependency caches and locally
-mirrored base images, so a typical incremental build drops from tens of minutes
-to a few, and cold builds stop re-pulling bases over public egress.
+- Removing `--single-snapshot` restores kaniko layer caching → fast **unchanged-
+  lockfile** builds. But (a) it inherits the `@hy/*` staleness gate, and (b) it does
+  NOT help a **changed-lockfile** build (the 20-min install still re-downloads).
+- The only approach that is **both fast and correct while keeping `@hy/*` floating**
+  is buildkit `RUN --mount=type=cache` on the pnpm store: the store keeps the
+  downloaded tarballs across builds, so `pnpm install`/`pnpm update` re-resolve at
+  LAN speed without re-downloading, and the result is always a fresh, correct
+  install (no frozen layer). This is the target end-state.
+- buildkit also gives registry cache `mode=max`, native concurrency throttling in
+  one daemon, and content-addressed (correctness-safe) cache keys.
 
-## Metadata
+## Architecture (corrected after adversarial review)
 
-- **Complexity**: High (touches the live build task + workspace model; needs cluster)
-- **Risk**: High — build path change; **must** be staged behind a flag with a kaniko fallback
-- **Files**: 1 CREATE buildkit Task, 1 UPDATE pipeline (flagged branch), 1 CREATE prewarm Job, 1 UPDATE registry-config lib, tests
-- **Prereq**: registry supports cache export (`docker-registry` distribution: yes; ACR: yes)
+- **A dedicated `buildkit` namespace labeled `pod-security.kubernetes.io/enforce=privileged`.**
+  BLOCKER found + VALIDATED: `tekton-pipelines` is `enforce=baseline`
+  (`bootstrap.d/08-argocd-tekton.sh`, `core/k8s/00-namespaces.yaml`), which **forbids
+  `privileged:true`** — a privileged buildkitd there is rejected at admission. A probe
+  confirmed a privileged pod IS admitted in a `enforce=privileged`-labeled namespace.
+  kaniko survives baseline only via `runAsUser:0` (root ok, privileged not).
+- **One long-lived rootful (privileged) `buildkitd` Deployment** owning a persistent
+  RWO local-path PVC at `/var/lib/buildkit` (layer cache + pnpm store survive runs).
+  `strategy: Recreate` (RWO, single node). SPOF (a daemon OOM kills all in-flight
+  builds) — accepted for single-tenant homelab; size memory generously.
+- **A thin `buildkit` client Task in `tekton-pipelines`** (non-privileged → passes
+  baseline) that runs `buildctl --addr tcp://buildkitd.buildkit.svc.cluster.local:1234
+  build …`. Drop-in for the kaniko Task: same IMAGE/DOCKERFILE/CONTEXT/EXTRA_ARGS
+  params, source+dockerconfig workspaces, IMAGE_DIGEST/IMAGE_URL results.
+- **daemon `buildkitd.toml`**: `[registry."docker.io"] mirrors=["docker.m.daocloud.io"]`;
+  `[registry."docker-registry.registry.svc.cluster.local:5000"] http=true insecure=true`
+  (daemon does all pulls/pushes). GC sized UNDER the PVC (blocker: default 70GB > 50Gi
+  PVC → ENOSPC): on a 50Gi PVC use `maxUsedSpace=40GB, reservedSpace=8GB, minFreeSpace=5GB`.
+  `worker.oci max-parallelism` caps concurrent build steps (the real concurrency governor).
+- **Cutover behind `BUILD_ENGINE_TASK`** (default `kaniko`, kept vendored+applied) —
+  a single `taskRef` name in `pipeline-build.yaml`; rollback = flip one word.
 
----
+## Unproven on WSL2 — MUST validate before cutover (adversarial holes)
 
-## Stage 1 — buildkit Task (drop-in, behind a flag)
+1. **overlayfs snapshotter under nested k3s** — buildkit's default overlayfs inside
+   k3s's overlayfs is a known WSL2 failure mode; may need `snapshotter="native"` or
+   fuse-overlayfs. Gate: buildkitd pod reaches Ready (readinessProbe = `buildctl debug
+   workers`) AND a throwaway build snapshots.  ← probe underway this session.
+2. **RUN sandbox DNS** — buildkit's build sandbox may not inherit CoreDNS, so
+   `@hy/*` fetch from `host.docker.internal:4873` / verdaccio could fail to resolve.
+   Gate: a throwaway build whose RUN curls the Verdaccio host succeeds.
+3. **buildkit image tag+digest** — pin a REAL tag resolved via the daocloud mirror
+   (probe uses `v0.16.0`; verify before wiring the daemon+client to the same digest).
+4. **IMAGE_DIGEST** parsed from buildctl `--metadata-file` — validate non-empty on
+   first run (update-manifest keys off the tag, not digest, so a miss degrades gracefully).
 
-Add a new Task alongside kaniko (do **not** delete kaniko). Select via a new
-`BUILD_ENGINE` env (`kaniko` default, `buildkit` opt-in) so rollback is a
-one-line revert. Draft Task (rootless buildkitd, in-pod):
+## Staged rollout (each stage gated by a measurement)
 
-```yaml
-apiVersion: tekton.dev/v1
-kind: Task
-metadata:
-  name: buildkit
-  namespace: tekton-pipelines
-spec:
-  params:
-    - name: IMAGE
-    - name: DOCKERFILE
-      default: ./Dockerfile
-    - name: CONTEXT
-      default: ./
-    - name: EXTRA_ARGS           # platform args from read-build-config
-      type: array
-      default: []
-    - name: CACHE_REPO           # e.g. docker-registry.registry.svc.cluster.local:5000/cache
-  workspaces:
-    - name: source
-    - name: dockerconfig
-      optional: true
-      mountPath: /root/.docker
-    - name: cache                # persistent dep cache (Stage 2); optional
-      optional: true
-  steps:
-    - name: build
-      # Pin a digest + mirror it via scripts/vendor-tekton-catalog.sh, same as kaniko.
-      image: m.daocloud.io/docker.io/moby/buildkit:v0.16.0-rootless
-      workingDir: $(workspaces.source.path)
-      securityContext:            # rootless still needs these on containerd/WSL2
-        seccompProfile: { type: Unconfined }
-        runAsUser: 1000
-        runAsGroup: 1000
-      script: |
-        #!/usr/bin/env sh
-        set -e
-        # Local daemon so we control the mirror + insecure registry.
-        buildctl-daemonless.sh build \
-          --frontend dockerfile.v0 \
-          --local context=$(workspaces.source.path)/$(params.CONTEXT) \
-          --local dockerfile=$(dirname $(params.DOCKERFILE)) \
-          --opt filename=$(basename $(params.DOCKERFILE)) \
-          --output type=image,name=$(params.IMAGE),push=true,registry.insecure=true \
-          --export-cache type=registry,ref=$(params.CACHE_REPO),mode=max,registry.insecure=true \
-          --import-cache type=registry,ref=$(params.CACHE_REPO),registry.insecure=true
-      env:
-        - name: BUILDKITD_FLAGS
-          value: --oci-worker-no-process-sandbox
-        - name: DOCKER_CONFIG
-          value: /root/.docker
-```
-
-Notes / open questions for cluster validation:
-- **Rootless on WSL2 containerd**: confirm `--oci-worker-no-process-sandbox` +
-  Unconfined seccomp is accepted, else fall back to privileged buildkitd or a
-  buildkit `Deployment` + `buildctl` remote (`--addr tcp://buildkitd:1234`).
-- **Insecure registry**: mirror the `--skip-tls-verify/--insecure` posture the
-  self-hosted branch already uses for kaniko (`registry-config.sh:75`).
-- `mode=max` exports **all** layer caches (incl. intermediate) — the big
-  multi-stage win. Verify the self-hosted `docker-registry` accepts cache
-  manifests (distribution registry does).
-
-## Stage 2 — persistent dependency cache workspace
-
-kaniko can't use a host dep cache (it builds inside image layers), but buildkit
-`RUN --mount=type=cache` can. Add a **named, reused** PVC workspace (not a
-per-run `volumeClaimTemplate`) mounted at the buildkit cache dir so `.m2` / npm
-store / nuget survive across builds.
-
-- Single-node WSL2 → `ReadWriteOnce` local-path is fine; Tekton's affinity
-  assistant co-locates pods. **Concurrency caveat**: two builds sharing one RWO
-  PVC serialize. Options: (a) accept serialization (single-node dev is already
-  effectively serial), or (b) one cache PVC **per app** keyed by repo-name.
-  Recommend (b): a per-run `volumeClaimTemplate` can't key on repo-name, so
-  pre-create `cache-<app>` PVCs during onboarding and bind by name.
-- Dockerfiles must opt in with `RUN --mount=type=cache,target=/root/.m2 ...`.
-  Document this in the onboarding guide; no-op for apps that don't.
-
-## Stage 3 — base-image prewarm
-
-Prime the in-cluster registry so cold builds pull bases from `svc.cluster.local`
-instead of the CN mirror. A CronJob/Job that `crane copy`s the common bases
-(node, maven/temurin, dotnet/sdk+aspnet, python) from the mirror into
-`docker-registry.registry.svc.cluster.local:5000`, run once at bootstrap +
-weekly refresh. Draft:
-
-```yaml
-apiVersion: batch/v1
-kind: Job
-metadata: { name: base-image-prewarm, namespace: registry }
-spec:
-  template:
-    spec:
-      restartPolicy: OnFailure
-      containers:
-        - name: prewarm
-          image: m.daocloud.io/gcr.io/go-containerregistry/crane:v0.20.2
-          command: ["/bin/sh","-c"]
-          args:
-            - |
-              set -e
-              REG=docker-registry.registry.svc.cluster.local:5000
-              for b in library/node:20-alpine library/maven:3.9-eclipse-temurin-21 \
-                       library/python:3.12-slim ; do
-                crane copy --insecure m.daocloud.io/docker.io/$b $REG/base/$b
-              done
-```
-Then set buildkit's `--opt build-arg:BASE_MIRROR=$REG/base` (or a Dockerfile ARG
-convention) so app images pull bases in-cluster. Requires an app-side ARG
-convention — document, keep optional.
-
-## Staged rollout
-
-1. Land Stage 1 buildkit Task **inert** (`BUILD_ENGINE=kaniko` default). Verify
-   the Task applies and a manual PipelineRun with `BUILD_ENGINE=buildkit` on ONE
-   throwaway app behaves correctly.
-2. Flip one real app to buildkit; compare wall-clock cold + warm vs kaniko.
-3. Add Stage 3 prewarm; re-measure cold builds.
-4. Add Stage 2 cache workspace + one Dockerfile `--mount=type=cache`; re-measure.
-5. Only after 3 green real-app builds: consider making buildkit the default.
-
-## Validation (definition of done — cluster required)
-
-- [ ] `kubectl apply` of the buildkit Task succeeds; a PipelineRun with
-      `BUILD_ENGINE=buildkit` reaches `Succeeded`.
-- [ ] Built image runs identically to the kaniko-built one (same entrypoint,
-      same digest of app layers where inputs unchanged).
-- [ ] **Measured**: warm incremental build wall-clock < 50% of the kaniko
-      baseline for the same commit (capture `kubectl get pipelinerun` durations,
-      paste PASS/FAIL numbers into the report).
-- [ ] Cold build no longer pulls bases from `m.daocloud.io` (grep buildkit logs
-      for the in-cluster registry host instead).
-- [ ] kaniko path still works when `BUILD_ENGINE=kaniko` (fallback intact).
-- [ ] `verify.sh` still green; bats still green.
+- **Stage 0 — feasibility probe** (throwaway, no repo change): privileged buildkitd
+  in a probe namespace; confirm Ready + `buildctl debug workers` healthy + one test
+  build snapshots + resolves the Verdaccio DNS. GO/NO-GO for the whole plan.
+- **Stage 1 — daemon + client Task, inert**: commit `core/k8s/06-buildkit/{namespace,
+  configmap,deployment,service,pvc}.yaml` + `task-buildkit.yaml`; wire Phase 8 to apply
+  them; keep `BUILD_ENGINE_TASK=kaniko`. Validation: daemon Ready, Task applies.
+- **Stage 2 — cut ONE service to buildkit** via a manual PipelineRun with the buildkit
+  task; measure cold build (populates cache) then a warm rebuild of the SAME commit.
+  Gate: warm `build-and-push` < 50% of the kaniko baseline for that service; image runs.
+- **Stage 3 — app correctness + pnpm store (app-repo change, REQUIRED before default)**:
+  in each `fst-*` repo, pin `@hy/*` in `pnpm-lock.yaml` + drop `pnpm update "@hy/*"`,
+  and add `RUN --mount=type=cache,target=/root/.local/share/pnpm/store,sharing=shared …`
+  to the install RUNs. (`sharing=shared` not `locked` so concurrent builds don't queue
+  on one lock; pnpm store is concurrency-tolerant.) Gate: changed-lockfile warm build's
+  install drops to download-delta.
+- **Stage 4 — concurrency cap**: a `ResourceQuota` (+ `LimitRange`) on tekton-pipelines
+  caps concurrent build TaskRun pods (Tekton holds excess TaskRuns *Pending*, not
+  Failed). Right-size the thin client pod's requests DOWN (real CPU burns in the daemon,
+  governed by `max-parallelism`). LimitRange MUST land before the quota/first run.
+- **Stage 5 — flip default** to buildkit only after ≥3 green real builds; keep kaniko
+  vendored for one-word rollback. Optionally re-add the base-image prewarm Job for
+  Java/.NET (kept out of this iteration).
 
 ## Rollback
 
-Set `BUILD_ENGINE=kaniko` (or revert the pipeline flag commit) and re-bootstrap
-Phase 8. kaniko Task is never deleted until buildkit has 2 weeks of green real
-builds. The prewarm Job and cache PVCs are additive and safe to leave.
+Flip `BUILD_ENGINE_TASK=kaniko` (or revert the pipeline commit) + re-render Phase 8.
+kaniko Task stays vendored+applied throughout. Never delete `buildkitd-cache` PVC
+(Delete reclaim = cache lost); the pruner only reaps PipelineRuns + Failed pods.
 
-## Out of scope / follow-ups
+## Cheap interim option (documented, NOT auto-enabled)
 
-- Deploy-side pull latency (large blobs over cloudflared HTTP/2) — separate plan;
-  push already bypasses cloudflared via in-cluster Service (`pipeline-build.yaml`
-  registry-push note). Node pull path optimization is its own investigation.
-- run-tests `apk add` per run — minor; pin a prebuilt test-runner image later.
+Removing `--single-snapshot` from `registry-config.sh` restores kaniko caching for
+unchanged-lockfile builds with zero new infra — BUT carries the same `@hy/*`
+staleness gate, so it is unsafe to enable before the Stage-3 app fix. Listed for
+completeness; the buildkit path is preferred because it keeps `@hy/*` floating AND
+fast.
