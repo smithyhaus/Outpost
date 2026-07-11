@@ -1,11 +1,14 @@
 # ============================================================================
 # 通用构建 + GitOps 部署 Pipeline
-# 步骤：
-#   1. fetch-source     用 git clone 拉取应用代码
-#   2. build-and-push   用 Kaniko 构建镜像并推到 registry
-#   3. run-tests        Gate A — 跑 outpost.test.yaml / Dockerfile.test;
-#                        没有这两个文件则 skipped(不算失败)
-#   4. update-manifest  克隆 manifest 仓库，用 yq 改 image tag，commit + push
+# 步骤（fail-fast：测试在昂贵的镜像构建之前）：
+#   1. fetch-source      用 git clone 拉取应用代码
+#   2. read-build-config 读 outpost.build.yaml(无则用平台默认 kaniko 参数)
+#   3. run-tests         Gate A — 跑 outpost.test.yaml / Dockerfile.test;
+#                        没有这两个文件则 skipped(不算失败)。测试只读 source,
+#                        不依赖镜像 → 放在构建之前;失败即止,省下一整轮
+#                        kaniko 构建(Java/.NET 多阶段最长 90min)。
+#   4. build-and-push    Gate A 通过后,用 Kaniko 构建镜像并推到 registry
+#   5. update-manifest   克隆 manifest 仓库，用 yq 改 image tag，commit + push
 #
 # finally:
 #   notify-on-failure   PipelineRun 失败时,fan-out 到所有启用的通知 plugin
@@ -129,7 +132,7 @@ spec:
           value: "true"
 
     # -------------------------------------------------------------------------
-    # 1b. Read per-app outpost.build.yaml (optional file in source root).
+    # 2. Read per-app outpost.build.yaml (optional file in source root).
     # No file → v0.2 defaults (./Dockerfile + ./ context + platform args).
     # File present → app overrides dockerfile/context and appends buildArgs +
     # extraArgs to the platform defaults. Single source of truth:
@@ -155,7 +158,34 @@ spec:
           value: '${KANIKO_EXTRA_ARGS}'
 
     # -------------------------------------------------------------------------
-    # 2. Kaniko 构建并推到 registry
+    # 3. Gate A — run application tests BEFORE the expensive image build.
+    # -------------------------------------------------------------------------
+    # Fail-fast: run-tests reads ONLY the source workspace (it detects/executes
+    # outpost.test.yaml / Dockerfile.test from the cloned source — it does not
+    # need the built image). Gating here means a commit that fails its tests
+    # never pays the kaniko build cost (up to 90min for Java/.NET multi-stage).
+    # No-ops cleanly when neither test file exists (skipped, not failed). On a
+    # real failure the Pipeline aborts here: build-and-push AND update-manifest
+    # never run, the manifest repo is never touched, ArgoCD sees no change, the
+    # cluster is unaffected.
+    - name: run-tests
+      timeout: "20m"
+      runAfter:
+        - read-build-config
+      taskRef:
+        name: outpost-run-tests
+        kind: Task
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      params:
+        - name: app-name
+          value: $(params.repo-name)
+        - name: source-subdir
+          value: source
+
+    # -------------------------------------------------------------------------
+    # 4. Kaniko 构建并推到 registry（仅在 Gate A 通过后）
     # -------------------------------------------------------------------------
     - name: build-and-push
       # Multi-stage Dockerfiles (Java/Maven, .NET SDK) on slow networks
@@ -164,7 +194,7 @@ spec:
       # Transient base-image / verdaccio / registry-push hiccups: one retry.
       retries: 1
       runAfter:
-        - read-build-config
+        - run-tests
       taskRef:
         name: kaniko
         kind: Task
@@ -190,30 +220,7 @@ spec:
             - $(tasks.read-build-config.results.extra-args[*])
 
     # -------------------------------------------------------------------------
-    # 3. Gate A — run application tests
-    # -------------------------------------------------------------------------
-    # No-ops cleanly when neither outpost.test.yaml nor Dockerfile.test
-    # exists in the repo root (skipped, not failed). On real failure, the
-    # Pipeline aborts here and update-manifest never runs — manifest repo
-    # is never touched, ArgoCD sees no change, the cluster is unaffected.
-    - name: run-tests
-      timeout: "20m"
-      runAfter:
-        - build-and-push
-      taskRef:
-        name: outpost-run-tests
-        kind: Task
-      workspaces:
-        - name: source
-          workspace: shared-workspace
-      params:
-        - name: app-name
-          value: $(params.repo-name)
-        - name: source-subdir
-          value: source
-
-    # -------------------------------------------------------------------------
-    # 4. 拉 manifest 仓库，改 image tag，提交回去
+    # 5. 拉 manifest 仓库，改 image tag，提交回去
     # -------------------------------------------------------------------------
     - name: update-manifest
       # yq edit + git commit + push — well under a minute normally.
@@ -222,7 +229,7 @@ spec:
       # same flaky CN egress. Retry transient failures.
       retries: 2
       runAfter:
-        - run-tests
+        - build-and-push
       taskRef:
         name: update-manifest-task
       workspaces:

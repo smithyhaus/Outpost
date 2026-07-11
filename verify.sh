@@ -243,18 +243,36 @@ fi
 # ---- 6. Tekton --------------------------------------------------------------
 section "6. Tekton webhook + recent runs"
 if kubectl_ok; then
-  if kubectl get eventlistener -A 2>/dev/null | grep -qi listener; then
-    record PASS "tekton.eventlistener" "deployed"
+  # Capability≠liveness: an EventListener *resource* can exist while its pod is
+  # CrashLooping — the webhook receiver is then DOWN and no push ever builds.
+  # Gate on the EL pod actually being Ready, not just the CRD being present.
+  el_loc=$(kubectl get eventlistener -A -o jsonpath='{.items[0].metadata.namespace}/{.items[0].metadata.name}' 2>/dev/null || true)
+  if [[ -z "$el_loc" || "$el_loc" == "/" ]]; then
+    record FAIL "tekton.eventlistener" "missing — webhook receiver not deployed"
   else
-    record FAIL "tekton.eventlistener" "missing"
+    el_ns="${el_loc%%/*}"; el_name="${el_loc##*/}"
+    el_ready=$(kubectl get pods -n "$el_ns" -l "eventlistener=$el_name" \
+      -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' 2>/dev/null | grep -c "True" || true)
+    if [[ "${el_ready:-0}" -ge 1 ]]; then
+      record PASS "tekton.eventlistener" "live ($el_name, ${el_ready} ready pod/s)"
+    else
+      record FAIL "tekton.eventlistener" "$el_name deployed but NO Ready pod — webhook receiver DOWN"
+    fi
   fi
-  recent=$(kubectl get pipelinerun -n tekton-pipelines --sort-by=.metadata.creationTimestamp -o jsonpath='{range .items[-3:]}{.metadata.name}={.status.conditions[?(@.type=="Succeeded")].status}{"\n"}{end}' 2>/dev/null || true)
+  # One query carries name=status@creationTimestamp per run so the newest run's
+  # age is surfaced without a second API round-trip. Items sort ascending by
+  # creationTimestamp, so the last line parsed is the newest.
+  recent=$(kubectl get pipelinerun -n tekton-pipelines --sort-by=.metadata.creationTimestamp -o jsonpath='{range .items[-3:]}{.metadata.name}={.status.conditions[?(@.type=="Succeeded")].status}@{.metadata.creationTimestamp}{"\n"}{end}' 2>/dev/null || true)
   if [[ -z "$recent" ]]; then
-    record WARN "tekton.recent_runs" "no PipelineRun history"
+    # Ambiguous alone (fresh install vs. webhook never delivering). Surface it
+    # with the actionable next step rather than a silent WARN — the real
+    # liveness proof is the EL-pod check above + the edge.hooks probe below.
+    record WARN "tekton.recent_runs" "no PipelineRun history — if repos have commits since bootstrap, the git-provider webhook is NOT delivering (check webhook registration)"
   else
+    newest_ts=""
     while IFS= read -r line; do
       [[ -z "$line" ]] && continue
-      name="${line%%=*}"; ok="${line##*=}"
+      name="${line%%=*}"; rest="${line#*=}"; ok="${rest%%@*}"; newest_ts="${rest#*@}"
       case "$ok" in
         True)    record PASS "tekton.run.$name" "Succeeded" ;;
         False)   record FAIL "tekton.run.$name" "Failed"    ;;
@@ -262,18 +280,32 @@ if kubectl_ok; then
         *)       record WARN "tekton.run.$name" "$ok"       ;;
       esac
     done <<< "$recent"
+    # Surface the newest run's timestamp so a stale-but-nonzero history (e.g. the
+    # 9-day silent-failure case) is visible instead of a bare PASS.
+    [[ -n "$newest_ts" ]] && record PASS "tekton.newest_run" "last PipelineRun created $newest_ts"
   fi
 fi
 
 # ---- 7. Public ingress ------------------------------------------------------
 section "7. Public ingress (Cloudflare edge)"
 check_url() {
-  local id="$1" url="$2"
+  local id="$1" url="$2" extra_ok="${3:-}"
   has_cmd curl || { record WARN "$id" "curl missing"; return; }
   code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 8 "$url" 2>/dev/null || echo "000")
+  # Caller can whitelist extra codes as PASS. A Tekton EventListener answers a
+  # bare GET with 400/405 (no valid webhook body) — that still PROVES the
+  # receiver is reachable and alive, so hooks must not be downgraded to WARN
+  # on 400 (the documented capability≠liveness self-deception).
+  if [[ -n "$extra_ok" ]]; then
+    read -ra _extra_codes <<< "$extra_ok"
+    for _c in "${_extra_codes[@]:-}"; do
+      [[ "$_c" == "$code" ]] && { record PASS "$id" "HTTP $code (reachable)"; return; }
+    done
+  fi
   case "$code" in
     200|301|302|307|308|401|403) record PASS "$id" "HTTP $code" ;;
     000)                          record FAIL "$id" "no response" ;;
+    404)                          record FAIL "$id" "HTTP 404 (path broken)" ;;
     502|503|504)                  record FAIL "$id" "HTTP $code (origin)" ;;
     *)                            record WARN "$id" "HTTP $code" ;;
   esac
@@ -284,7 +316,7 @@ if [[ "$ROOT_DOMAIN" != "example.com" ]]; then
   check_url "edge.search"   "https://search.${ROOT_DOMAIN}/health"
   check_url "edge.mq"       "https://mq.${ROOT_DOMAIN}"
   check_url "edge.registry" "https://registry.${ROOT_DOMAIN}/v2/"
-  check_url "edge.hooks"    "https://hooks.${ROOT_DOMAIN}"
+  check_url "edge.hooks"    "https://hooks.${ROOT_DOMAIN}" "400 405 202"
 else
   record WARN "edge.skipped" "ROOT_DOMAIN unset"
 fi

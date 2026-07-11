@@ -77,3 +77,33 @@ setup() {
     fi
   done
 }
+
+# ---- FF: fail-fast — Gate A (run-tests) precedes the expensive kaniko build -
+# run-tests reads only the source workspace, so gating it BEFORE build-and-push
+# means a failing commit never pays the kaniko build cost. Locks the DAG so a
+# refactor can't silently move tests back downstream of the build.
+#
+# awk-based (no yq) so these run in CI — test-matrix.yml installs bats+jq but
+# not yq; a yq-guarded `skip` would make these silent no-ops. Prints the
+# runAfter entries of a named task from the pipeline's spec.tasks.
+runafter_of() {
+  awk -v task="$1" '
+    $0 ~ "^    - name: " task "$" { intask=1; inra=0; next }
+    intask && /^    - name: /     { intask=0 }
+    intask && /^      runAfter:/   { inra=1; next }
+    inra && /^        - /          { sub(/^        - /,""); print; next }
+    inra && /^      [a-zA-Z]/      { inra=0 }
+  ' "$PIPELINE"
+}
+@test "FF: build-and-push runs after run-tests" {
+  runafter_of build-and-push | grep -qx "run-tests"
+}
+@test "FF: run-tests runs after read-build-config (result chain intact)" {
+  runafter_of run-tests | grep -qx "read-build-config"
+}
+@test "FF: update-manifest runs after build-and-push (deploy only after build)" {
+  runafter_of update-manifest | grep -qx "build-and-push"
+}
+@test "FF: build-and-push does NOT run after update-manifest (no cycle / no regress)" {
+  ! runafter_of build-and-push | grep -qx "update-manifest"
+}

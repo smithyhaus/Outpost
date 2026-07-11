@@ -123,6 +123,12 @@ $(_yellow APPLICATION)
                                     once on your manifest repo so ArgoCD
                                     syncs in ~5s instead of the default 3-min
                                     poll. Re-runnable; reads .env.
+  register-webhooks [--dry-run]     Auto-register BOTH webhook hops via the git
+                    [--yes]         provider API (Tekton on WEBHOOK_REPO_WHITELIST
+                    [--tekton-only] repos + ArgoCD on the manifest repo).
+                    [--argocd-only] Idempotent. Fixes the silent-failure gap
+                                    where nothing is ever delivered. Needs an
+                                    admin-scoped GIT_TOKEN. --dry-run to preview.
 
 $(_yellow UTILITY)
   help [cmd]                        Show this or a subcommand's help
@@ -146,6 +152,10 @@ cmd_status() {
 
 cmd_doctor() {
   exec bash "$OUTPOST_HOME/doctor.sh" "$@"
+}
+
+cmd_register_webhooks() {
+  exec bash "$OUTPOST_HOME/scripts/register-webhooks.sh" "$@"
 }
 
 cmd_verify() {
@@ -1074,6 +1084,7 @@ case "$SUB" in
   off-board)      cmd_off_board "$@" ;;
   decommission)   cmd_decommission "$@" ;;
   setup-argocd-webhook) cmd_setup_argocd_webhook "$@" ;;
+  register-webhooks)    cmd_register_webhooks "$@" ;;
   version|--version|-v) cmd_version ;;
   help|--help|-h|"") usage ;;
   *) echo "$(_red unknown): $SUB"; usage; exit 1 ;;

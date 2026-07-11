@@ -30,8 +30,8 @@ spec:
       spec:
         serviceAccountName: tekton-triggers-sa
         # Tekton 硬性约束:timeouts.tasks + timeouts.finally <= timeouts.pipeline
-        # Per-task timeouts 之和(pipeline-build.yaml):
-        #   fetch-source 10m + build-and-push 90m + run-tests 20m + update-manifest 5m = 125m
+        # Per-task timeouts 之和(pipeline-build.yaml, fail-fast DAG 顺序):
+        #   fetch-source 10m + run-tests 20m + build-and-push 90m + update-manifest 5m = 125m
         # finally(notify-on-failure):很短,5m 给 10m 富余
         # fetch-source retries:3 / build-and-push retries:1 / update-manifest
         # retries:2 — CN egress to github is intermittent. Transient failures
