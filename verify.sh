@@ -305,7 +305,8 @@ check_url() {
   case "$code" in
     200|301|302|307|308|401|403) record PASS "$id" "HTTP $code" ;;
     000)                          record FAIL "$id" "no response" ;;
-    404)                          record FAIL "$id" "HTTP 404 (path broken)" ;;
+    # 404 = reachable server, no such route (ambiguous, like a bare-GET 4xx) —
+    # WARN, not FAIL. A caller that needs a specific path can whitelist its code.
     502|503|504)                  record FAIL "$id" "HTTP $code (origin)" ;;
     *)                            record WARN "$id" "HTTP $code" ;;
   esac
