@@ -41,6 +41,15 @@
 # =============================================================================
 
 resolve_registry_config() {
+  # HY_REGISTRY (in-cluster Verdaccio for @hy/* npm packages) is independent
+  # of which OCI image registry plugin is selected — Verdaccio ships
+  # unconditionally (core/k8s/07-verdaccio) and Phase 8 renders it into both
+  # the kaniko build args (self-hosted branch below) and the npm-publish
+  # stack (task-npm-publish / pipeline-publish), which every cluster gets.
+  # Default it here, NOT inside a case branch, or an aliyun-acr bootstrap
+  # aborts in Phase 8 on the unresolved ${HY_REGISTRY} placeholder.
+  HY_REGISTRY="${HY_REGISTRY:-http://verdaccio.registry.svc.cluster.local:4873/}"
+
   case "${REGISTRY_PLUGIN:-}" in
     self-hosted)
       # Subdomain prefix is operator-overridable via REGISTRY_SUBDOMAIN in .env;
@@ -62,7 +71,7 @@ resolve_registry_config() {
       # host.docker.internal:4873 — unresolvable in a build pod). Point every
       # build at the in-cluster Verdaccio (core/k8s/07-verdaccio). Overridable
       # via HY_REGISTRY in .env (unlike KANIKO_EXTRA_ARGS, which is unconditional).
-      HY_REGISTRY="${HY_REGISTRY:-http://verdaccio.registry.svc.cluster.local:4873/}"
+      # (HY_REGISTRY itself is defaulted above the case — plugin-independent.)
       KANIKO_EXTRA_ARGS="--skip-tls-verify --insecure --registry-mirror=docker.m.daocloud.io --build-arg=HY_REGISTRY=${HY_REGISTRY} --cache=true --cache-repo=docker-registry.registry.svc.cluster.local:5000/cache --single-snapshot --snapshotMode=redo --use-new-run"
       ;;
     aliyun-acr)
