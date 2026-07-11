@@ -212,6 +212,25 @@ kubectl apply -f core/k8s/05-tekton/task-read-build-config.yaml
 
 render_apply "core/k8s/05-tekton/triggertemplate.yaml"
 
+# npm-publish stack — LIBRARY repos (fst-foundation) publish @hy/* packages
+# to Verdaccio instead of building an image. The github-push-publish trigger
+# spliced into the EventListener below routes to publish-template, so these
+# three must exist or library pushes 500 at PipelineRun creation.
+# task-npm-publish.yaml carries runtime ${REG} inside its step script — full
+# render_template would either abort on it or substitute it away, so only
+# ${HY_REGISTRY} is allowed to render here.
+NPMPUB_TMP=$(mktemp -t outpost-npm-publish.XXXXXX)
+if ! render_template_only "core/k8s/05-tekton/task-npm-publish.yaml" "$NPMPUB_TMP" "HY_REGISTRY"; then
+  rm -f "$NPMPUB_TMP"
+  err "render task-npm-publish.yaml failed"
+  exit 1
+fi
+kubectl apply -f "$NPMPUB_TMP"
+rm -f "$NPMPUB_TMP"
+render_apply "core/k8s/05-tekton/pipeline-publish.yaml"
+kubectl apply -f core/k8s/05-tekton/triggertemplate-publish.yaml
+ok "npm-publish stack applied (outpost-npm-publish / publish-npm-packages / publish-template)"
+
 # EventListener — provider-agnostic envelope + active plugin's trigger.yaml.
 # Replaces the v0.1 hardcoded Gitee eventlistener.yaml; GIT_PROVIDER_PLUGIN
 # now actually selects which provider routes webhooks.
