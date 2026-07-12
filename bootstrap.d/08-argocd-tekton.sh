@@ -142,6 +142,18 @@ ok "Git-provider plugin(s) applied: ${GIT_PROVIDER_PLUGIN}"
 kubectl apply -n tekton-pipelines -f core/k8s/05-tekton/catalog/git-clone-0.10.yaml
 kubectl apply -n tekton-pipelines -f core/k8s/05-tekton/catalog/kaniko-0.7.yaml
 
+# buildkit build engine (opt-in via BUILD_ENGINE_TASK=buildkit; default kaniko).
+# A long-lived privileged buildkitd daemon in its own `enforce=privileged` ns
+# (tekton-pipelines is `baseline`, which forbids privileged) owns a persistent
+# cache PVC, so RUN --mount=type=cache pnpm stores survive builds (warm ~2-3min
+# vs kaniko's ~9min cold-every-build). The `buildkit` Task is a NON-privileged
+# buildctl client (passes baseline) that drives the daemon over gRPC. Both are
+# applied unconditionally so flipping BUILD_ENGINE_TASK needs no infra
+# re-bootstrap; the Task is inert while the pipeline's taskRef stays `kaniko`.
+# Applied BEFORE pipeline-build.yaml so the referenced Task exists at apply time.
+kubectl apply -f core/k8s/08-buildkit/
+kubectl apply -f core/k8s/05-tekton/task-buildkit.yaml
+
 # Tekton RBAC + secrets + pipeline + binding/template
 kubectl apply -f core/k8s/05-tekton/rbac.yaml
 render_apply "core/k8s/05-tekton/secrets.template.yaml"

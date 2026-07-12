@@ -1,0 +1,156 @@
+# =============================================================================
+# buildkit — drop-in replacement for the kaniko build-and-push Task.
+# -----------------------------------------------------------------------------
+# A thin, NON-privileged buildctl client that drives the long-lived privileged
+# buildkitd daemon (core/k8s/08-buildkit) over gRPC. Selected by the pipeline's
+# ${BUILD_ENGINE_TASK} (default kaniko); flip to `buildkit` to cut over, flip
+# back to roll back — no other pipeline change.
+#
+# WHY buildkit over kaniko: the daemon's persistent cache PVC keeps the
+# `RUN --mount=type=cache` pnpm store across builds, so an app whose Dockerfile
+# opts in (# syntax=docker/dockerfile:1 + --mount=type=cache on the install RUN)
+# re-links deps from a warm store instead of re-downloading them every build —
+# the kaniko path could not do this (no RUN cache mounts, cache-layer pull was
+# wall-clock-neutral). Target: ~2-3min warm vs kaniko's ~9min cold-every-build.
+#
+# DROP-IN CONTRACT: same params the pipeline passes to kaniko
+# (IMAGE / DOCKERFILE / CONTEXT / EXTRA_ARGS), same source+dockerconfig
+# workspaces, same IMAGE_DIGEST / IMAGE_URL results. EXTRA_ARGS arrives in
+# kaniko syntax; only `--build-arg=K=V` is meaningful to buildkit (→ HY_REGISTRY
+# for @hy/* from Verdaccio). Every other kaniko flag (--cache, --insecure,
+# --skip-tls-verify, --registry-mirror, --snapshotMode, --use-new-run) is a
+# DAEMON concern here (buildkitd.toml) and is deliberately ignored.
+# =============================================================================
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: buildkit
+  namespace: tekton-pipelines
+spec:
+  description: >-
+    Build a Dockerfile on a remote buildkitd (persistent cache) and push to the
+    registry. Drop-in for the kaniko Task; selected via ${BUILD_ENGINE_TASK}.
+  params:
+    - name: IMAGE
+      description: Name (reference) of the image to build.
+    - name: DOCKERFILE
+      description: Path to the Dockerfile, relative to CONTEXT.
+      default: ./Dockerfile
+    - name: CONTEXT
+      description: Build context dir, relative to the source workspace.
+      default: ./
+    - name: EXTRA_ARGS
+      type: array
+      description: >-
+        kaniko-syntax args from read-build-config. Only --build-arg=K=V is used;
+        all other kaniko flags are daemon-side config in buildkit and ignored.
+      default: []
+    - name: BUILDCTL_IMAGE
+      description: Image providing the buildctl client (matches the daemon version).
+      default: m.daocloud.io/docker.io/moby/buildkit:v0.16.0
+    - name: BUILDKIT_ADDR
+      description: gRPC address of the buildkitd daemon.
+      default: tcp://buildkitd.buildkit.svc.cluster.local:1234
+  workspaces:
+    - name: source
+      description: Holds the context and Dockerfile.
+    - name: dockerconfig
+      description: >-
+        Optional docker config.json. Unused for the anonymous self-hosted
+        registry (the daemon does the push); declared for kaniko parity.
+      optional: true
+      mountPath: /root/.docker
+  results:
+    - name: IMAGE_DIGEST
+      description: Digest of the image just built.
+    - name: IMAGE_URL
+      description: URL of the image just built.
+  steps:
+    - name: build-and-push
+      image: $(params.BUILDCTL_IMAGE)
+      workingDir: $(workspaces.source.path)
+      env:
+        - name: DOCKER_CONFIG
+          value: /root/.docker
+      # Fixed scalars ($1..$7) then EXTRA_ARGS expands into $8+ ("$@" after
+      # shift 7). A `script`-only step can't receive an array param, so the
+      # logic lives in an inline `sh -c` with the array passed positionally.
+      command:
+        - /bin/sh
+        - -c
+        - |
+          set -eu
+          IMAGE="$1"; DOCKERFILE="$2"; CONTEXT="$3"; SRC="$4"; ADDR="$5"
+          DIGEST_FILE="$6"; URL_FILE="$7"
+          shift 7
+
+          # CONTEXT/DOCKERFILE come from the app's outpost.build.yaml UNSANITIZED
+          # (read-build-config.sh). Reject absolute paths and `..` so a repo can't
+          # point the build context at, e.g., /var/run/secrets/... and bake the
+          # step pod's ServiceAccount token into the pushed image (path-traversal
+          # exfil). Both must stay relative to the cloned source root.
+          for p in "$CONTEXT" "$DOCKERFILE"; do
+            case "$p" in
+              /*|*..*)
+                echo "buildkit: refusing CONTEXT/DOCKERFILE outside source root: $p" >&2
+                exit 1 ;;
+            esac
+          done
+
+          # kaniko EXTRA_ARGS → buildctl opts: keep ONLY --build-arg=K=V. Values
+          # are ALSO attacker-controlled (extraArgs/buildArgs in outpost.build.yaml),
+          # so accumulate them as POSITIONAL args (never string-concat then word-
+          # split) and reject whitespace — otherwise `--build-arg=X=1 --output …`
+          # would inject a second buildctl flag (e.g. overwrite another app's image
+          # tag in the shared registry). buildctl is then invoked with quoted "$@".
+          n=$#
+          while [ "$n" -gt 0 ]; do
+            a="$1"; shift; n=$((n - 1))
+            case "$a" in
+              --build-arg=*)
+                val=${a#--build-arg=}
+                case "$val" in
+                  ''|*[[:space:]]*)
+                    echo "buildkit: rejecting build-arg with empty/whitespace value (arg-injection guard)" >&2
+                    exit 1 ;;
+                esac
+                set -- "$@" --opt "build-arg:$val" ;;
+              *) : ;;  # kaniko-only flag — daemon handles the equivalent
+            esac
+          done
+          # "$@" now holds ONLY the validated --opt build-arg:... tokens.
+
+          CTX_DIR="$SRC/$CONTEXT"
+          DF_PATH="$CTX_DIR/$DOCKERFILE"   # kaniko semantics: dockerfile is relative to context
+          DF_DIR=$(dirname "$DF_PATH")
+          DF_NAME=$(basename "$DF_PATH")
+
+          echo "buildkit: addr=$ADDR image=$IMAGE context=$CTX_DIR dockerfile=$DF_DIR/$DF_NAME"
+          echo "buildkit: build-arg opts=$*"
+
+          buildctl --addr "$ADDR" build \
+            --frontend dockerfile.v0 \
+            --local context="$CTX_DIR" \
+            --local dockerfile="$DF_DIR" \
+            --opt filename="$DF_NAME" \
+            "$@" \
+            --output type=image,name="$IMAGE",push=true,registry.insecure=true \
+            --metadata-file /tmp/md.json
+
+          # containerimage.digest from the pretty-printed metadata file (each key
+          # on its own line). Empty digest degrades gracefully: update-manifest
+          # keys off the image tag, not the digest.
+          DIGEST=$(sed -n 's/.*"containerimage.digest"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /tmp/md.json | head -n1)
+          printf '%s' "${DIGEST:-}" > "$DIGEST_FILE"
+          printf '%s' "$IMAGE" > "$URL_FILE"
+          echo "buildkit: pushed $IMAGE digest=${DIGEST:-<none>}"
+        - buildkit-build            # $0
+      args:
+        - $(params.IMAGE)           # $1
+        - $(params.DOCKERFILE)      # $2
+        - $(params.CONTEXT)         # $3
+        - $(workspaces.source.path) # $4
+        - $(params.BUILDKIT_ADDR)   # $5
+        - $(results.IMAGE_DIGEST.path)  # $6
+        - $(results.IMAGE_URL.path)     # $7
+        - $(params.EXTRA_ARGS[*])   # $8.. (array expands)

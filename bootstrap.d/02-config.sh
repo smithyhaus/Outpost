@@ -65,6 +65,15 @@ export GIT_HOST
 # Defaults shared by both modes
 REGISTRY_PLUGIN="${REGISTRY_PLUGIN:-self-hosted}"
 GIT_PROVIDER_PLUGIN="${GIT_PROVIDER_PLUGIN:-gitee}"
+# Build engine: which Tekton Task the pipeline's build-and-push step references.
+#   kaniko   — vendored default; no daemon, root-in-pod, no persistent cache.
+#   buildkit — the buildkitd daemon (core/k8s/08-buildkit) with a persistent
+#              RUN --mount=type=cache pnpm store (warm builds ~2-3min). Requires
+#              app Dockerfiles opted in (# syntax + --mount=type=cache).
+# Both Tasks are applied every bootstrap, so flipping this + re-render Phase 8
+# cuts over (or rolls back) with no infra change. envsubst'd into
+# pipeline-build.yaml's taskRef; render_template's strict check requires it set.
+BUILD_ENGINE_TASK="${BUILD_ENGINE_TASK:-kaniko}"
 # Optional extra clone credentials for private app repos on hosts OTHER than
 # MANIFEST_REPO_URL's. Comma-separated `host|user|token`; empty = single-host.
 # Consumed by platform/lib/git-credentials.sh in Phase 8 (full mode only).
@@ -254,6 +263,7 @@ fi
   echo "ROOT_DOMAIN=${ROOT_DOMAIN}"
   echo "CF_TUNNEL_TOKEN=${CF_TUNNEL_TOKEN}"
   echo "REGISTRY_PLUGIN=${REGISTRY_PLUGIN}"
+  echo "BUILD_ENGINE_TASK=${BUILD_ENGINE_TASK}"
   echo "GIT_PROVIDER_PLUGIN=${GIT_PROVIDER_PLUGIN}"
   echo "POSTGRES_USER=${POSTGRES_USER}"
   echo "POSTGRES_PASSWORD=${POSTGRES_PASSWORD}"

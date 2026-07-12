@@ -1,0 +1,40 @@
+# =============================================================================
+# buildkitd-ingress — the ONLY thing allowed to dial the privileged daemon.
+# -----------------------------------------------------------------------------
+# buildkitd exposes an UNAUTHENTICATED gRPC control plane on :1234 that drives
+# arbitrary privileged (privileged:true, --oci-worker-net=host) builds. Without
+# this policy any pod in any namespace could resolve buildkitd.buildkit.svc and
+# run `buildctl build …` — a standing "become root in a network-connected
+# privileged container on demand, no credential" oracle that kaniko never had
+# (kaniko has no long-lived service; builds only exist as Tekton-created pods).
+#
+# Restrict ingress on :1234 to the buildctl CLIENT Task's namespace
+# (tekton-pipelines). Egress is intentionally left UNrestricted — build RUN
+# steps legitimately need broad egress (npm registries, prisma mirror, docker
+# mirror) plus the in-cluster Verdaccio/registry ClusterIPs.
+#
+# NOTE: enforcement requires k3s's built-in NetworkPolicy controller (on by
+# default; a cluster booted with --disable-network-policy will NOT enforce this
+# — verify with `kubectl get pods -n kube-system | grep -i network` or test a
+# cross-namespace dial). The tekton-pipelines label match uses the auto-applied
+# kubernetes.io/metadata.name (GA since k8s 1.22).
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: buildkitd-ingress
+  namespace: buildkit
+spec:
+  podSelector:
+    matchLabels:
+      app: buildkitd
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: tekton-pipelines
+      ports:
+        - protocol: TCP
+          port: 1234

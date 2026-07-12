@@ -1,0 +1,97 @@
+# =============================================================================
+# buildkitd — one long-lived rootful (privileged) build daemon.
+# -----------------------------------------------------------------------------
+# WHY privileged + own namespace: buildkitd needs privileged (mount/overlayfs/
+# runc). tekton-pipelines is `enforce=baseline` (00-namespaces.yaml) which
+# FORBIDS privileged:true — a probe confirmed a privileged pod is admitted only
+# in a `enforce=privileged`-labeled namespace, so this lives in ns `buildkit`.
+# kaniko survives baseline only because it needs runAsUser:0, not privileged.
+#
+# WHY --oci-worker-net=host: build RUN steps must reach the in-cluster Verdaccio
+# (@hy/* packages) and the self-hosted registry, both ClusterIP Services. With
+# host net the RUN sandbox shares THIS pod's netns (not the physical node — the
+# pod is not hostNetwork), so kube-proxy routes RUN traffic to ClusterIPs.
+# Probe result: VERDACCIO in-cluster reachable from a RUN in 0.086s.
+#
+# strategy: Recreate — the cache PVC is RWO on a single node; a rolling update
+# would deadlock the second pod on the volume. SPOF is accepted for a
+# single-tenant homelab (a daemon OOM aborts in-flight builds); memory is sized
+# generously and max-parallelism (buildkitd.toml) bounds concurrent step RAM.
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: buildkitd
+  namespace: buildkit
+  labels:
+    app: buildkitd
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: buildkitd
+  template:
+    metadata:
+      labels:
+        app: buildkitd
+    spec:
+      containers:
+        - name: buildkitd
+          # Pinned via the DaoCloud docker.io mirror (node containerd has no CN
+          # egress to docker.io) — same mirror-prefix pattern as the kaniko task.
+          image: m.daocloud.io/docker.io/moby/buildkit:v0.16.0
+          args:
+            - --addr
+            - tcp://0.0.0.0:1234
+            - --oci-worker-net=host
+            - --config=/etc/buildkit/buildkitd.toml
+          securityContext:
+            privileged: true
+          ports:
+            - name: grpc
+              containerPort: 1234
+          readinessProbe:
+            exec:
+              command:
+                - buildctl
+                - --addr
+                - tcp://127.0.0.1:1234
+                - debug
+                - workers
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command:
+                - buildctl
+                - --addr
+                - tcp://127.0.0.1:1234
+                - debug
+                - workers
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "500m"
+              memory: 1Gi
+            limits:
+              # Node has 24 CPU / 53GB. Generous limit so a big multi-stage build
+              # won't OOM-kill the daemon (which would abort ALL in-flight builds).
+              cpu: "8"
+              memory: 12Gi
+          volumeMounts:
+            - name: cache
+              mountPath: /var/lib/buildkit
+            - name: config
+              mountPath: /etc/buildkit
+      volumes:
+        - name: cache
+          persistentVolumeClaim:
+            claimName: buildkitd-cache
+        - name: config
+          configMap:
+            name: buildkitd-toml

@@ -1,0 +1,23 @@
+# =============================================================================
+# buildkitd Service — stable in-cluster address for the buildctl client Task.
+# -----------------------------------------------------------------------------
+# The `buildkit` Task in tekton-pipelines connects to
+# tcp://buildkitd.buildkit.svc.cluster.local:1234 (its BUILDKIT_ADDR default).
+# ClusterIP is reachable cross-namespace, so the non-privileged client in
+# tekton-pipelines drives the privileged daemon here without itself needing
+# any elevated PSA.
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: buildkitd
+  namespace: buildkit
+  labels:
+    app: buildkitd
+spec:
+  selector:
+    app: buildkitd
+  ports:
+    - name: grpc
+      port: 1234
+      targetPort: 1234

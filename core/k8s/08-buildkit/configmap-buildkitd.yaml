@@ -1,0 +1,53 @@
+# =============================================================================
+# buildkitd.toml — daemon config for the persistent buildkit build engine.
+# -----------------------------------------------------------------------------
+# Consumed by the buildkitd Deployment via --config=/etc/buildkit/buildkitd.toml.
+# Everything the kaniko path did per-build via KANIKO_EXTRA_ARGS is a DAEMON
+# concern in buildkit and lives here instead:
+#   - registry mirror (CN can't reach docker.io) → [registry."docker.io"] mirrors
+#   - insecure HTTP push to the self-hosted registry → [registry."…:5000"]
+#   - concurrency governor → worker.oci.max-parallelism (was 6-way kaniko contention)
+#   - disk safety → gcpolicy sized UNDER the 50Gi PVC (default 70GB keep would
+#     ENOSPC a 50Gi volume). reservedSpace/maxUsedSpace/minFreeSpace in GB.
+# The buildkit Task's per-build args carry ONLY --build-arg (HY_REGISTRY); all of
+# the above is fixed here so app builds never re-specify it.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: buildkitd-toml
+  namespace: buildkit
+data:
+  buildkitd.toml: |
+    root = "/var/lib/buildkit"
+
+    [worker.oci]
+      enabled = true
+      # The real concurrency cap: at most N build steps run at once across ALL
+      # in-flight PipelineRuns (one daemon, shared). The 41-min baseline came
+      # from 6 kaniko builds thrashing the node; 2 keeps the node responsive
+      # while still overlapping I/O-bound installs. Bump on a bigger host.
+      max-parallelism = 2
+      gc = true
+      [[worker.oci.gcpolicy]]
+        all = true
+        reservedSpace = "8GB"
+        maxUsedSpace = "40GB"
+        minFreeSpace = "5GB"
+
+    # containerd worker off — the OCI worker (native runc) is what runs here.
+    [worker.containerd]
+      enabled = false
+
+    # docker.io is reset/unreachable from CN egress. Route base-image + frontend
+    # (docker/dockerfile:1) pulls through the DaoCloud pull-through mirror; buildkit
+    # falls back to index.docker.io on a mirror miss. Drop for non-CN clusters.
+    [registry."docker.io"]
+      mirrors = ["docker.m.daocloud.io"]
+
+    # Self-hosted registry is plain HTTP + anonymous. The daemon (not the client)
+    # does the push, so IT needs the insecure allowance — mirror of what kaniko's
+    # --insecure/--skip-tls-verify did.
+    [registry."docker-registry.registry.svc.cluster.local:5000"]
+      http = true
+      insecure = true

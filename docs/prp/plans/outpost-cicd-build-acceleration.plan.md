@@ -1,12 +1,57 @@
 # Plan: CI/CD Build Acceleration — buildkit + persistent pnpm store + concurrency cap
 
-> **Status: DESIGN, adversarially reviewed. Partially validated on cluster.**
-> Supersedes the first draft. Incorporates: live diagnosis (kaniko CACHE HIT=0),
-> the real app Dockerfile, a multi-agent research pass, and an adversarial
-> verify that found 3 blockers + several holes (folded in below). Execution is
-> staged behind a flag; each stage has a measurable gate. Cluster changes apply
-> via kubectl/render_apply from the operator machine; only a full re-clone +
-> bootstrap on the WSL host needs the user.
+> **Status: BUILT + PILOT-VALIDATED on the live WSL2 cluster (2026-07-12).**
+> buildkitd daemon deployed, buildkit client Task written + security-hardened,
+> pipeline flag wired (default kaniko), all committed. Pilot on
+> fst-procurement-service PROVES the target. Fleet rollout of the Dockerfile
+> cache-mounts + the engine flip is the only remaining step (sequencing note
+> below). Execution is staged behind `BUILD_ENGINE_TASK`; kaniko stays the
+> one-word rollback.
+>
+> ## VALIDATED RESULTS (measured, fst-procurement-service, build-and-push only)
+>
+> | engine | cold | warm (source changed, deps unchanged) |
+> |---|---|---|
+> | kaniko (baseline) | 9m41s | 12m22s (layer cache wall-clock-neutral) |
+> | **buildkit** | **2m23s** | **2m15s** |
+>
+> Warm buildkit log proof: `resolved 723, reused 722, downloaded 0` — the
+> `RUN --mount=type=cache` pnpm store re-linked 722 packages from the daemon PVC
+> with ZERO network downloads (`pnpm Done in 7.7s`); prisma generate 1.2s
+> (cached); real image pushed. **~9min → ~2m15s.**
+>
+> ## Key findings that shape rollout
+> - **The mount is ESSENTIAL, not a bonus.** Even buildkit's warm build re-ran
+>   the install layer on a fresh clone (COPY cache did not carry the install
+>   across commits); WITHOUT the persistent store that re-run would re-download
+>   at CN-throttled npmjs speed (observed 1–10 KiB/s). The store mount is what
+>   turns the re-run into 7.7s. So layer-cache-alone (engine flip without
+>   Dockerfile mounts) is NOT sufficient for the win.
+> - **kaniko v1.5.1 BREAKS on `RUN --mount`** — measured `Dockerfile parse
+>   error: Unknown flag: mount`. Therefore a mount-bearing Dockerfile must NEVER
+>   reach an app's deploy branch while the live engine is still kaniko. Rollout
+>   ordering is forced: **flip the live engine to buildkit FIRST, then push the
+>   mount Dockerfiles.**
+> - **Follow-up opt (not yet applied):** the apps' `.npmrc` only points `@hy`
+>   at Verdaccio; the DEFAULT registry is npmjs.org (CN-throttled). Adding a CN
+>   npm mirror (registry.npmmirror.com) as the default registry would make even
+>   lockfile-CHANGED builds fast (warm store only helps unchanged tarballs).
+>
+> ## Security hardening applied to task-buildkit.yaml (from security-reviewer)
+> - Arg-injection fix: build-arg values accumulated as positional args (no
+>   string-concat-then-word-split) + whitespace-rejected, so a malicious
+>   `extraArgs` can't inject a second `--output` to overwrite another app's tag.
+> - Path-traversal fix: reject absolute / `..` CONTEXT & DOCKERFILE (blocks
+>   `context: /var/run/secrets/...` SA-token exfil into the pushed image).
+> - NetworkPolicy `buildkitd-ingress`: only tekton-pipelines may dial the
+>   unauthenticated privileged daemon on :1234.
+> - Deferred (documented): daemon egress NetworkPolicy scoping (Finding 4),
+>   buildkit image digest-pinning (Finding 6), buildkitd mTLS.
+>
+> ---
+>
+> > **Original design below (adversarially reviewed).** All 3 blockers it flagged
+> > were resolved in the build; the "unproven on WSL2" holes are now proven.
 
 ## Diagnosis (measured, not assumed)
 

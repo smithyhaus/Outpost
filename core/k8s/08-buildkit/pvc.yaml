@@ -1,0 +1,25 @@
+# =============================================================================
+# buildkitd-cache — the persistent cache that makes warm builds fast.
+# -----------------------------------------------------------------------------
+# Holds buildkit's whole root: layer cache, content store, AND the
+# `RUN --mount=type=cache` targets (pnpm store, prisma engines). Surviving
+# across builds is the entire point — a fresh pnpm store re-downloads every
+# dep (the kaniko failure mode). local-path (k3s default) is RWO/single-node,
+# matched by the Deployment's strategy: Recreate.
+#
+# NEVER `kubectl delete` this PVC to "reset" — local-path reclaimPolicy is
+# Delete, so removing the claim wipes the cache and the next build is cold
+# again. The daemon's gcpolicy (buildkitd.toml) reaps stale cache in place.
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: buildkitd-cache
+  namespace: buildkit
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 50Gi

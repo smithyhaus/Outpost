@@ -50,3 +50,15 @@ metadata:
   name: argo-rollouts
   labels:
     pod-security.kubernetes.io/enforce: baseline
+---
+# buildkit — the persistent build daemon (core/k8s/08-buildkit). buildkitd runs
+# `privileged: true` (mount/overlayfs/runc), which `baseline`/`restricted` PSA
+# forbid; this namespace is the ONLY one labeled `enforce=privileged`. The
+# buildctl CLIENT stays in tekton-pipelines (baseline) — only the daemon needs
+# the elevated level, and isolating it here keeps the blast radius to one ns.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: buildkit
+  labels:
+    pod-security.kubernetes.io/enforce: privileged

@@ -196,7 +196,12 @@ spec:
       runAfter:
         - run-tests
       taskRef:
-        name: kaniko
+        # Build engine is operator-selectable: ${BUILD_ENGINE_TASK} (default
+        # kaniko) is envsubst'd at bootstrap render time. Both the `kaniko` and
+        # `buildkit` Tasks are applied every bootstrap and share the same
+        # IMAGE/DOCKERFILE/CONTEXT/EXTRA_ARGS param contract, so flipping
+        # BUILD_ENGINE_TASK cuts over (or rolls back) with no other change here.
+        name: ${BUILD_ENGINE_TASK}
         kind: Task
       workspaces:
         - name: source
