@@ -153,6 +153,14 @@ kubectl apply -n tekton-pipelines -f core/k8s/05-tekton/catalog/kaniko-0.7.yaml
 # Applied BEFORE pipeline-build.yaml so the referenced Task exists at apply time.
 kubectl apply -f core/k8s/08-buildkit/
 kubectl apply -f core/k8s/05-tekton/task-buildkit.yaml
+# When buildkit is the active engine, block until the daemon is Ready so a
+# webhook that fires right after bootstrap doesn't hit a not-yet-listening
+# buildkitd (the build-and-push step would otherwise fail its first connect).
+if [[ "${BUILD_ENGINE_TASK}" == "buildkit" ]]; then
+  log "Waiting for buildkitd (active build engine) to be Ready..."
+  kubectl wait --for=condition=Available deployment/buildkitd -n buildkit --timeout=180s \
+    || warn "buildkitd not Ready within 180s — the first buildkit build may retry until it is"
+fi
 
 # Tekton RBAC + secrets + pipeline + binding/template
 kubectl apply -f core/k8s/05-tekton/rbac.yaml

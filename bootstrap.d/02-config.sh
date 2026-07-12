@@ -66,14 +66,19 @@ export GIT_HOST
 REGISTRY_PLUGIN="${REGISTRY_PLUGIN:-self-hosted}"
 GIT_PROVIDER_PLUGIN="${GIT_PROVIDER_PLUGIN:-gitee}"
 # Build engine: which Tekton Task the pipeline's build-and-push step references.
-#   kaniko   — vendored default; no daemon, root-in-pod, no persistent cache.
-#   buildkit — the buildkitd daemon (core/k8s/08-buildkit) with a persistent
-#              RUN --mount=type=cache pnpm store (warm builds ~2-3min). Requires
-#              app Dockerfiles opted in (# syntax + --mount=type=cache).
+#   buildkit — DEFAULT. The buildkitd daemon (core/k8s/08-buildkit) with a
+#              persistent RUN --mount=type=cache pnpm store: pilot-measured
+#              9m41s(kaniko) -> 2m15s warm on fst-procurement-service. App
+#              Dockerfiles opt in via `# syntax=docker/dockerfile:1` +
+#              `RUN --mount=type=cache`; a plain Dockerfile still builds (just
+#              layer-cache, no store win).
+#   kaniko   — one-word rollback (vendored, no daemon, root-in-pod, no cache
+#              win). NOTE: kaniko v1.5.1 CANNOT parse `RUN --mount` — do not
+#              roll back to kaniko while app Dockerfiles carry cache mounts.
 # Both Tasks are applied every bootstrap, so flipping this + re-render Phase 8
 # cuts over (or rolls back) with no infra change. envsubst'd into
 # pipeline-build.yaml's taskRef; render_template's strict check requires it set.
-BUILD_ENGINE_TASK="${BUILD_ENGINE_TASK:-kaniko}"
+BUILD_ENGINE_TASK="${BUILD_ENGINE_TASK:-buildkit}"
 # Optional extra clone credentials for private app repos on hosts OTHER than
 # MANIFEST_REPO_URL's. Comma-separated `host|user|token`; empty = single-host.
 # Consumed by platform/lib/git-credentials.sh in Phase 8 (full mode only).
