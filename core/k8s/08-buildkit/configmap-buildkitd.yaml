@@ -28,12 +28,17 @@ data:
       # from 6 kaniko builds thrashing the node; 2 keeps the node responsive
       # while still overlapping I/O-bound installs. Bump on a bigger host.
       max-parallelism = 2
-      gc = true
-      [[worker.oci.gcpolicy]]
-        all = true
-        reservedSpace = "8GB"
-        maxUsedSpace = "40GB"
-        minFreeSpace = "5GB"
+      # GC DISABLED — the persistent pnpm store IS the whole point; automatic GC
+      # must not reclaim it. A prior custom single gcpolicy (all=true,
+      # reservedSpace=8GB) was measured evicting the idle store cache mount
+      # within ~15min, making every build cold again (du=0 after a build). With
+      # gc off it never evicts. Safe here: node has ~880GB free and buildkit's
+      # cache is content-addressed/deduped (base images + npm tarballs shared
+      # across all apps), so steady-state is a handful of GB. If it ever grows,
+      # prune manually WITHOUT wiping the live store, e.g.:
+      #   buildctl --addr tcp://127.0.0.1:1234 prune --keep-storage 100GB
+      # (wire as a CronJob if unbounded growth ever becomes real).
+      gc = false
 
     # containerd worker off — the OCI worker (native runc) is what runs here.
     [worker.containerd]
