@@ -24,10 +24,14 @@ data:
     [worker.oci]
       enabled = true
       # The real concurrency cap: at most N build steps run at once across ALL
-      # in-flight PipelineRuns (one daemon, shared). The 41-min baseline came
-      # from 6 kaniko builds thrashing the node; 2 keeps the node responsive
-      # while still overlapping I/O-bound installs. Bump on a bigger host.
-      max-parallelism = 2
+      # in-flight PipelineRuns (one daemon, shared). Node has 24 CPU / 53GB; 6
+      # lets a fleet re-push (18 repos) drain without serializing to a crawl,
+      # while the daemon's cpu/mem limits (deployment.yaml, 16 CPU / 24Gi) keep
+      # it from starving the app workloads. Raising this REQUIRES raising the
+      # daemon mem limit in lockstep — an earlier 2-way run at a 12Gi limit
+      # OOM-killed the daemon, and the SIGKILL left a stale buildkitd.lock that
+      # CrashLooped every new pod ("could not lock … another instance running").
+      max-parallelism = 6
       # GC DISABLED — the persistent pnpm store IS the whole point; automatic GC
       # must not reclaim it. A prior custom single gcpolicy (all=true,
       # reservedSpace=8GB) was measured evicting the idle store cache mount

@@ -52,6 +52,20 @@ spec:
           ports:
             - name: grpc
               containerPort: 1234
+          # Startup can be SLOW when buildkit recovers a large/dirty cache after
+          # an unclean shutdown (e.g. an OOM SIGKILL mid-build). Without a
+          # startupProbe the liveness probe below would kill it at ~90s and
+          # CrashLoop it forever. Give recovery up to 10min before liveness arms.
+          startupProbe:
+            exec:
+              command:
+                - buildctl
+                - --addr
+                - tcp://127.0.0.1:1234
+                - debug
+                - workers
+            periodSeconds: 10
+            failureThreshold: 60
           readinessProbe:
             exec:
               command:
@@ -76,13 +90,18 @@ spec:
             failureThreshold: 3
           resources:
             requests:
-              cpu: "500m"
-              memory: 1Gi
+              cpu: "2"
+              memory: 4Gi
             limits:
-              # Node has 24 CPU / 53GB. Generous limit so a big multi-stage build
-              # won't OOM-kill the daemon (which would abort ALL in-flight builds).
-              cpu: "8"
-              memory: 12Gi
+              # Node has 24 CPU / 53GB. Sized for max-parallelism=6
+              # (buildkitd.toml): ~6 concurrent tsc/pnpm build steps can each
+              # spike a few GB, so 12Gi OOM-killed the daemon under a fleet
+              # re-push (the SIGKILL then left a stale buildkitd.lock that
+              # CrashLooped every replacement pod). 24Gi leaves ample headroom
+              # for the app workloads on a 53GB node; raise in lockstep with
+              # max-parallelism, never one without the other.
+              cpu: "16"
+              memory: 24Gi
           volumeMounts:
             - name: cache
               mountPath: /var/lib/buildkit
