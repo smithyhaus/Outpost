@@ -160,7 +160,14 @@ kubectl apply -n tekton-pipelines -f core/k8s/05-tekton/catalog/kaniko-0.7.yaml
 # re-bootstrap; the Task is inert while the pipeline's taskRef stays `kaniko`.
 # Applied BEFORE pipeline-build.yaml so the referenced Task exists at apply time.
 kubectl apply -f core/k8s/08-buildkit/
-kubectl apply -f core/k8s/05-tekton/task-buildkit.yaml
+# task-buildkit.yaml carries ONE bootstrap-time template var (the
+# REGISTRY_INSECURE param default, derived from REGISTRY_PLUGIN in
+# 02-config.sh). Targeted substitution ONLY — the task's inline shell uses
+# $a/$val/$n which a full envsubst render would silently destroy.
+_tmp_bk_task=$(mktemp)
+render_template_only "core/k8s/05-tekton/task-buildkit.yaml" "$_tmp_bk_task" "REGISTRY_INSECURE"
+kubectl apply -f "$_tmp_bk_task"
+rm -f "$_tmp_bk_task"; unset _tmp_bk_task
 # When buildkit is the active engine, block until the daemon is Ready so a
 # webhook that fires right after bootstrap doesn't hit a not-yet-listening
 # buildkitd (the build-and-push step would otherwise fail its first connect).

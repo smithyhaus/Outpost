@@ -9,7 +9,9 @@
 #
 # NEVER `kubectl delete` this PVC to "reset" — local-path reclaimPolicy is
 # Delete, so removing the claim wipes the cache and the next build is cold
-# again. The daemon's gcpolicy (buildkitd.toml) reaps stale cache in place.
+# again. Automatic GC is permanently OFF (buildkitd.toml `gc = false`; a
+# gcpolicy was measured evicting the pnpm store) — reclaim space manually
+# with `buildctl prune --keep-storage <N>` if growth ever becomes real.
 # =============================================================================
 apiVersion: v1
 kind: PersistentVolumeClaim

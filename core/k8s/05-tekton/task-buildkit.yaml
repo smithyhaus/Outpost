@@ -51,6 +51,15 @@ spec:
     - name: BUILDKIT_ADDR
       description: gRPC address of the buildkitd daemon.
       default: tcp://buildkitd.buildkit.svc.cluster.local:1234
+    - name: REGISTRY_INSECURE
+      description: >-
+        "true" → push over plain HTTP (the in-cluster self-hosted registry).
+        Anything else → normal HTTPS push (e.g. aliyun-acr, which REJECTS
+        plain HTTP — hardcoding insecure here broke every ACR push).
+        The default below is rendered at bootstrap time from REGISTRY_PLUGIN
+        (08-argocd-tekton.sh, render_template_only allowlist — full envsubst
+        would eat the script's $a/$val shell vars).
+      default: "${REGISTRY_INSECURE}"
   workspaces:
     - name: source
       description: Holds the context and Dockerfile.
@@ -72,8 +81,8 @@ spec:
       env:
         - name: DOCKER_CONFIG
           value: /root/.docker
-      # Fixed scalars ($1..$7) then EXTRA_ARGS expands into $8+ ("$@" after
-      # shift 7). A `script`-only step can't receive an array param, so the
+      # Fixed scalars ($1..$8) then EXTRA_ARGS expands into $9+ ("$@" after
+      # shift 8). A `script`-only step can't receive an array param, so the
       # logic lives in an inline `sh -c` with the array passed positionally.
       command:
         - /bin/sh
@@ -81,8 +90,8 @@ spec:
         - |
           set -eu
           IMAGE="$1"; DOCKERFILE="$2"; CONTEXT="$3"; SRC="$4"; ADDR="$5"
-          DIGEST_FILE="$6"; URL_FILE="$7"
-          shift 7
+          DIGEST_FILE="$6"; URL_FILE="$7"; INSECURE="$8"
+          shift 8
 
           # CONTEXT/DOCKERFILE come from the app's outpost.build.yaml UNSANITIZED
           # (read-build-config.sh). Reject absolute paths and `..` so a repo can't
@@ -128,13 +137,22 @@ spec:
           echo "buildkit: addr=$ADDR image=$IMAGE context=$CTX_DIR dockerfile=$DF_DIR/$DF_NAME"
           echo "buildkit: build-arg opts=$*"
 
+          # registry.insecure=true is NOT "try HTTPS, fall back": buildkit
+          # unconditionally rewrites the push resolver to PlainHTTP. Only add
+          # it for the plain-HTTP self-hosted registry; HTTPS registries
+          # (aliyun-acr) refuse the connection outright.
+          PUSH_OUT="type=image,name=$IMAGE,push=true"
+          if [ "$INSECURE" = "true" ]; then
+            PUSH_OUT="$PUSH_OUT,registry.insecure=true"
+          fi
+
           buildctl --addr "$ADDR" build \
             --frontend dockerfile.v0 \
             --local context="$CTX_DIR" \
             --local dockerfile="$DF_DIR" \
             --opt filename="$DF_NAME" \
             "$@" \
-            --output type=image,name="$IMAGE",push=true,registry.insecure=true \
+            --output "$PUSH_OUT" \
             --metadata-file /tmp/md.json
 
           # containerimage.digest from the pretty-printed metadata file (each key
@@ -153,4 +171,5 @@ spec:
         - $(params.BUILDKIT_ADDR)   # $5
         - $(results.IMAGE_DIGEST.path)  # $6
         - $(results.IMAGE_URL.path)     # $7
-        - $(params.EXTRA_ARGS[*])   # $8.. (array expands)
+        - $(params.REGISTRY_INSECURE)   # $8
+        - $(params.EXTRA_ARGS[*])   # $9.. (array expands)

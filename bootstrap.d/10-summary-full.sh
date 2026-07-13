@@ -69,3 +69,10 @@ echo ""
 echo "  Step-by-step walkthrough (incl. autostart, dev workstation TCP,"
 echo "  onboarding apps): i18n/<lang>/docs/00-quickstart.md"
 echo ""
+
+# Propagate verify's verdict as bootstrap's own exit code — the banner alone
+# isn't machine-readable, and scripted callers (install.sh, CI) trust $?.
+# WARN-only (2) still counts as success; FAIL (1 or anything else) must not.
+if [[ "$VERIFY_STATUS" -ne 0 && "$VERIFY_STATUS" -ne 2 ]]; then
+  exit 1
+fi

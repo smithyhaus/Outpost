@@ -64,6 +64,14 @@ export GIT_HOST
 
 # Defaults shared by both modes
 REGISTRY_PLUGIN="${REGISTRY_PLUGIN:-self-hosted}"
+# Derived (not persisted): buildkit push transport, rendered into
+# task-buildkit.yaml's REGISTRY_INSECURE default (08-argocd-tekton.sh).
+# The in-cluster self-hosted registry is plain HTTP; aliyun-acr is
+# HTTPS-only and refuses plain HTTP outright. Overridable for exotic setups.
+case "$REGISTRY_PLUGIN" in
+  aliyun-acr) REGISTRY_INSECURE="${REGISTRY_INSECURE:-false}" ;;
+  *)          REGISTRY_INSECURE="${REGISTRY_INSECURE:-true}"  ;;
+esac
 GIT_PROVIDER_PLUGIN="${GIT_PROVIDER_PLUGIN:-gitee}"
 # Build engine: which Tekton Task the pipeline's build-and-push step references.
 #   buildkit — DEFAULT. The buildkitd daemon (core/k8s/08-buildkit) with a

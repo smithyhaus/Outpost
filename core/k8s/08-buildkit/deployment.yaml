@@ -80,9 +80,13 @@ spec:
                 n=0
               fi
               echo $((n+1)) > "$BOOT"
+              # 40×10s ≈ 400s — just past the startupProbe window (36×10s);
+              # any boot still unhealthy by then gets killed by the probe
+              # anyway, so a longer loop is dead config. Keep the two in
+              # lockstep if you retune the probe.
               (
                 i=0
-                while [ "$i" -lt 90 ]; do
+                while [ "$i" -lt 40 ]; do
                   sleep 10; i=$((i+1))
                   if buildctl --addr tcp://127.0.0.1:1234 debug workers >/dev/null 2>&1; then
                     rm -f "$BOOT"; exit 0
@@ -102,6 +106,11 @@ spec:
           # than finishing slowly, so a longer window only delays the wrapper's
           # boot-attempt self-heal (see command above): boot 1-2 each get 6min,
           # boot 3 wipes the cache and starts clean in seconds — fully automatic.
+          # timeoutSeconds on all three: the default 1s is too tight for an
+          # exec probe that forks buildctl + does a gRPC round-trip while the
+          # daemon runs 4 parallel builds — a slow-but-alive daemon would get
+          # liveness-killed mid-build AND falsely bump .boot-attempts toward
+          # a cache wipe.
           startupProbe:
             exec:
               command:
@@ -112,6 +121,7 @@ spec:
                 - workers
             periodSeconds: 10
             failureThreshold: 36
+            timeoutSeconds: 5
           readinessProbe:
             exec:
               command:
@@ -123,6 +133,7 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
             failureThreshold: 6
+            timeoutSeconds: 5
           livenessProbe:
             exec:
               command:
@@ -134,6 +145,7 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 30
             failureThreshold: 3
+            timeoutSeconds: 5
           resources:
             requests:
               cpu: "2"

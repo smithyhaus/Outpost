@@ -7,8 +7,9 @@
 #   - registry mirror (CN can't reach docker.io) → [registry."docker.io"] mirrors
 #   - insecure HTTP push to the self-hosted registry → [registry."…:5000"]
 #   - concurrency governor → worker.oci.max-parallelism (was 6-way kaniko contention)
-#   - disk safety → gcpolicy sized UNDER the 50Gi PVC (default 70GB keep would
-#     ENOSPC a 50Gi volume). reservedSpace/maxUsedSpace/minFreeSpace in GB.
+#   - disk safety → automatic GC is permanently DISABLED (gc = false below —
+#     a gcpolicy was measured evicting the pnpm store). Growth is bounded by
+#     the node's free disk + manual `buildctl prune --keep-storage <N>`.
 # The buildkit Task's per-build args carry ONLY --build-arg (HY_REGISTRY); all of
 # the above is fixed here so app builds never re-specify it.
 # =============================================================================
