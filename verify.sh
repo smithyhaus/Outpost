@@ -161,6 +161,7 @@ if kubectl_ok; then
                 "tekton-pipelines:tekton-triggers-controller" \
                 "tekton-pipelines:tekton-dashboard" \
                 "registry:docker-registry" \
+                "buildkit:buildkitd" \
                 "argo-rollouts:argo-rollouts" \
                 "argo-rollouts:argo-rollouts-dashboard" \
                 "testkube:testkube-api-server"; do
@@ -178,6 +179,19 @@ if kubectl_ok; then
       record FAIL "k8s.$ns.$dep" "$rep/$desired ready"
     fi
   done
+
+  # Active build engine — FAIL-level, not the generic ns-absent WARN above.
+  # buildkitd down means EVERY build fails; a WARN here is the same
+  # capability≠liveness self-deception the gitee-webhook incident taught us.
+  if [[ "${BUILD_ENGINE_TASK:-buildkit}" == "buildkit" ]]; then
+    bk_ready=$(kubectl get deployment buildkitd -n buildkit \
+      -o jsonpath='{.status.conditions[?(@.type=="Available")].status}' 2>/dev/null || echo "")
+    if [[ "$bk_ready" == "True" ]]; then
+      record PASS "buildkit.daemon" "active build engine Ready"
+    else
+      record FAIL "buildkit.daemon" "BUILD_ENGINE_TASK=buildkit but daemon not Available — ALL builds will fail (kubectl -n buildkit get pods)"
+    fi
+  fi
 
   # Phase 9 marker ConfigMaps + secrets (cheap proof the plugins applied).
   # Each entry is `ns:kind:name`. We probe by exact (kind,name) since

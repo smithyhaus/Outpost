@@ -158,8 +158,13 @@ kubectl apply -f core/k8s/05-tekton/task-buildkit.yaml
 # buildkitd (the build-and-push step would otherwise fail its first connect).
 if [[ "${BUILD_ENGINE_TASK}" == "buildkit" ]]; then
   log "Waiting for buildkitd (active build engine) to be Ready..."
-  kubectl wait --for=condition=Available deployment/buildkitd -n buildkit --timeout=180s \
-    || warn "buildkitd not Ready within 180s — the first buildkit build may retry until it is"
+  # 420s aligns with the daemon's own startup budget: its startupProbe allows
+  # up to 6min (36×10s) when recovering a dirty cache — a 180s wait here gave
+  # up while the daemon was still legitimately starting, and the || warn then
+  # buried the one signal that ALL builds were about to fail. verify.sh now
+  # carries a FAIL-level buildkit.daemon check as the persistent backstop.
+  kubectl wait --for=condition=Available deployment/buildkitd -n buildkit --timeout=420s \
+    || warn "buildkitd not Ready within 420s — builds WILL fail until it is; run ./verify.sh and check 'kubectl -n buildkit get pods'"
 fi
 
 # Tekton RBAC + secrets + pipeline + binding/template
@@ -340,7 +345,15 @@ else
   warn "node InternalIP not found; host.docker.internal will not resolve → app pods CrashLoop"
 fi
 
-# Get ArgoCD admin password
+# Get ArgoCD admin password. Persist to .env ONLY when the initial-admin
+# secret actually exists — on a re-bootstrap after the user deleted that
+# secret (the documented ArgoCD hardening step), the old code wrote the
+# literal placeholder "(not yet ready)" into .env as if it were the password.
 ARGOCD_ADMIN_PASSWORD=$(kubectl -n argocd get secret argocd-initial-admin-secret \
-  -o jsonpath='{.data.password}' 2>/dev/null | base64 -d || echo '(not yet ready)')
-grep -q '^ARGOCD_ADMIN_PASSWORD=' .env || echo "ARGOCD_ADMIN_PASSWORD=${ARGOCD_ADMIN_PASSWORD}" >> .env
+  -o jsonpath='{.data.password}' 2>/dev/null | base64 -d || true)
+if [[ -n "${ARGOCD_ADMIN_PASSWORD}" ]]; then
+  grep -q '^ARGOCD_ADMIN_PASSWORD=' .env || echo "ARGOCD_ADMIN_PASSWORD=${ARGOCD_ADMIN_PASSWORD}" >> .env
+else
+  ARGOCD_ADMIN_PASSWORD='(initial-admin-secret absent — already rotated?)'
+  warn "argocd-initial-admin-secret not found; not persisting a placeholder password to .env"
+fi

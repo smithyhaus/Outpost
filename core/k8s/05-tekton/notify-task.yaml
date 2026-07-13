@@ -62,6 +62,10 @@ spec:
       script: |
         #!/bin/sh
         set -eu
+        # CN mirror first — apk against dl-cdn.alpinelinux.org is throttled from
+        # CN and was measured costing minutes per run in run-tests (same fix
+        # there; keep the two in sync).
+        sed -i 's|dl-cdn.alpinelinux.org|mirrors.aliyun.com|g' /etc/apk/repositories 2>/dev/null || true
         apk add --no-cache --quiet jq curl gettext openssl coreutils >/dev/null
         exec /scripts/notify-fanout.sh
   volumes:
