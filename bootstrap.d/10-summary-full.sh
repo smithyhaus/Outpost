@@ -14,9 +14,24 @@ kubectl get pods -A 2>/dev/null | head -40
 # Platform-specific tail notes
 sk_print_post_install_notes
 
+# Self-verify before declaring success. Several waits earlier in the run
+# deliberately degrade to `warn` to keep the bootstrap moving (buildkitd,
+# tekton rollouts, sealed-secrets) — an unconditional "complete" banner then
+# papers over a half-broken stack. verify.sh is the ground truth: exit 0 =
+# all PASS, 2 = warnings only, 1 = at least one FAIL.
+echo ""
+echo "Running post-bootstrap verification (./verify.sh)..."
+VERIFY_STATUS=0
+bash verify.sh || VERIFY_STATUS=$?
+
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
-echo "  Outpost bootstrap complete (full mode)"
+case "$VERIFY_STATUS" in
+  0) echo "  Outpost bootstrap complete (full mode) — verify: ALL PASS" ;;
+  2) echo "  Outpost bootstrap complete (full mode) — verify: PASS with WARNINGS (see above)" ;;
+  *) echo "  Outpost bootstrap FINISHED WITH FAILURES — verify found broken components (see above)"
+     echo "  The stack is NOT fully healthy. Fix the FAIL items, then re-run ./verify.sh" ;;
+esac
 echo "═══════════════════════════════════════════════════════════════"
 echo ""
 echo "  ArgoCD UI:        https://argocd.${ROOT_DOMAIN}"
