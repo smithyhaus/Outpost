@@ -13,11 +13,12 @@
 #      Vendoring removes the install-time dependency entirely.
 #   3. Make code review tractable — operator can diff vendored vs upstream.
 #
-# LOCAL TRANSFORM (not upstream): the gitInitImage default below is rewritten
-# to the m.daocloud.io pull-through mirror. ghcr.io has joined the set of
-# registries with unreliable CN egress (previously treated as reachable —
-# see scripts/vendor-tekton-catalog.sh). The identical rewrite lives in that
-# script (MIRROR_PREFIX) so re-vendoring preserves it.
+# NOTE on gitInitImage: it stays on the DIRECT ghcr.io ref. A daocloud
+# mirror prefix was tried (2026-07-13) and 403'd — daocloud allowlists
+# per-repo, and ghcr.io/tektoncd-catalog is NOT covered (took the whole
+# fleet's fetch-source down: TaskRunImagePullFailed ×21). The direct ref
+# has weeks of successful pulls on this cluster. NEVER swap a working
+# image for a mirror-prefixed one without a live pull test first.
 # =============================================================================
 apiVersion: tekton.dev/v1
 kind: Task
@@ -123,7 +124,7 @@ spec:
     - name: gitInitImage
       description: The image providing the git-init binary that this Task runs.
       type: string
-      default: "m.daocloud.io/ghcr.io/tektoncd-catalog/git-clone:v1.1.0"
+      default: "ghcr.io/tektoncd-catalog/git-clone:v1.1.0"
     - name: userHome
       description: |
         Absolute path to the user's home directory.

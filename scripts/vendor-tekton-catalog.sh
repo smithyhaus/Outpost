@@ -67,11 +67,14 @@ for entry in "${TASKS[@]}"; do
   # Mirror unreachable image refs (see MIRROR_PREFIX): scoped to `default:` lines
   # for the exact image paths below, so nothing else in the Task spec matches.
   if [[ -n "$MIRROR_PREFIX" ]]; then
+    # ghcr.io/tektoncd-catalog is deliberately NOT rewritten: daocloud
+    # allowlists per-repo and 403s that one (verified 2026-07-13 — the
+    # rewrite took all fetch-source steps down fleet-wide). Only prefix
+    # repos with a passing live pull test.
     body="$(printf '%s' "$body" | sed -E \
       "/^[[:space:]]*default:/ s#(gcr\.io/kaniko-project/executor)#${MIRROR_PREFIX}/\1#; \
-       /^[[:space:]]*default:/ s#(docker\.io/library/bash)#${MIRROR_PREFIX}/\1#; \
-       /^[[:space:]]*default:/ s#(ghcr\.io/tektoncd-catalog/git-clone)#${MIRROR_PREFIX}/\1#")"
-    echo "  mirror: gcr.io/docker.io/ghcr.io defaults → ${MIRROR_PREFIX}/…"
+       /^[[:space:]]*default:/ s#(docker\.io/library/bash)#${MIRROR_PREFIX}/\1#")"
+    echo "  mirror: gcr.io/docker.io library defaults → ${MIRROR_PREFIX}/…"
   fi
 
   cat >"$out" <<EOF

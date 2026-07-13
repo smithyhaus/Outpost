@@ -45,8 +45,11 @@ spec:
 
   steps:
     - name: run-update-manifest
-      # m.daocloud.io/docker.io/... — index.docker.io is reset/unreachable in CN.
-      image: m.daocloud.io/docker.io/alpine/git:2.43.0
+      # Direct ref, NOT daocloud-prefixed: daocloud allowlists docker.io
+      # per-org (bitnami/kubectl and ghcr tektoncd-catalog both 403'd);
+      # alpine/* is unverified there, while the direct ref has weeks of
+      # successful pulls here. Pull-test before ever adding a prefix.
+      image: alpine/git:2.43.0
       env:
         - name: MANIFEST_REPO_URL
           value: $(params.manifest-repo-url)
