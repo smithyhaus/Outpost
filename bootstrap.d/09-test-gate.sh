@@ -10,7 +10,9 @@ phase "Phase 9 / 10 Test gate, auto-rollback, notifications"
 log "Installing test-runner: ${TEST_RUNNER}"
 case "${TEST_RUNNER}" in
   testkube)
-    if [[ "${TESTKUBE_MODE}" == "oss" ]]; then
+    if [[ "${TESTKUBE_MODE}" == "skip" ]]; then
+      log "TESTKUBE_MODE=skip — not installing the Testkube agent (run-tests evals outpost.test.yaml inline; set TESTKUBE_MODE=oss when Phase 2 adopts TestWorkflows)"
+    elif [[ "${TESTKUBE_MODE}" == "oss" ]]; then
       # Auto-install helm if missing.
       # macOS path: prefer brew (no sudo prompt mid-bootstrap). Otherwise
       # fall back to the same tarball-and-sudo dance as kubeseal.

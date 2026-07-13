@@ -14,7 +14,7 @@ description: |
       --namespace testkube --create-namespace
 required_env: []
 optional_env:
-  - TESTKUBE_MODE          # oss (default) | cloud
+  - TESTKUBE_MODE          # skip (default) | oss | cloud
   - TESTKUBE_CLOUD_API_KEY # only if TESTKUBE_MODE=cloud
 provides:
   - test-runner: testkube

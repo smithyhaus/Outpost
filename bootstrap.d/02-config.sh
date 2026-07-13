@@ -106,7 +106,12 @@ RABBITMQ_USER="${RABBITMQ_USER:-admin}"
 
 # Phase 9 plugin defaults (full mode only — but read in both so .env is consistent)
 TEST_RUNNER="${TEST_RUNNER:-testkube}"
-TESTKUBE_MODE="${TESTKUBE_MODE:-oss}"
+# skip (default) | oss | cloud. Nothing in the MVP pipeline talks to the
+# Testkube product — the run-tests Task evals outpost.test.yaml inline — and
+# the oss helm install must reach us-east1-docker.pkg.dev (GAR), which times
+# out from CN and wasted ~5min per bootstrap. Set oss/cloud when Phase 2
+# actually adopts Testkube TestWorkflows.
+TESTKUBE_MODE="${TESTKUBE_MODE:-skip}"
 ROLLOUT_PLUGIN="${ROLLOUT_PLUGIN:-argo-rollouts}"
 ROLLOUTS_DASHBOARD_HOST="${ROLLOUTS_DASHBOARD_HOST:-rollouts.${ROOT_DOMAIN}}"
 NOTIFICATION_PROVIDERS="${NOTIFICATION_PROVIDERS:-}"
