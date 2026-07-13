@@ -159,7 +159,8 @@ OUTPOST_TEKTON_PRUNE_SCHEDULE="${OUTPOST_TEKTON_PRUNE_SCHEDULE:-*/15 * * * *}"
 # burst can produce 30 PRs in an hour, all within the retention window,
 # all holding ephemeral. Keep-last-N keeps the ceiling bounded.
 OUTPOST_TEKTON_KEEP_LAST_N="${OUTPOST_TEKTON_KEEP_LAST_N:-20}"
-OUTPOST_TEKTON_PRUNER_IMAGE="${OUTPOST_TEKTON_PRUNER_IMAGE:-alpine/k8s:1.31.0}"
+# m.daocloud.io/docker.io/... — index.docker.io is reset/unreachable in CN.
+OUTPOST_TEKTON_PRUNER_IMAGE="${OUTPOST_TEKTON_PRUNER_IMAGE:-m.daocloud.io/docker.io/alpine/k8s:1.31.0}"
 
 # Registry GC — periodic tag prune + blob garbage-collect for self-hosted
 # registry plugin only. The docker-registry has no built-in GC; without

@@ -45,7 +45,8 @@ spec:
 
   steps:
     - name: run-update-manifest
-      image: alpine/git:2.43.0
+      # m.daocloud.io/docker.io/... — index.docker.io is reset/unreachable in CN.
+      image: m.daocloud.io/docker.io/alpine/git:2.43.0
       env:
         - name: MANIFEST_REPO_URL
           value: $(params.manifest-repo-url)

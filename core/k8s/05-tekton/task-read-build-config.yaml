@@ -68,7 +68,8 @@ spec:
     - name: read
       # mikefarah/yq alpine image: tiny (~15 MB), ships yq + busybox sh.
       # Pinned digest avoids surprise on every PipelineRun.
-      image: mikefarah/yq:4.44.1
+      # m.daocloud.io/docker.io/... — index.docker.io is reset/unreachable in CN.
+      image: m.daocloud.io/docker.io/mikefarah/yq:4.44.1
       env:
         - name: SRC_DIR
           value: $(workspaces.source.path)/$(params.source-subdir)

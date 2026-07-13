@@ -9,8 +9,13 @@ sk_install_docker() {
     return 0
   fi
   if ! command -v docker >/dev/null 2>&1; then
-    log "Installing Docker via the official convenience script..."
-    curl -fsSL https://get.docker.com | sh
+    log "Installing Docker via the official convenience script (Aliyun mirror)..."
+    # get.docker.com itself is reachable from CN, but the script's default
+    # package repo (download.docker.com) is not — `--mirror Aliyun` is the
+    # script's own officially-supported flag to route both the script fetch
+    # helpers and the apt/yum repo through Aliyun instead. --connect-timeout
+    # + --retry guard against transient CN egress flaps on the initial curl.
+    curl -fsSL --connect-timeout 10 --retry 3 https://get.docker.com | sh -s -- --mirror Aliyun
     sudo usermod -aG docker "$USER" || true
     warn "You may need to log out / log back in for the docker group to apply."
   fi
@@ -25,12 +30,17 @@ sk_install_k3s() {
     ok "k3s already reachable via kubectl"
     return 0
   fi
-  log "Installing k3s natively..."
+  log "Installing k3s natively (Rancher CN mirror)..."
   # NOTE: metrics-server is intentionally KEPT (k3s bundles it, ~50Mi). Without
   # it there is no `kubectl top`, no HPA, and the cluster is blind to resource
   # pressure — it was previously --disable'd and that blindness hid real OOM
   # risk on the single-node cluster.
-  curl -sfL https://get.k3s.io | sh -s - \
+  # get.k3s.io / GitHub releases (binary + checksums) are unreliable from CN.
+  # rancher-mirror.rancher.cn is Rancher's own officially-documented CN mirror
+  # for the install script; INSTALL_K3S_MIRROR=cn tells the script to also
+  # pull the k3s binary + checksum from the same mirror instead of GitHub.
+  curl -sfL --connect-timeout 10 --retry 3 https://rancher-mirror.rancher.cn/k3s/k3s-install.sh \
+    | INSTALL_K3S_MIRROR=cn sh -s - \
     --write-kubeconfig-mode=644
   mkdir -p ~/.kube
   sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config

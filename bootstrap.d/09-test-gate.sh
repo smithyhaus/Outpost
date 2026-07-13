@@ -74,10 +74,15 @@ ok "Test runner ready"
 log "Installing rollout plugin: ${ROLLOUT_PLUGIN}"
 if [[ "${ROLLOUT_PLUGIN}" == "argo-rollouts" ]]; then
   # Server-side apply — Rollouts CRDs are large, same rationale as ArgoCD/Tekton.
+  # Vendored (core/k8s/vendor/) instead of curl'd from github.com/.../latest/
+  # download/ at install time — that host is intermittently throttled/blocked
+  # in CN, and the old `latest` path floated (a re-bootstrap months apart
+  # could silently jump major versions). See each file's header for upgrade
+  # instructions.
   kubectl apply --server-side=true --force-conflicts -n argo-rollouts \
-    -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+    -f core/k8s/vendor/argo-rollouts-install-v1.9.0.yaml
   kubectl apply --server-side=true --force-conflicts -n argo-rollouts \
-    -f https://github.com/argoproj/argo-rollouts/releases/latest/download/dashboard-install.yaml
+    -f core/k8s/vendor/argo-rollouts-dashboard-install-v1.9.0.yaml
   kubectl wait --for=condition=Available --timeout=180s \
     deployment/argo-rollouts -n argo-rollouts 2>/dev/null || \
     warn "argo-rollouts controller still rolling — apply continues"

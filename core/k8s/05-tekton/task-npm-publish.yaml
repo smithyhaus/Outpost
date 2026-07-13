@@ -29,7 +29,8 @@ spec:
     - name: source
   steps:
     - name: publish
-      image: node:22-alpine
+      # m.daocloud.io/docker.io/... — index.docker.io is reset/unreachable in CN.
+      image: m.daocloud.io/docker.io/node:22-alpine
       workingDir: $(workspaces.source.path)/$(params.source-subdir)
       env:
         - name: REG

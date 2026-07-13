@@ -66,8 +66,12 @@ ok "Orphan cleanup done"
 # Server-side apply: ArgoCD's applicationsets CRD has annotations that
 # exceed the 256KB client-side-apply limit. --force-conflicts also lets
 # us own fields previously client-side-applied (re-runs).
+# Vendored (core/k8s/vendor/) instead of curl'd from raw.githubusercontent.com
+# at install time — CN egress to that host is intermittently throttled, and
+# the old `stable` tag floated (a re-bootstrap months apart could silently
+# jump major versions). See the file header for upgrade instructions.
 kubectl apply --server-side=true --force-conflicts -n argocd \
-  -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+  -f core/k8s/vendor/argocd-install-v3.4.5.yaml
 kubectl apply -f core/k8s/04-argocd/cmd-params-cm.yaml
 kubectl rollout restart deployment/argocd-server -n argocd
 
@@ -90,12 +94,16 @@ ok "ArgoCD /api/webhook receiver enabled"
 # Tekton — install pipelines + triggers CRDs and controllers.
 # Same server-side-apply rationale as ArgoCD: Tekton's CRDs carry large
 # OpenAPI schemas that can exceed the client-side-apply 256KB limit.
+# Vendored (core/k8s/vendor/) instead of curl'd from storage.googleapis.com
+# at install time — that host is intermittently throttled/blocked in CN, and
+# the old `latest` path floated (a re-bootstrap months apart could silently
+# jump major versions). See each file's header for upgrade instructions.
 kubectl apply --server-side=true --force-conflicts \
-  -f https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
+  -f core/k8s/vendor/tekton-pipeline-v1.14.0.yaml
 kubectl apply --server-side=true --force-conflicts \
-  -f https://storage.googleapis.com/tekton-releases/triggers/latest/release.yaml
+  -f core/k8s/vendor/tekton-triggers-v0.36.0.yaml
 kubectl apply --server-side=true --force-conflicts \
-  -f https://storage.googleapis.com/tekton-releases/triggers/latest/interceptors.yaml
+  -f core/k8s/vendor/tekton-triggers-interceptors-v0.36.0.yaml
 sleep 10
 kubectl wait --for=condition=Available --timeout=300s deployment --all -n tekton-pipelines || warn "some tekton deploys still rolling"
 
@@ -293,9 +301,11 @@ ok "EventListener applied (provider(s)=${GIT_PROVIDER_PLUGIN}, service=el-build-
 # release-full.yaml gives read+write (cancel run, delete PR, etc).
 # Exposed at tekton.<ROOT_DOMAIN> via Traefik (cloudflared 须在 CF Dashboard
 # 手动加 Public Hostname: tekton.<root> → http://host.docker.internal:30080)
+# Vendored (core/k8s/vendor/) — same CN-egress + version-pinning rationale
+# as the Tekton pipeline/triggers install above.
 log "Installing Tekton Dashboard..."
 kubectl apply --server-side=true --force-conflicts \
-  -f https://storage.googleapis.com/tekton-releases/dashboard/latest/release-full.yaml
+  -f core/k8s/vendor/tekton-dashboard-v0.70.0.yaml
 kubectl wait --for=condition=Available --timeout=180s \
   deployment/tekton-dashboard -n tekton-pipelines 2>/dev/null || \
   warn "tekton-dashboard not ready yet — apply continues"

@@ -123,6 +123,14 @@ setup() {
   ! [[ "$KANIKO_EXTRA_ARGS" == *"--skip-tls-verify"* ]]
 }
 
+@test "aliyun-acr: KANIKO_EXTRA_ARGS includes --registry-mirror (Docker Hub base images unreachable in CN)" {
+  export REGISTRY_PLUGIN="aliyun-acr"
+  export ALIYUN_ACR_REGISTRY="registry.cn-test.aliyuncs.com"
+  export ALIYUN_ACR_NAMESPACE="my-team"
+  resolve_registry_config
+  [[ "$KANIKO_EXTRA_ARGS" == *"--registry-mirror=docker.m.daocloud.io"* ]]
+}
+
 @test "aliyun-acr: KANIKO_EXTRA_ARGS includes cache repo under namespace" {
   export REGISTRY_PLUGIN="aliyun-acr"
   export ALIYUN_ACR_REGISTRY="registry.cn-test.aliyuncs.com"

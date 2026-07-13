@@ -86,7 +86,11 @@ resolve_registry_config() {
       REGISTRY_PUSH_HOST="${ALIYUN_ACR_REGISTRY}/${ALIYUN_ACR_NAMESPACE}"
       # ACR is HTTPS-only — no --insecure (would force HTTP, which ACR refuses).
       # Same ephemeral-compression rationale as self-hosted — see header.
-      KANIKO_EXTRA_ARGS="--cache=true --cache-repo=${ALIYUN_ACR_REGISTRY}/${ALIYUN_ACR_NAMESPACE}/cache --cache-copy-layers --snapshotMode=redo --use-new-run"
+      # --registry-mirror: same rationale as self-hosted (see above) — Dockerfile
+      # base images (FROM node:22-alpine, …) live on Docker Hub, unreachable in
+      # CN. Route through the DaoCloud mirror regardless of which OCI registry
+      # the built image is pushed to; kaniko falls back to index.docker.io on miss.
+      KANIKO_EXTRA_ARGS="--registry-mirror=docker.m.daocloud.io --cache=true --cache-repo=${ALIYUN_ACR_REGISTRY}/${ALIYUN_ACR_NAMESPACE}/cache --cache-copy-layers --snapshotMode=redo --use-new-run"
       ;;
     *)
       err "REGISTRY_PLUGIN '${REGISTRY_PLUGIN:-(unset)}' lacks a kaniko config block in platform/lib/registry-config.sh"

@@ -1,0 +1,158 @@
+# =============================================================================
+# VENDORED — DO NOT HAND-EDIT.
+# -----------------------------------------------------------------------------
+# Source:  https://github.com/argoproj/argo-rollouts/releases/download/v1.9.0/dashboard-install.yaml
+# Fetched: 2026-07-13
+#
+# Why vendored (not curl'd at bootstrap):
+#   1. CN egress to github/googleapis is intermittently throttled or blocked —
+#      an install-time curl to this URL is a single point of bootstrap failure.
+#   2. Version pinning — the original bootstrap used a floating "latest"/"stable"
+#      tag, so a re-bootstrap months apart could silently jump major versions.
+#      Vendoring freezes the exact version below; bumping it is now a reviewable diff.
+#   3. LOCAL TRANSFORM (not upstream): image: lines pointing at quay.io/gcr.io/
+#      ghcr.io/registry.k8s.io/docker.io are rewritten to the m.daocloud.io
+#      pull-through mirror (same pattern as core/k8s/08-buildkit/deployment.yaml
+#      and core/k8s/05-tekton/catalog/kaniko-0.7.yaml) — those registries are
+#      unreachable or unreliable from CN cluster nodes.
+#
+# How to upgrade:
+#   curl -fsSL https://github.com/argoproj/argo-rollouts/releases/download/vX.Y.Z/dashboard-install.yaml -o argo-rollouts-dashboard-install-vX.Y.Z.yaml (keep in lockstep with argo-rollouts-install-vX.Y.Z.yaml — same release)
+#   then re-apply the mirror-prefix rewrite above (image: lines only) and
+#   update the version in this header + the filename + bootstrap.d references.
+# =============================================================================
+# This is an auto-generated file. DO NOT EDIT
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/component: argo-rollouts-dashboard
+    app.kubernetes.io/name: argo-rollouts-dashboard
+    app.kubernetes.io/part-of: argo-rollouts
+  name: argo-rollouts-dashboard
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/component: argo-rollouts-dashboard
+    app.kubernetes.io/name: argo-rollouts-dashboard
+    app.kubernetes.io/part-of: argo-rollouts
+  name: argo-rollouts-dashboard
+rules:
+- apiGroups:
+  - argoproj.io
+  resources:
+  - rollouts
+  - rollouts/status
+  - rollouts/finalizers
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - patch
+- apiGroups:
+  - argoproj.io
+  resources:
+  - analysisruns
+  - analysisruns/finalizers
+  - experiments
+  - experiments/finalizers
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - argoproj.io
+  resources:
+  - analysistemplates
+  - clusteranalysistemplates
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - get
+  - update
+  - list
+  - watch
+  - patch
+- apiGroups:
+  - apps
+  resources:
+  - replicasets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/component: argo-rollouts-dashboard
+    app.kubernetes.io/name: argo-rollouts-dashboard
+    app.kubernetes.io/part-of: argo-rollouts
+  name: argo-rollouts-dashboard
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: argo-rollouts-dashboard
+subjects:
+- kind: ServiceAccount
+  name: argo-rollouts-dashboard
+  namespace: argo-rollouts
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/component: argo-rollouts-dashboard
+    app.kubernetes.io/name: argo-rollouts-dashboard
+    app.kubernetes.io/part-of: argo-rollouts
+  name: argo-rollouts-dashboard
+spec:
+  ports:
+  - port: 3100
+    protocol: TCP
+    targetPort: 3100
+  selector:
+    app.kubernetes.io/name: argo-rollouts-dashboard
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/component: argo-rollouts-dashboard
+    app.kubernetes.io/name: argo-rollouts-dashboard
+    app.kubernetes.io/part-of: argo-rollouts
+  name: argo-rollouts-dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: argo-rollouts-dashboard
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: argo-rollouts-dashboard
+    spec:
+      containers:
+      - image: m.daocloud.io/quay.io/argoproj/kubectl-argo-rollouts:v1.9.0
+        name: argo-rollouts-dashboard
+        ports:
+        - containerPort: 3100
+      serviceAccountName: argo-rollouts-dashboard

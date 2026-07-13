@@ -26,7 +26,12 @@ if [[ -f secrets-backup/sealed-secrets-master.key.yaml ]]; then
   ok "  master key restored — old SealedSecrets will decrypt on this cluster"
 fi
 
-kubectl apply -f https://github.com/bitnami-labs/sealed-secrets/releases/latest/download/controller.yaml
+# Vendored (core/k8s/vendor/) instead of curl'd from github.com/.../latest/
+# download/ at install time — that host is intermittently throttled/blocked
+# in CN, and the old `latest` path floated (a re-bootstrap months apart
+# could silently jump major versions). See the file header for upgrade
+# instructions. Keep in lockstep with KS_VER below (same release).
+kubectl apply -f core/k8s/vendor/sealed-secrets-controller-v0.38.4.yaml
 kubectl wait --for=condition=Available --timeout=180s deployment -l name=sealed-secrets-controller -n kube-system 2>/dev/null || true
 
 # If we restored a key, restart the controller so it picks up the restored
@@ -39,8 +44,11 @@ fi
 if ! command -v kubeseal >/dev/null 2>&1; then
   log "Downloading kubeseal CLI..."
   # Pin kubeseal to a known-good version. Bump as new releases are validated.
+  # Kept in lockstep with the vendored controller version
+  # (core/k8s/vendor/sealed-secrets-controller-v0.38.4.yaml) — client/server
+  # skew across sealed-secrets minor versions is not guaranteed compatible.
   # https://github.com/bitnami-labs/sealed-secrets/releases
-  KS_VER="0.28.0"
+  KS_VER="0.38.4"
   case "$SK_OS" in
     macos)
       # Apple Silicon (M-series) needs darwin-arm64; Intel Macs darwin-amd64.
@@ -58,8 +66,18 @@ if ! command -v kubeseal >/dev/null 2>&1; then
       fi
       ;;
   esac
-  curl -sSL "https://github.com/bitnami-labs/sealed-secrets/releases/download/v${KS_VER}/kubeseal-${KS_VER}-${ARCH}.tar.gz" \
-    | tar -xz kubeseal
+  KS_URL="https://github.com/bitnami-labs/sealed-secrets/releases/download/v${KS_VER}/kubeseal-${KS_VER}-${ARCH}.tar.gz"
+  # github.com direct download is intermittently throttled/blocked from CN.
+  # Try it first (fast path when egress is fine); on failure fall back to
+  # ghfast.top, a third-party GitHub release accelerator (unaffiliated with
+  # GitHub — best-effort mirror, not a guarantee). If both fail, install
+  # manually: download kubeseal-${KS_VER}-${ARCH}.tar.gz from
+  # https://github.com/bitnami-labs/sealed-secrets/releases and place the
+  # `kubeseal` binary on PATH.
+  if ! curl -fsSL --connect-timeout 15 "$KS_URL" | tar -xz kubeseal 2>/dev/null; then
+    warn "kubeseal download from github.com timed out/failed — retrying via ghfast.top (CN accelerator)"
+    curl -fsSL --connect-timeout 15 "https://ghfast.top/${KS_URL}" | tar -xz kubeseal
+  fi
   sudo mv kubeseal /usr/local/bin/
   sudo chmod +x /usr/local/bin/kubeseal
 fi
