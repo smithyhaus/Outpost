@@ -50,9 +50,15 @@ spec:
       script: |
         #!/usr/bin/env sh
         set -e
-        apk add --no-cache --quiet bash yq jq curl >/dev/null 2>&1 || true
+        # NOTE: apk add is DEFERRED into the outpost-yaml branch below. Detection
+        # ([ -f ... ]) needs no extra tools; only the yq-based outpost.test.yaml
+        # parse does. Installing bash/yq/jq/curl up-front cost ~4.5min PER BUILD
+        # off the throttled CN Alpine CDN, entirely wasted on the common no-tests
+        # skip path (measured: agent run-tests 4m24s for a "Gate A: skipped").
+        # Deferring it makes the skip path ~3s. When it does run, apk points at a
+        # CN mirror so a test-bearing repo isn't throttled either.
 
-        # ---- detect ----
+        # ---- detect (no external tools needed) ----
         if [ -f "outpost.test.yaml" ]; then
           mode="outpost-yaml"
         elif [ -f "Dockerfile.test" ]; then
@@ -78,6 +84,10 @@ spec:
 
         # ---- run ----
         if [ "$mode" = "outpost-yaml" ]; then
+          # Lazily install the parse toolchain now that we know tests exist.
+          # Point apk at a CN mirror first so it isn't throttled off dl-cdn.
+          sed -i 's|dl-cdn.alpinelinux.org|mirrors.aliyun.com|g' /etc/apk/repositories 2>/dev/null || true
+          apk add --no-cache --quiet bash yq jq curl >/dev/null 2>&1 || true
           # MVP: read .runner.command (JSON array) and eval directly.
           if ! yq -e '.runner.command' outpost.test.yaml >/dev/null 2>&1; then
             echo "[ERR] outpost.test.yaml: .runner.command is required (MVP)"
