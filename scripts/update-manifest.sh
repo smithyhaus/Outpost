@@ -203,7 +203,12 @@ git commit -m "$COMMIT_MESSAGE"
 # Pipeline reports "git push failed" deep in the last step, the user first
 # suspects their own code. Rebase-and-retry collapses the race window.
 attempt=1
-max_attempts=3
+# 6 attempts with jitter: batch deploys are the NORMAL case here (multiple
+# teams pushing concurrently → a dozen runs racing the same manifest repo).
+# 3 immediate retries can exhaust under a 14-way race; jitter de-synchronizes
+# the herd so each cycle's winner clears quickly. Each cycle is cheap
+# (fetch+rebase touch one file, different per app — conflict-free).
+max_attempts=6
 while [ "$attempt" -le "$max_attempts" ]; do
   if git push origin "$MANIFEST_BRANCH"; then
     echo "  pushed on attempt $attempt"
@@ -214,6 +219,8 @@ while [ "$attempt" -le "$max_attempts" ]; do
     exit 1
   fi
   echo "  push attempt $attempt/$max_attempts failed (likely concurrent push); rebasing on remote..."
+  # Jittered backoff (portable: busybox sh has no $RANDOM; awk srand does).
+  sleep "$(awk 'BEGIN{srand(); print int(rand()*4)+1}')"
   if ! git fetch origin "$MANIFEST_BRANCH"; then
     echo "ERROR: git fetch failed during retry" >&2
     exit 1

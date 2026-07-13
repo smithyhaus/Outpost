@@ -45,11 +45,15 @@ spec:
 
   steps:
     - name: run-update-manifest
-      # Direct ref, NOT daocloud-prefixed: daocloud allowlists docker.io
-      # per-org (bitnami/kubectl and ghcr tektoncd-catalog both 403'd);
-      # alpine/* is unverified there, while the direct ref has weeks of
-      # successful pulls here. Pull-test before ever adding a prefix.
-      image: alpine/git:2.43.0
+      # alpine/k8s, NOT alpine/git: this image ships git+yq+bash preinstalled
+      # (verified in-cluster), so the script's "apk add curl + download 10MB
+      # yq" runtime-install path is dead code here. That per-run install was
+      # the REAL batch-deploy killer: 14 concurrent runs stampeded dl-cdn +
+      # the yq mirror and update-manifest went 15-25s (solo) → 88-237s. Same
+      # pinned image as the Tekton pruner → already cached on the node.
+      # Direct ref, NOT daocloud-prefixed (allowlist is per-repo; pull-test
+      # before ever adding a prefix).
+      image: alpine/k8s:1.31.0
       env:
         - name: MANIFEST_REPO_URL
           value: $(params.manifest-repo-url)
