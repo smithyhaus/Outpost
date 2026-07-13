@@ -38,11 +38,11 @@ sk_install_k3s() {
       curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
     fi
   fi
+  # metrics-server kept (see platform/linux.sh) — needed for kubectl top / HPA.
   k3d cluster create selfhost \
     --servers 1 \
     --port "30080:30080@server:0" \
     --port "30443:30443@server:0" \
-    --k3s-arg "--disable=metrics-server@server:0" \
     --wait
   k3d kubeconfig merge selfhost --kubeconfig-switch-context
   ok "k3d cluster 'selfhost' running"

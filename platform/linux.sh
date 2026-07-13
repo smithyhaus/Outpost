@@ -26,9 +26,12 @@ sk_install_k3s() {
     return 0
   fi
   log "Installing k3s natively..."
+  # NOTE: metrics-server is intentionally KEPT (k3s bundles it, ~50Mi). Without
+  # it there is no `kubectl top`, no HPA, and the cluster is blind to resource
+  # pressure — it was previously --disable'd and that blindness hid real OOM
+  # risk on the single-node cluster.
   curl -sfL https://get.k3s.io | sh -s - \
-    --write-kubeconfig-mode=644 \
-    --disable=metrics-server
+    --write-kubeconfig-mode=644
   mkdir -p ~/.kube
   sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
   sudo chown "$(id -u):$(id -g)" ~/.kube/config
