@@ -42,17 +42,53 @@ spec:
           # Pinned via the DaoCloud docker.io mirror (node containerd has no CN
           # egress to docker.io) — same mirror-prefix pattern as the kaniko task.
           image: m.daocloud.io/docker.io/moby/buildkit:v0.16.0
-          # Wrap buildkitd to raise fs.inotify.max_user_instances first. Node/NestJS
-          # app builds (`nest build`) watch their source (e.g. proto dirs), and the
-          # RUN sandbox inherits the host default of 128 inotify instances — too few
-          # for proto-heavy services (mdm/product hit `EMFILE: too many open files,
-          # watch '/app/proto'`), and worse under concurrency since instances count
-          # PER-UID across all concurrent builds. 8192 gives ample headroom. The pod
-          # is privileged, so this sysctl -w takes effect for the RUN sandboxes.
+          # Startup wrapper: self-heal + sysctl, then exec buildkitd.
+          #
+          # 1) STALE LOCK: an OOM-SIGKILL mid-build leaves /var/lib/buildkit/
+          #    buildkitd.lock behind, and every replacement pod then CrashLoops
+          #    on "could not lock buildkitd.lock, another instance running?"
+          #    (took CI down twice, 2026-07-12/13, needed manual scale-0 + rm).
+          #    With strategy=Recreate, replicas=1 and a single-node RWO PVC, no
+          #    other buildkitd can be alive when this container starts — any
+          #    lock present at boot is BY DEFINITION stale. Remove it.
+          #
+          # 2) DIRTY-CACHE HANG: recovering a dirty store after a SIGKILL was
+          #    observed to freeze forever at "auto snapshotter: using overlayfs"
+          #    (>7min, zero log progress; healthy start is ~12s). The wrapper
+          #    counts boot attempts in .boot-attempts on the PVC; a background
+          #    probe clears it once the daemon answers `buildctl debug workers`.
+          #    If two consecutive boots never got healthy, the 3rd boot wipes
+          #    the cache and starts clean. Cost: cold builds (~4.5min each with
+          #    npmmirror) until the store re-warms — far cheaper than CI being
+          #    down until a human runs the scale-0/wipe runbook.
+          #
+          # 3) INOTIFY: `nest build` watches source dirs (e.g. /app/proto); the
+          #    RUN sandbox inherits the host default of 128 inotify instances
+          #    (counted PER-UID across concurrent builds) — proto-heavy repos
+          #    hit `EMFILE: too many open files, watch '/app/proto'`. 8192 gives
+          #    headroom; the pod is privileged so sysctl -w reaches sandboxes.
           command:
             - /bin/sh
             - -c
             - |
+              rm -f /var/lib/buildkit/buildkitd.lock
+              BOOT=/var/lib/buildkit/.boot-attempts
+              n=$(cat "$BOOT" 2>/dev/null || echo 0)
+              if [ "$n" -ge 2 ]; then
+                echo "[self-heal] $n consecutive failed boots — wiping dirty cache for a clean start"
+                find /var/lib/buildkit -mindepth 1 -maxdepth 1 ! -name 'lost+found' -exec rm -rf {} +
+                n=0
+              fi
+              echo $((n+1)) > "$BOOT"
+              (
+                i=0
+                while [ "$i" -lt 90 ]; do
+                  sleep 10; i=$((i+1))
+                  if buildctl --addr tcp://127.0.0.1:1234 debug workers >/dev/null 2>&1; then
+                    rm -f "$BOOT"; exit 0
+                  fi
+                done
+              ) &
               sysctl -w fs.inotify.max_user_instances=8192 2>/dev/null || true
               exec buildkitd --addr tcp://0.0.0.0:1234 --oci-worker-net=host --config=/etc/buildkit/buildkitd.toml
           securityContext:
@@ -60,10 +96,12 @@ spec:
           ports:
             - name: grpc
               containerPort: 1234
-          # Startup can be SLOW when buildkit recovers a large/dirty cache after
-          # an unclean shutdown (e.g. an OOM SIGKILL mid-build). Without a
-          # startupProbe the liveness probe below would kill it at ~90s and
-          # CrashLoop it forever. Give recovery up to 10min before liveness arms.
+          # Startup can be slow when buildkit recovers a large/dirty cache after
+          # an unclean shutdown (healthy start is ~12s; give recovery 6min before
+          # liveness arms). Both observed dirty recoveries HUNG forever rather
+          # than finishing slowly, so a longer window only delays the wrapper's
+          # boot-attempt self-heal (see command above): boot 1-2 each get 6min,
+          # boot 3 wipes the cache and starts clean in seconds — fully automatic.
           startupProbe:
             exec:
               command:
@@ -73,7 +111,7 @@ spec:
                 - debug
                 - workers
             periodSeconds: 10
-            failureThreshold: 60
+            failureThreshold: 36
           readinessProbe:
             exec:
               command:
