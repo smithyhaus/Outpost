@@ -42,11 +42,19 @@ spec:
           # Pinned via the DaoCloud docker.io mirror (node containerd has no CN
           # egress to docker.io) — same mirror-prefix pattern as the kaniko task.
           image: m.daocloud.io/docker.io/moby/buildkit:v0.16.0
-          args:
-            - --addr
-            - tcp://0.0.0.0:1234
-            - --oci-worker-net=host
-            - --config=/etc/buildkit/buildkitd.toml
+          # Wrap buildkitd to raise fs.inotify.max_user_instances first. Node/NestJS
+          # app builds (`nest build`) watch their source (e.g. proto dirs), and the
+          # RUN sandbox inherits the host default of 128 inotify instances — too few
+          # for proto-heavy services (mdm/product hit `EMFILE: too many open files,
+          # watch '/app/proto'`), and worse under concurrency since instances count
+          # PER-UID across all concurrent builds. 8192 gives ample headroom. The pod
+          # is privileged, so this sysctl -w takes effect for the RUN sandboxes.
+          command:
+            - /bin/sh
+            - -c
+            - |
+              sysctl -w fs.inotify.max_user_instances=8192 2>/dev/null || true
+              exec buildkitd --addr tcp://0.0.0.0:1234 --oci-worker-net=host --config=/etc/buildkit/buildkitd.toml
           securityContext:
             privileged: true
           ports:
