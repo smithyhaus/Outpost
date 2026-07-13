@@ -1,0 +1,125 @@
+# =============================================================================
+# host.docker.internal reconciler — heals the #1 whole-site outage mode.
+# -----------------------------------------------------------------------------
+# The infra-bridges Services resolve via a CoreDNS custom server block that
+# bootstrap injects with the node's InternalIP (08-argocd-tekton.sh). But WSL2
+# assigns a NEW VM IP on every WSL/Windows restart — after which the injected
+# IP is stale and EVERY app pod loses postgres/redis/rabbitmq/manticore at
+# once, until someone re-runs bootstrap. This CronJob closes that gap: every
+# 2 minutes it compares the coredns-custom entry against the CURRENT node IP
+# and rewrites it on drift. CoreDNS's hosts plugin reloads the imported file
+# automatically, so recovery is fully hands-off (~2-3min after a restart).
+#
+# Applied automatically with the rest of core/k8s/06-bridges/ (directory
+# apply in bootstrap Phase 8). Safe on non-WSL hosts: IP never drifts there,
+# so the job is a 2-second no-op.
+# =============================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: coredns-hosts-reconciler
+  namespace: kube-system
+---
+# Read nodes (cluster-scoped) to learn the current InternalIP.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: coredns-hosts-reconciler
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: coredns-hosts-reconciler
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: coredns-hosts-reconciler
+subjects:
+  - kind: ServiceAccount
+    name: coredns-hosts-reconciler
+    namespace: kube-system
+---
+# Manage ONLY the coredns-custom ConfigMap in kube-system.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: coredns-hosts-reconciler
+  namespace: kube-system
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["coredns-custom"]
+    verbs: ["get", "patch", "update"]
+  # create can't be scoped by resourceName (the object doesn't exist yet).
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: coredns-hosts-reconciler
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: coredns-hosts-reconciler
+subjects:
+  - kind: ServiceAccount
+    name: coredns-hosts-reconciler
+    namespace: kube-system
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: coredns-hosts-reconciler
+  namespace: kube-system
+spec:
+  schedule: "*/2 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 300
+      template:
+        spec:
+          serviceAccountName: coredns-hosts-reconciler
+          restartPolicy: OnFailure
+          containers:
+            - name: reconcile
+              # alpine + apk-kubectl, NOT a kubectl image: the node's CN image
+              # path only covers docker.io library images (bitnami/kubectl 403s
+              # on the daocloud mirror AND direct). alpine provably pulls here
+              # (run-tests uses it) and apk via mirrors.aliyun.com is ~10s.
+              image: alpine:3.20
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  sed -i 's|dl-cdn.alpinelinux.org|mirrors.aliyun.com|g' /etc/apk/repositories 2>/dev/null || true
+                  apk add --no-cache --quiet kubectl >/dev/null
+                  NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+                  [ -n "$NODE_IP" ] || { echo "no node InternalIP; skip"; exit 0; }
+                  CUR=$(kubectl -n kube-system get configmap coredns-custom \
+                    -o jsonpath='{.data.hostdockerinternal\.server}' 2>/dev/null || true)
+                  case "$CUR" in
+                    *"$NODE_IP host.docker.internal"*) exit 0 ;;
+                  esac
+                  # Same block shape bootstrap writes (08-argocd-tekton.sh) —
+                  # keep the two in sync if the format ever changes.
+                  kubectl -n kube-system create configmap coredns-custom \
+                    --from-literal=hostdockerinternal.server="host.docker.internal:53 {
+                      hosts {
+                          ${NODE_IP} host.docker.internal
+                      }
+                  }" --dry-run=client -o yaml | kubectl apply -f -
+                  echo "reconciled host.docker.internal -> ${NODE_IP} (was: ${CUR:-<unset>})"
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits: { cpu: 200m, memory: 128Mi }

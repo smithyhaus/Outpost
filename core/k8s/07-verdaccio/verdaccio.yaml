@@ -124,7 +124,9 @@ spec:
               memory: 128Mi
             limits:
               cpu: "1"
-              memory: 512Mi
+              # 512Mi OOM-killed the live pod once (large npmmirror package
+              # cache spikes during fleet builds) — 1Gi gives headroom.
+              memory: 1Gi
       volumes:
         - name: config
           configMap:

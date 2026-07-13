@@ -22,7 +22,8 @@ spec:
     spec:
       containers:
         - name: registry
-          image: registry:2
+          # m.daocloud.io/docker.io/... — index.docker.io is reset/unreachable in CN.
+          image: m.daocloud.io/docker.io/registry:2
           ports:
             - containerPort: 5000
           env:
@@ -30,6 +31,20 @@ spec:
               value: "true"
             - name: REGISTRY_HTTP_ADDR
               value: ":5000"
+          # Every image the cluster runs flows through this pod — without
+          # probes a wedged registry looked Ready forever, and without
+          # resources it ran BestEffort (first OOM-kill victim on pressure).
+          readinessProbe:
+            httpGet: { path: /v2/, port: 5000 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /v2/, port: 5000 }
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: "1", memory: 512Mi }
           volumeMounts:
             - name: data
               mountPath: /var/lib/registry

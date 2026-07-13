@@ -14,6 +14,15 @@ metadata:
   namespace: kube-system
 spec:
   valuesContent: |-
+    # 集群唯一入口(cloudflared→NodePort→Traefik)。之前没有 resources =
+    # BestEffort QoS,内存承压时最先被驱逐——恰恰是最不能倒的组件。
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
     service:
       type: NodePort
     ports:

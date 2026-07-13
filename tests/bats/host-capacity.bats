@@ -8,12 +8,14 @@
 # pin the inputs so the formula is exercised deterministically across
 # CI runners with different host specs.
 #
-# Reference outputs encoded here (per the formula in host-capacity.sh):
-#   8GB  / 4-CPU      → pods=50  req_cpu=2  lim_cpu=8   req_mem=2 lim_mem=6
-#   16GB / 8-CPU      → pods=50  req_cpu=4  lim_cpu=16  req_mem=4 lim_mem=12
-#   32GB / 8-CPU      → pods=50  req_cpu=4  lim_cpu=16  req_mem=8 lim_mem=24
-#   64GB / 16-CPU     → pods=50  req_cpu=8  lim_cpu=32  req_mem=16 lim_mem=48
-#   2GB  / 1-CPU      → pods=50  req_cpu=1  lim_cpu=2   req_mem=1 lim_mem=3
+# Reference outputs encoded here (per the formula in host-capacity.sh).
+# Memory is sized from host MINUS the build-engine reserve (half the host,
+# capped at 24Gi — buildkitd's limit), then 1/4 requests / 3/4 limits:
+#   8GB  / 4-CPU      → reserve=4  eff=4  → pods=50 req_cpu=2 lim_cpu=8  req_mem=1  lim_mem=3
+#   16GB / 8-CPU      → reserve=8  eff=8  → pods=50 req_cpu=4 lim_cpu=16 req_mem=2  lim_mem=6
+#   32GB / 8-CPU      → reserve=16 eff=16 → pods=50 req_cpu=4 lim_cpu=16 req_mem=4  lim_mem=12
+#   64GB / 16-CPU     → reserve=24 eff=40 → pods=50 req_cpu=8 lim_cpu=32 req_mem=10 lim_mem=30
+#   2GB  / 1-CPU      → reserve=1  eff=1  → pods=50 req_cpu=1 lim_cpu=2  req_mem=1  lim_mem=3
 #                       (floors kick in — never zero, never <3Gi limit)
 # =============================================================================
 
@@ -55,28 +57,28 @@ setup() {
 
 # ---- apps_quota_defaults — small laptop -------------------------------------
 
-@test "apps_quota_defaults: 8GB / 4-CPU laptop → 50 2 8 2 6" {
+@test "apps_quota_defaults: 8GB / 4-CPU laptop → 50 2 8 1 3" {
   OUTPOST_HOST_CPU_OVERRIDE=4 OUTPOST_HOST_MEM_GB_OVERRIDE=8 run apps_quota_defaults
   [ "$status" -eq 0 ]
-  [ "$output" = "50 2 8 2 6" ]
+  [ "$output" = "50 2 8 1 3" ]
 }
 
-@test "apps_quota_defaults: 16GB / 8-CPU laptop → 50 4 16 4 12" {
+@test "apps_quota_defaults: 16GB / 8-CPU laptop → 50 4 16 2 6" {
   OUTPOST_HOST_CPU_OVERRIDE=8 OUTPOST_HOST_MEM_GB_OVERRIDE=16 run apps_quota_defaults
+  [ "$status" -eq 0 ]
+  [ "$output" = "50 4 16 2 6" ]
+}
+
+@test "apps_quota_defaults: 32GB / 8-CPU desktop → 50 4 16 4 12" {
+  OUTPOST_HOST_CPU_OVERRIDE=8 OUTPOST_HOST_MEM_GB_OVERRIDE=32 run apps_quota_defaults
   [ "$status" -eq 0 ]
   [ "$output" = "50 4 16 4 12" ]
 }
 
-@test "apps_quota_defaults: 32GB / 8-CPU desktop → 50 4 16 8 24" {
-  OUTPOST_HOST_CPU_OVERRIDE=8 OUTPOST_HOST_MEM_GB_OVERRIDE=32 run apps_quota_defaults
-  [ "$status" -eq 0 ]
-  [ "$output" = "50 4 16 8 24" ]
-}
-
-@test "apps_quota_defaults: 64GB / 16-CPU rig → 50 8 32 16 48" {
+@test "apps_quota_defaults: 64GB / 16-CPU rig → 50 8 32 10 30 (reserve caps at 24)" {
   OUTPOST_HOST_CPU_OVERRIDE=16 OUTPOST_HOST_MEM_GB_OVERRIDE=64 run apps_quota_defaults
   [ "$status" -eq 0 ]
-  [ "$output" = "50 8 32 16 48" ]
+  [ "$output" = "50 8 32 10 30" ]
 }
 
 # ---- Floor guarantees on very small hosts -----------------------------------

@@ -42,7 +42,7 @@ services:
     # networks that block QUIC's UDP/7844, set CF_TUNNEL_PROTOCOL=http2 in .env
     # so the connector registers over TCP. (Note: http2 cannot serve `cloudflared
     # access` TCP routes — expose TCP services via an HTTP reverse proxy instead.)
-    command: tunnel --no-autoupdate run --protocol ${CF_TUNNEL_PROTOCOL:-auto} --token ${CF_TUNNEL_TOKEN}
+    command: tunnel --no-autoupdate --metrics 127.0.0.1:2000 run --protocol ${CF_TUNNEL_PROTOCOL:-auto} --token ${CF_TUNNEL_TOKEN}
     networks:
       - infra
     # cloudflared needs to reach host:30080 (k3s Traefik NodePort).
@@ -50,6 +50,20 @@ services:
       - "host.docker.internal:host-gateway"
     depends_on:
       - caddy
+    # The tunnel is the ONLY public path in. `restart: unless-stopped` only
+    # fires on process crash — a silently-wedged connector (up but not
+    # forwarding) previously had NO signal at all. `tunnel ready` queries the
+    # metrics endpoint enabled above and exits non-zero until at least one
+    # edge connection is up; verify.sh's compose section surfaces the status.
+    # (Plain compose does not auto-restart on unhealthy — this is detection,
+    # not self-heal.)
+    healthcheck:
+      test: ["CMD", "cloudflared", "tunnel", "--metrics", "127.0.0.1:2000", "ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    mem_limit: 256m
 
   # =========================================================================
   # Caddy internal reverse proxy (HTTP only; TLS terminated at CF edge)
@@ -80,6 +94,15 @@ services:
       - ./Caddyfile.d:/etc/caddy/Caddyfile.d:ro
       - caddy_data:/data
       - caddy_config:/config
+    # Second hop of the public path (cloudflared → caddy). Admin API on
+    # localhost:2019 is on by default; busybox wget ships in caddy:2-alpine.
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    mem_limit: 256m
 
   # =========================================================================
   # PostgreSQL 16 + pgvector
@@ -102,6 +125,10 @@ services:
       - infra
     ports:
       - "0.0.0.0:5432:5432"
+    # Memory caps on all data services: they share ONE WSL2 VM memory pool
+    # with the whole k3s cluster, but live outside kubectl's accounting —
+    # unbounded, they can starve the pods (and vice versa) invisibly.
+    mem_limit: 4g
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
       interval: 10s
@@ -131,6 +158,8 @@ services:
       - infra
     ports:
       - "0.0.0.0:6379:6379"
+    # maxmemory 4g (above) + AOF/fork overhead headroom.
+    mem_limit: 5g
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
@@ -155,6 +184,7 @@ services:
     ports:
       - "0.0.0.0:5672:5672"
       - "0.0.0.0:15672:15672"
+    mem_limit: 1536m
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
       interval: 30s
@@ -189,6 +219,7 @@ services:
       - "0.0.0.0:9308:9308"
       - "0.0.0.0:9306:9306"
       - "0.0.0.0:9312:9312"
+    mem_limit: 2g
     # Manticore image ships wget + mysql but NOT curl. 127.0.0.1 (not
     # localhost) for the same IPv6-first-resolution reason called out
     # in the old Meilisearch healthcheck.

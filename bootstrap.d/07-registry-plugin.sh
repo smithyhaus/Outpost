@@ -9,6 +9,40 @@ log "Applying registry plugin: ${REGISTRY_PLUGIN}"
 render_apply "plugins/registry/${REGISTRY_PLUGIN}/manifest.yaml"
 ok "Registry plugin applied"
 
+# In-cluster Verdaccio — serves the private @hy/* packages every app build
+# depends on. It previously lived ONLY as a hand-run `kubectl apply` (the
+# yaml's own header said so), meaning a fresh bootstrap silently omitted it
+# and every build would fail on @hy/* resolution. Applied here unconditionally
+# (it does not depend on the registry plugin choice). NOTE: packages are
+# CONTENT, not mechanism — after a full wipe, re-seed with
+# scripts/publish-hy-to-verdaccio.sh.
+kubectl apply -f core/k8s/07-verdaccio/verdaccio.yaml
+ok "Verdaccio applied (seed @hy/* via scripts/publish-hy-to-verdaccio.sh if empty)"
+
+# Data-loss guard: local-path PVs default to reclaimPolicy=Delete, so deleting
+# either PVC (typo, rename, plugin churn) would permanently destroy every CI
+# image / cached package. Flip the two high-value, non-rebuildable volumes to
+# Retain once they bind. Best-effort with a short wait: local-path binds on
+# first consumer, which may lag this phase — the next bootstrap run picks up
+# any volume that wasn't bound yet (idempotent), and a miss is WARNed, not
+# swallowed.
+for _pvc in registry-data verdaccio-storage; do
+  _pv=""
+  for _ in {1..12}; do
+    _pv=$(kubectl -n registry get pvc "$_pvc" -o jsonpath='{.spec.volumeName}' 2>/dev/null || true)
+    [[ -n "$_pv" ]] && break
+    sleep 5
+  done
+  if [[ -n "$_pv" ]]; then
+    kubectl patch pv "$_pv" -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}' >/dev/null \
+      && ok "PV $_pv ($_pvc) reclaimPolicy=Retain" \
+      || warn "could not patch PV $_pv ($_pvc) to Retain"
+  else
+    warn "PVC $_pvc not bound yet — reclaimPolicy stays Delete until next bootstrap run"
+  fi
+done
+unset _pvc _pv
+
 # Registry GC CronJob — only meaningful for self-hosted (aliyun-acr has
 # server-side retention). Without this, every CI push leaks blobs forever
 # and the 50Gi registry PVC fills, triggering kubelet DiskPressure →
