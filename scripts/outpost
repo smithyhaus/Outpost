@@ -54,6 +54,28 @@ _confirm() {
   read -r -p "$prompt [y/N] " ans
   [[ "$ans" =~ ^[Yy]$ ]]
 }
+# Warn (never mutate .env) when the app repo being onboarded isn't covered by
+# WEBHOOK_REPO_WHITELIST: the EventListener's CEL filter silently drops its
+# pushes even though the provider-side webhook call itself returns 200 OK
+# (see scripts/register-webhooks.sh header for the full "9-day silent
+# failure" story). Empty/unset whitelist means CEL accepts every repo
+# (back-compat), so this is a no-op then — matches build_cel_whitelist().
+# Unresolvable repo_url (local checkout with no git remote) is also a no-op
+# rather than a false positive.
+_warn_if_repo_not_whitelisted() {
+  local repo_url="$1"
+  [[ -z "${WEBHOOK_REPO_WHITELIST:-}" || -z "$repo_url" ]] && return 0
+  local entry
+  IFS=',' read -ra _wl_entries <<< "$WEBHOOK_REPO_WHITELIST"
+  for entry in "${_wl_entries[@]:-}"; do
+    [[ "${entry// /}" == "$repo_url" ]] && return 0
+  done
+  echo ""
+  echo "$(_yellow WARNING): $repo_url is not in WEBHOOK_REPO_WHITELIST."
+  echo "  Pushes will be silently dropped by the EventListener's CEL filter —"
+  echo "  the provider webhook call still returns 200 OK, but no build starts."
+  echo "  Fix: add it to WEBHOOK_REPO_WHITELIST in .env, then: bash bootstrap.sh"
+}
 
 usage() {
   cat <<EOF
@@ -735,6 +757,15 @@ cmd_onboard() {
       ;;
   esac
 
+  # Resolve the repo URL for the whitelist check below: prefer the literal
+  # URL the caller passed (that's what belongs in WEBHOOK_REPO_WHITELIST);
+  # fall back to the local checkout's origin remote. Neither may resolve
+  # (local dir with no git remote) — _warn_if_repo_not_whitelisted no-ops then.
+  local onboard_repo_url="$src_arg"
+  case "$src_arg" in
+    .|/*|./*|../*) onboard_repo_url="$(git -C "$src_dir" remote get-url origin 2>/dev/null || true)" ;;
+  esac
+
   local cfg="$src_dir/outpost.app.yaml"
   if [[ ! -r "$cfg" ]]; then
     _die "no outpost.app.yaml at $src_dir (see examples/outpost.app.yaml.minimal.example)"
@@ -775,6 +806,7 @@ cmd_onboard() {
       echo "  (tier=k3s — no caddy fragment / no compose override; k3s manifests"
       echo "   scaffolded only when --manifests-dir is provided)"
     fi
+    _warn_if_repo_not_whitelisted "$onboard_repo_url"
     return 0
   fi
 
@@ -911,6 +943,8 @@ cmd_onboard() {
       echo "$(_dim hint:) commit \`.claude/skills/outpost-deploy.skill.md\` to share onboarding with the team"
     fi
   fi
+
+  _warn_if_repo_not_whitelisted "$onboard_repo_url"
 }
 
 # --- off-board ---------------------------------------------------------------

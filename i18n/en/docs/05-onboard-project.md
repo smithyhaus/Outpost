@@ -9,6 +9,45 @@ End-to-end takes about 5 minutes per project once the infrastructure is up.
 > pipeline succeed in ~2 minutes. See
 > `../../../examples/hello-world/README.md`.
 
+## Quickstart (command reference)
+
+The full walkthrough below covers every detail; this is the command
+sequence for a team that already knows the shape of it:
+
+```bash
+# 1. New repo? Scaffold one from a hello-world template (skip if you
+#    already have an app repo with a root-level Dockerfile).
+bash scripts/outpost new-app <name> --lang <go|python|java|csharp|react|vue>
+
+# 2. Push the application source to your git provider.
+
+# 3. Register the Tekton webhook via the provider API (needs an
+#    admin-scoped GIT_TOKEN — see step 5 below for the manual fallback).
+bash scripts/outpost register-webhooks --tekton-only
+
+# 4. Scaffold deployment/service/ingress/kustomization + argocd-app into
+#    a local clone of your manifest repo (or run `outpost onboard` for
+#    the one-shot version of steps 4+, see step 2 of the walkthrough).
+bash scripts/outpost manifest scaffold <app> --lang <lang> \
+  --manifests-dir <path-to-manifest-repo-clone>
+
+# 5. Create the app's Postgres database (skip if the app has no DB).
+bash scripts/outpost db create <app>
+
+# 6. Seal the secrets the manifest references.
+bash scripts/outpost seal <app> KEY=value ...
+
+# 7. Commit + push the manifest repo — ArgoCD takes over from here.
+bash scripts/outpost verify --app <app>   # confirm sync/health after ArgoCD picks it up
+```
+
+> ⚠️ **If `WEBHOOK_REPO_WHITELIST` is set in `.env`,** a brand-new repo
+> must be added to it **and** `bash bootstrap.sh` re-run before step 3's
+> webhook actually delivers builds. Until then, pushes are silently
+> dropped by the EventListener's CEL filter even though the provider
+> shows the webhook delivery as 200 OK. `outpost onboard` and `outpost
+> register-webhooks` both print a warning when they detect this.
+
 ## Prerequisites
 
 - `bash bootstrap.sh` has completed successfully
@@ -161,8 +200,36 @@ syncs but on its own ~30s–3min poll cadence.
 
 ### 5. Application repo — webhook
 
-In your application repo, configure a webhook (the exact UI label
-varies by Git provider):
+**Preferred: `bash scripts/outpost register-webhooks`.** It registers
+(or updates) the Tekton webhook on every repo in `WEBHOOK_REPO_WHITELIST`
+directly via the provider API — no clicking through provider UIs:
+
+```bash
+bash scripts/outpost register-webhooks --dry-run --tekton-only   # preview first
+bash scripts/outpost register-webhooks --tekton-only             # then apply
+```
+
+- **Needs an admin-scoped `GIT_TOKEN`** (repo-admin permission on the
+  target host — set in `.env`, or `GIT_CREDENTIALS_EXTRA` for a host
+  other than the manifest repo's). Without one it skips the repo with a
+  clear message rather than failing silently.
+- **Idempotent:** matches an existing hook by its target URL and updates
+  it in place (PUT/PATCH) instead of creating a duplicate — safe to
+  re-run any time (rotated secret, new repo added, etc).
+- **Only touches repos listed in `WEBHOOK_REPO_WHITELIST`** (`.env`,
+  comma-separated). If that variable is set and your new repo isn't in
+  it yet, add it there first, then **re-run `bash bootstrap.sh`** — the
+  EventListener's CEL filter only picks up whitelist changes on
+  bootstrap, not on `register-webhooks` alone. Until you do, pushes are
+  silently dropped by CEL even though the provider shows the webhook
+  delivery as 200 OK. `outpost onboard` and `outpost register-webhooks`
+  both print a warning when they detect a repo missing from the
+  whitelist.
+
+**Fallback: manual UI** (no admin token available, or you'd rather click
+through it). The exact label varies by provider — see
+`plugins/git-provider/<provider>/README.md` (`gitee` / `github` /
+`gitlab`) for provider-specific field names:
 
 - **URL:** `https://hooks.<root>`
 - **Secret:** `${GIT_WEBHOOK_SECRET}` from `INFRA.md` §7
@@ -172,8 +239,9 @@ varies by Git provider):
 > ⚠️ **Webhook secret hygiene:** the secret is *shared across all
 > projects on this Outpost.* If it leaks, rotate it (regenerate in
 > `.env`, re-run `bash bootstrap.sh`) AND update every onboarded repo's
-> webhook config — there's no per-repo isolation in v0.2. (v0.3 plans a
-> per-repo CEL whitelist as the cheap mitigation.)
+> webhook config — there's no per-repo isolation in v0.2. `WEBHOOK_REPO_WHITELIST`
+> (v0.3+) narrows the blast radius to listed repos, but doesn't replace
+> per-repo secrets.
 
 Test by pushing a commit. Within seconds:
 

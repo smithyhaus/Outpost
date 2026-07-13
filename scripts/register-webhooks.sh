@@ -336,6 +336,15 @@ main() {
         url="${url// /}"; [[ -z "$url" ]] && continue
         reconcile_repo "$url" "$tekton_url" "$git_secret" || rc=2
       done
+      # The provider-side webhook above is independent of the EventListener's
+      # CEL filter, which only reflects WEBHOOK_REPO_WHITELIST as of the last
+      # `bash bootstrap.sh` run. A repo just added to .env and registered here
+      # will show a 200 OK delivery yet have its pushes silently dropped by
+      # CEL until bootstrap.sh re-runs — this is the exact "9-day silent
+      # failure" gap this script exists to close on the provider side.
+      warn "  Reminder: re-run 'bash bootstrap.sh' if any repo above was just"
+      warn "  added to WEBHOOK_REPO_WHITELIST — the EventListener's CEL filter"
+      warn "  only picks up whitelist changes on the next bootstrap, not on registration."
     fi
   fi
 

@@ -7,6 +7,41 @@
 > / Go),~2 分钟跑通端到端,所有 manifest 和 Dockerfile 都已就绪。
 > 见 `../../../examples/hello-world/README.md`。
 
+## 快速路径（命令速查）
+
+下面的完整步骤覆盖所有细节；这里是已经熟悉流程的团队可以直接照抄的命令序列：
+
+```bash
+# 1. 新仓库?从 hello-world 模板 scaffold 一个(已有应用仓库+根目录 Dockerfile 则跳过)
+bash scripts/outpost new-app <name> --lang <go|python|java|csharp|react|vue>
+
+# 2. push 应用源码到 git 平台
+
+# 3. 通过 provider API 注册 Tekton webhook(需要 admin 权限的 GIT_TOKEN;
+#    没有的话见下方步骤 5 的手工兜底)
+bash scripts/outpost register-webhooks --tekton-only
+
+# 4. 把 deployment/service/ingress/kustomization + argocd-app scaffold 进
+#    manifest 仓库的本地 clone(或用 `outpost onboard` 一条龙,见步骤 2)
+bash scripts/outpost manifest scaffold <app> --lang <lang> \
+  --manifests-dir <manifest仓库本地clone路径>
+
+# 5. 创建应用的 Postgres 数据库(应用不需要数据库则跳过)
+bash scripts/outpost db create <app>
+
+# 6. seal manifest 里引用的密钥
+bash scripts/outpost seal <app> KEY=value ...
+
+# 7. commit + push manifest 仓库 — 之后交给 ArgoCD 自动接管
+bash scripts/outpost verify --app <app>   # ArgoCD 同步后确认 sync/health
+```
+
+> ⚠️ **如果 `.env` 里设了 `WEBHOOK_REPO_WHITELIST`,** 新仓库必须先加进去
+> **并且**重跑 `bash bootstrap.sh`,步骤 3 的 webhook 才会真正触发构建。
+> 否则 push 会被 EventListener 的 CEL 过滤器静默丢弃 —— 即使 provider 那边
+> 显示 webhook 投递是 200 OK。`outpost onboard` 和 `outpost register-webhooks`
+> 检测到仓库不在白名单时都会打印提醒。
+
 ## 前提
 
 - 基础设施 bootstrap 已完成
@@ -143,9 +178,34 @@ git push
 
 配上 webhook 后 ArgoCD 在 ~5s 内 sync 完;未配 webhook 时 ArgoCD 仍会在 ~30s 到 3 min 之间轮询发现变更并 sync。
 
-### 5. Gitee 应用仓库 — 配 Webhook
+### 5. 应用仓库 — 配 Webhook
 
-仓库 → 管理 → WebHooks → 添加:
+**首选:`bash scripts/outpost register-webhooks`。** 直接调 provider API
+给 `WEBHOOK_REPO_WHITELIST` 里的每个仓库注册(或更新)Tekton webhook,
+不用手工点 provider 的 UI:
+
+```bash
+bash scripts/outpost register-webhooks --dry-run --tekton-only   # 先预览
+bash scripts/outpost register-webhooks --tekton-only             # 确认无误再真正执行
+```
+
+- **需要 admin 权限的 `GIT_TOKEN`**(目标 host 的仓库管理员权限 — 写在
+  `.env`,若 host 不是 manifest 仓库所在 host 则用 `GIT_CREDENTIALS_EXTRA`)。
+  没有 token 会明确跳过该仓库并给出提示,不会静默失败。
+- **幂等:** 按 hook 的目标 URL 匹配,已存在就地更新(PUT/PATCH),不会
+  重复创建 — 任何时候重跑都安全(密钥轮换、新增仓库等场景)。
+- **只处理 `WEBHOOK_REPO_WHITELIST`(`.env`,逗号分隔)里列出的仓库。**
+  如果这个变量非空且你的新仓库还不在里面,先把它加进去,**再重跑
+  `bash bootstrap.sh`**——EventListener 的 CEL 过滤器只在 bootstrap 时
+  才会拾取白名单变更,光跑 `register-webhooks` 不够。在此之前,push 会被
+  CEL 静默丢弃,即使 provider 那边显示 webhook 投递是 200 OK。
+  `outpost onboard` 和 `outpost register-webhooks` 检测到仓库不在白名单
+  时都会打印提醒。
+
+**兜底:手工 UI**(没有 admin token,或者就是想手工点)。具体标签因
+provider 而异 — 见 `plugins/git-provider/<provider>/README.md`
+(`gitee` / `github` / `gitlab`)查看各家的字段名:
+
 - URL:`https://hooks.<root>`
 - 密码:`${GIT_WEBHOOK_SECRET}`(INFRA.md §7)
 - 触发事件:仅勾 **Push**
@@ -154,7 +214,8 @@ git push
 > ⚠️ **Webhook secret 注意:** 这个密钥 *跨 Outpost 上所有项目共享*。
 > 一旦泄露,要轮换(改 `.env`,重跑 `bash bootstrap.sh`)
 > 并更新**每个**接入仓库的 webhook 配置 — v0.2 没有 per-repo 隔离。
-> (v0.3 计划加 per-repo CEL 白名单作为最便宜的缓解。)
+> `WEBHOOK_REPO_WHITELIST`(v0.3+)把影响范围收窄到白名单内的仓库,但不
+> 能替代 per-repo secret。
 
 测试:再 push 一个 commit 到应用仓库 → 几秒后 Tekton 应当自动起 PipelineRun:
 

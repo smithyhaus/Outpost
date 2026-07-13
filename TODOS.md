@@ -319,7 +319,7 @@ platform's KANIKO_EXTRA_ARGS) preserved exactly.
 
 ---
 
-### EventListener CEL whitelist of `body.repository.url`
+### ✅ Done in v0.3 — EventListener CEL whitelist of `body.repository.url`
 
 **What:** Today a single `GIT_WEBHOOK_SECRET` covers every project on
 the Outpost. Anyone with the secret can submit ANY `body.repository.url`
@@ -332,6 +332,18 @@ manifest update fails because they don't have manifest-repo write).
 **Concrete TODO:** add a CEL filter
 `body.repository.git_http_url in ['<repo1>', '<repo2>', ...]` populated
 from `.env`. Expand list per-onboard.
+
+Implemented via `WEBHOOK_REPO_WHITELIST` → `build_cel_whitelist()`
+(`platform/lib/cel-helpers.sh`) → the EventListener filter
+`size(...) == 0 || body.repository.git_http_url in [...]` (empty list =
+back-compat accept-all). `scripts/register-webhooks.sh` /
+`outpost register-webhooks` registers the provider-side webhook for
+every whitelisted repo. Doc debt closed too: `outpost onboard` and
+`outpost register-webhooks` now warn when a repo isn't covered by the
+whitelist (silent-CEL-drop trap), and
+`i18n/{en,zh-CN}/docs/05-onboard-project.md` §5 + a new 0→1 quickstart
+table document `register-webhooks` as the primary path (manual UI
+demoted to fallback).
 
 **Milestone:** v0.3
 
