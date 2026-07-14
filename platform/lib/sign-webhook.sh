@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Webhook signing helpers — mirrored from notify-task.yaml's inline fanout
-# script. The Tekton Task can't easily source this file at runtime (cross-
-# namespace + alpine container without our codebase), so the math lives in
-# BOTH places. **Keep them in sync.**
+# Webhook signing helpers — single source of truth for the HMAC math.
+# core/k8s/05-tekton/notify-task.yaml ConfigMap-mounts this file (alongside
+# scripts/notify-fanout.sh) at /scripts, and scripts/notify-fanout.sh sources
+# it directly (`. /scripts/sign-webhook.sh`) at runtime — there is no
+# duplicate copy to keep in sync.
 # -----------------------------------------------------------------------------
 # Tested by tests/bats/sign-webhook.bats with fixtures captured from DingTalk
 # and Feishu public docs. If you change the math, the fixtures break — that's

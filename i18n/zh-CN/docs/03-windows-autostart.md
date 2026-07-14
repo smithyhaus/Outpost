@@ -21,7 +21,7 @@
    - 程序 / 脚本：`wsl.exe`
    - 添加参数：
      ```
-     -d Ubuntu -u <你的 WSL 用户> -- bash -lc "cd ~/infra && ./status.sh > /tmp/infra-autostart.log 2>&1 &"
+     -d Ubuntu -u <你的 WSL 用户> -- bash -lc "cd ~/outpost && ./status.sh > /tmp/outpost-autostart.log 2>&1 &"
      ```
      替换 `<你的 WSL 用户>` 为实际用户名（如 `zff`）
 

@@ -128,11 +128,13 @@ NOTIFICATION_PROVIDERS="${NOTIFICATION_PROVIDERS:-}"
 # Pure auto-detect from sysctl (macOS) or /proc/meminfo + nproc (Linux);
 # values can be pinned by setting OUTPOST_APPS_* in .env BEFORE bootstrap.
 # Formula in platform/lib/host-capacity.sh; mathematically:
-#   8GB / 4-CPU laptop   → quota.limits.cpu=8,  limits.memory=6Gi
-#   32GB / 8-CPU desktop → quota.limits.cpu=16, limits.memory=24Gi
-#   64GB / 16-CPU rig    → quota.limits.cpu=32, limits.memory=48Gi
+#   8GB / 4-CPU laptop   → quota.limits.cpu=8,  limits.memory=3Gi
+#   32GB / 8-CPU desktop → quota.limits.cpu=16, limits.memory=12Gi
+#   64GB / 16-CPU rig    → quota.limits.cpu=32, limits.memory=30Gi
 # CPU overcommits cleanly in K8s → limits.cpu is intentionally 2× host vCPU.
-# Memory does NOT overcommit safely → limits.memory stays at ~3/4 host.
+# Memory does NOT overcommit safely → limits.memory is sized from what's LEFT
+# after reserving half the host (capped at 24Gi) for buildkitd, not from the
+# raw host total — see platform/lib/host-capacity.sh for the full formula.
 # apps_quota_defaults emits five space-separated integers on a single line.
 # read -r -a does word-splitting without shellcheck's SC2207 warning that
 # bare `array=( $(...) )` would trip.

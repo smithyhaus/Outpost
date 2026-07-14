@@ -141,12 +141,13 @@ skip ahead.
 ### Phase E — Bootstrap (~5 min) — **same on all platforms**
 
 - [ ] **E1** `bash bootstrap.sh` (auto-detects OS and routes to `platform/<os>.sh`)
-- [ ] **E2** All 9 phases complete with:
+- [ ] **E2** All 10 phases complete with:
   ```
   ═══════════════════════════════════════════════════════════════
-    Outpost bootstrap complete (full mode)
+    Outpost bootstrap complete (full mode) — verify: ALL PASS
   ═══════════════════════════════════════════════════════════════
   ```
+  (the suffix reflects `verify.sh`'s verdict — `PASS with WARNINGS` is also a success)
 - [ ] **E3 (WSL2 only)** If bootstrap printed a `wsl --shutdown` reminder (first-time systemd enable), do that from PowerShell. After reopening WSL, systemd brings docker / k3s / Compose back automatically
 
 ### Phase F — Verify (~2 min) — **same on all platforms**
@@ -212,7 +213,7 @@ Onboarding your own application: see `05-onboard-project.md`. Sketch:
 
 1. Create an application code repo with a `Dockerfile` at the root
 2. In the manifest repo, add `apps/<app>/` (Deployment + Service + Ingress) and `argocd-apps/<app>.yaml` (ArgoCD Application)
-3. Configure a webhook on the application repo: URL `https://hooks.<root>`, secret `${GIT_WEBHOOK_SECRET}` from `INFRA.md`
+3. Register the Tekton webhook: `bash scripts/outpost register-webhooks --tekton-only` (falls back to a manual webhook — URL `https://hooks.<root>`, secret `${GIT_WEBHOOK_SECRET}` from `INFRA.md` — if you'd rather configure it by hand). ⚠️ If `WEBHOOK_REPO_WHITELIST` is set in `.env`, add the new repo to it and re-run `bash bootstrap.sh` first, or pushes are silently dropped by the EventListener's CEL filter
 4. Push code → Tekton builds → ArgoCD deploys → `https://<app>-apps.<root>` is live
 
 Application secrets (DB connection strings, API tokens) get sealed with
@@ -257,7 +258,8 @@ GENERIC_WEBHOOK_BEARER=                       # optional Bearer token
 
 # Tests + rollback (defaults shown — usually no override needed)
 TEST_RUNNER=testkube                         # or catalog-tasks
-TESTKUBE_MODE=oss                            # bootstrap auto-installs the agent
+TESTKUBE_MODE=skip                           # default — run-tests evals outpost.test.yaml inline;
+                                              # set to oss to have bootstrap install the Testkube agent
 ROLLOUT_PLUGIN=argo-rollouts
 ROLLOUTS_DASHBOARD_HOST=                     # default rollouts.<root>
 ```
@@ -349,7 +351,7 @@ kubectl get pods -n argo-rollouts
 kubectl get cm,secret -n argocd | grep notifications
 ```
 
-Test the failure path: break `examples/hello-world-go/main.go` (e.g. add a `os.Exit(1)` at process start), `git push` → Tekton fails at `run-tests` → DingTalk/Feishu shows the error → manifest repo unchanged → cluster app unaffected.
+Test the failure path: break `examples/hello-world/go/main.go` (e.g. add a `os.Exit(1)` at process start), `git push` → Tekton fails at `run-tests` → DingTalk/Feishu shows the error → manifest repo unchanged → cluster app unaffected.
 
 ---
 

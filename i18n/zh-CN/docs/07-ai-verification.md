@@ -1,6 +1,6 @@
 # 07 — AI 验证指南
 
-> 这份文档写给 AI（大模型）看。AI 进入 ~/infra 目录时读 `SKILL.md` 了解项目，
+> 这份文档写给 AI（大模型）看。AI 进入 ~/outpost 目录时读 `SKILL.md` 了解项目，
 > 读本文档掌握"如何主动验证基础设施健康"。
 >
 > 所有命令在 WSL2 Ubuntu 内执行。
@@ -58,7 +58,7 @@ bash verify.sh --quiet   # 仅汇总
 ### 1.2 Compose 服务
 
 ```bash
-docker compose -f compose/docker-compose.yml ps
+docker compose -f core/compose/docker-compose.yml ps
 ```
 **预期**：6 个容器全部 `running`，healthy 状态：
 - cloudflared
@@ -96,7 +96,7 @@ docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
 ```
 **预期**：含 `vector`、`uuid-ossp`、`pg_trgm`。
 
-**失败时**：扩展未装 → 直接 `CREATE EXTENSION IF NOT EXISTS vector;`。`postgres-init/01-pgvector.sql` 仅在 volume 全新时执行。
+**失败时**：扩展未装 → 直接 `CREATE EXTENSION IF NOT EXISTS vector;`。`core/compose/postgres-init/01-pgvector.sql` 仅在 volume 全新时执行。
 
 ### 1.5 k3s 节点
 
@@ -148,7 +148,7 @@ kubectl run -it --rm test-bridge --image=alpine --restart=Never -- \
 
 **失败时**：
 - DNS 解析失败 → coredns 异常：`kubectl logs -n kube-system -l k8s-app=kube-dns`
-- 解析到但连不上 → mirrored networking 没生效或 Compose 端口未绑 0.0.0.0；检查 `compose/docker-compose.yml` 的 `ports` 段
+- 解析到但连不上 → mirrored networking 没生效或 Compose 端口未绑 0.0.0.0；检查 `core/compose/docker-compose.yml` 的 `ports` 段
 
 ### 1.8 ArgoCD Application
 
@@ -244,14 +244,14 @@ verify.sh 失败？
 ├─ 是 →
 │   ├─ 失败项在 §1（工具）？ → 装/起对应工具
 │   ├─ 失败项在 §2（Compose）？
-│   │   ├─ 容器 missing → docker compose -f compose/docker-compose.yml up -d
+│   │   ├─ 容器 missing → docker compose -f core/compose/docker-compose.yml up -d
 │   │   ├─ 容器 unhealthy → docker logs <name> 找根因
 │   │   └─ cloudflared 未连通 → 见 §1.3
 │   ├─ 失败项在 §3（k3s）？
 │   │   ├─ 节点 NotReady → 系统级问题（cgroup/iptables/内存）
 │   │   └─ pod 异常 → kubectl describe + logs
 │   ├─ 失败项在 §4（桥接）？
-│   │   ├─ Service 缺失 → kubectl apply -f k8s/06-bridges/
+│   │   ├─ Service 缺失 → kubectl apply -f core/k8s/06-bridges/
 │   │   └─ 连通失败 → mirrored networking 或端口绑定错
 │   ├─ 失败项在 §5（ArgoCD）？
 │   │   ├─ ComparisonError → manifest 仓库内容或访问
@@ -273,7 +273,7 @@ verify.sh 失败？
 AI 验证基础设施的标准模式：
 
 ```
-1. cd ~/infra
+1. cd ~/outpost
 2. cat SKILL.md  （了解项目）
 3. bash verify.sh --json
 4. 解析 JSON：
@@ -322,7 +322,7 @@ verify.sh 当前**不检查**以下项（避免误报）：
 ## 6. 给 AI 的提示词模板（用户可直接复制）
 
 ```
-请进入 ~/infra 目录，读 SKILL.md，然后执行 bash verify.sh --json，
+请进入 ~/outpost 目录，读 SKILL.md，然后执行 bash verify.sh --json，
 解析结果后给我一份基础设施健康报告。
 对所有 FAIL/WARN 项，按 docs/07-ai-verification.md §1 对应章节诊断，
 给出根因与修复建议。不要直接修改任何文件，只输出报告。

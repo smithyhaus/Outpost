@@ -109,7 +109,15 @@ that resolves itself in the next step.
 
 ### 3. Configure the webhook on the application repo
 
-In Gitee / GitHub / GitLab, on the `hello-go` repo:
+**Preferred:** `bash scripts/outpost register-webhooks --dry-run` (preview),
+then `bash scripts/outpost register-webhooks` to register the hook on the
+`hello-go` repo directly via the provider API. See
+`i18n/en/docs/05-onboard-project.md` step 5 for prerequisites, including the
+`WEBHOOK_REPO_WHITELIST` caveat — until `hello-go` is in that list and
+`bash bootstrap.sh` has re-run, pushes are silently dropped by CEL even
+though the provider shows the webhook delivery as 200 OK.
+
+**Fallback: manual UI.** In Gitee / GitHub / GitLab, on the `hello-go` repo:
 
 - URL: `https://hooks.<your-root-domain>`
 - Secret: `GIT_WEBHOOK_SECRET` from `INFRA.md`

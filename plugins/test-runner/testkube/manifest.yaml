@@ -1,9 +1,10 @@
 # =============================================================================
 # Plugin: test-runner / testkube
 # -----------------------------------------------------------------------------
-# Marker + post-install configuration. The Testkube agent itself is installed
-# by bootstrap.sh via `helm install` (helm is auto-downloaded if absent —
-# matching the kubeseal pattern). This file:
+# Marker + post-install configuration. Only when TESTKUBE_MODE=oss is the
+# Testkube agent itself installed by bootstrap.sh via `helm install` (helm
+# is auto-downloaded if absent — matching the kubeseal pattern); the default
+# TESTKUBE_MODE=skip installs no agent at all. This file:
 #   - Records which test-runner is active (used by the run-tests Task).
 #   - Sets a tight ResourceQuota on the testkube namespace so a runaway
 #     TestWorkflow can't OOM the cluster.

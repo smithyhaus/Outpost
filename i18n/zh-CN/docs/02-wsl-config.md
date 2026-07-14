@@ -56,7 +56,6 @@ sudo tee /etc/docker/daemon.json <<'EOF'
 {
   "registry-mirrors": [
     "https://docker.m.daocloud.io",
-    "https://dockerproxy.com",
     "https://docker.nju.edu.cn"
   ],
   "log-driver": "json-file",

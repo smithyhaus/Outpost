@@ -28,10 +28,11 @@ API="https://api.github.com/repos/tektoncd/catalog/commits"
 # (gcr.io) and WRITER_IMAGE (docker.io) are unreachable from the cluster —
 # Tekton's controller does an entrypoint lookup at pod-creation time and fails
 # `PodCreationFailed: Get https://gcr.io/v2/: i/o timeout`. Rewrite them to a
-# pull-through mirror. git-clone's gitInitImage is also on ghcr.io, which has
-# since joined the CN-unreliable list (was previously treated as reachable —
-# see the broader CN-egress hardening pass this mirrors), so it is now
-# rewritten too.
+# pull-through mirror. git-clone's gitInitImage is also on ghcr.io, which is
+# CN-unreliable too, but it is deliberately NOT rewritten here — daocloud
+# allowlists per-repo and 403s tektoncd-catalog specifically (verified
+# 2026-07-13, see the sed step below for the full story). Only gcr.io and
+# docker.io are actually rewritten by this script.
 # Set TEKTON_IMAGE_MIRROR= (empty) to keep stock upstream refs.
 MIRROR_PREFIX="${TEKTON_IMAGE_MIRROR-m.daocloud.io}"
 

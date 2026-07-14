@@ -185,7 +185,7 @@ spec:
           value: source
 
     # -------------------------------------------------------------------------
-    # 4. Kaniko 构建并推到 registry（仅在 Gate A 通过后）
+    # 4. 构建并推到 registry（仅在 Gate A 通过后）
     # -------------------------------------------------------------------------
     - name: build-and-push
       # Multi-stage Dockerfiles (Java/Maven, .NET SDK) on slow networks
@@ -197,10 +197,11 @@ spec:
         - run-tests
       taskRef:
         # Build engine is operator-selectable: ${BUILD_ENGINE_TASK} (default
-        # kaniko) is envsubst'd at bootstrap render time. Both the `kaniko` and
-        # `buildkit` Tasks are applied every bootstrap and share the same
-        # IMAGE/DOCKERFILE/CONTEXT/EXTRA_ARGS param contract, so flipping
-        # BUILD_ENGINE_TASK cuts over (or rolls back) with no other change here.
+        # buildkit; kaniko is the one-word rollback) is envsubst'd at bootstrap
+        # render time. Both the `kaniko` and `buildkit` Tasks are applied every
+        # bootstrap and share the same IMAGE/DOCKERFILE/CONTEXT/EXTRA_ARGS
+        # param contract, so flipping BUILD_ENGINE_TASK cuts over (or rolls
+        # back) with no other change here.
         name: ${BUILD_ENGINE_TASK}
         kind: Task
       workspaces:

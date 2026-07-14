@@ -3,14 +3,16 @@
 ## 通用诊断
 
 ```bash
-~/infra/status.sh
+./status.sh           # 快速快照
+./verify.sh           # 详细检查
+./verify.sh --json    # 机器可解析,供 AI agent 使用
 ```
 
 ## Compose 层
 
 ### 容器起不来
 ```bash
-cd ~/infra/compose
+cd core/compose
 docker compose ps
 docker compose logs <service> --tail 100
 ```
@@ -198,7 +200,7 @@ dig argocd.<root>
 
 ### Webhook 返回 522 / 524
 - WSL 没起 / docker 没起
-- 任务计划自启失败 → 看 `/tmp/infra-autostart.log`
+- 任务计划自启失败 → 看 `/tmp/outpost-autostart.log`
 
 ## 全部重来
 

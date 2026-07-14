@@ -10,8 +10,12 @@ description: |
    - Gate B (Argo Rollouts AnalysisTemplate Job → testkube run testworkflow)
 
   bootstrap.sh auto-downloads helm if absent and runs:
-    helm install testkube oci://registry-1.docker.io/kubeshop/testkube \
-      --namespace testkube --create-namespace
+    helm repo add kubeshop https://kubeshop.github.io/helm-charts
+    helm repo update kubeshop
+    helm upgrade --install testkube kubeshop/testkube \
+      --namespace testkube --create-namespace \
+      --wait --timeout 300s \
+      --set global.cloud.uiBaseUrl=""
 required_env: []
 optional_env:
   - TESTKUBE_MODE          # skip (default) | oss | cloud

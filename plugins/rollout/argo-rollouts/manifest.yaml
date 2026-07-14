@@ -2,8 +2,12 @@
 # Plugin: rollout / argo-rollouts
 # -----------------------------------------------------------------------------
 # This plugin's manifest.yaml is a marker. The actual Rollouts controller is
-# applied by bootstrap.sh from the upstream stable manifest:
-#   https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+# applied by bootstrap.d/09-test-gate.sh from the vendored, version-pinned
+# manifests (not curl'd from upstream's floating `latest` path):
+#   core/k8s/vendor/argo-rollouts-install-v1.9.0.yaml
+#   core/k8s/vendor/argo-rollouts-dashboard-install-v1.9.0.yaml
+# See each vendor file's header for the upgrade process (fetch a newer
+# release, save under a new `-vX.Y.Z.yaml` name, update the reference above).
 #
 # This file:
 #   - Records which rollout strategy is active.

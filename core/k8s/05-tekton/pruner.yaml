@@ -8,7 +8,7 @@
 # is `step-write-url terminated, Reason: Evicted` on a fresh build pod, with
 # no application-level cause.
 #
-# This pruner sweeps once per hour by default, deleting PipelineRuns whose
+# This pruner sweeps every 15 minutes by default, deleting PipelineRuns whose
 # completion time is older than ${OUTPOST_TEKTON_RETENTION_HOURS} hours. PR
 # deletion cascades to its TaskRuns + their pods via owner references, so
 # one sweep frees all the held ephemeral storage. The Tekton Dashboard still
@@ -35,8 +35,8 @@
 #
 # Tunables (.env):
 #   OUTPOST_TEKTON_RETENTION_HOURS   default 24 — keep last day for debugging
-#   OUTPOST_TEKTON_PRUNE_SCHEDULE    default "0 * * * *" — hourly
-#   OUTPOST_TEKTON_PRUNER_IMAGE      default bitnami/kubectl:1.31
+#   OUTPOST_TEKTON_PRUNE_SCHEDULE    default "*/15 * * * *" — every 15 minutes
+#   OUTPOST_TEKTON_PRUNER_IMAGE      default alpine/k8s:1.31.0
 # =============================================================================
 apiVersion: v1
 kind: ServiceAccount

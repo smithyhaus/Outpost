@@ -96,7 +96,7 @@ spec:
           env:
             - name: LOG_LEVEL
               value: "info"
-          # The apps namespace ships with a LimitRange (default 1cpu / 512Mi
+          # The apps namespace ships with a LimitRange (default 500m / 512Mi
           # per container, max 4cpu / 8Gi). Declare your own only if you need
           # something different.
           resources:
@@ -324,8 +324,13 @@ kubectl logs -n tekton-pipelines -l tekton.dev/pipelineRun=<run> \
 ## Multiple Git providers
 
 If different repos live on different providers, configure each repo's
-webhook with the URL above. The active `GIT_PROVIDER_PLUGIN` decides
-which interceptor handles incoming hooks. To support more than one
-simultaneously, add a second `GIT_PROVIDER_PLUGIN` to the EventListener
-manually (see `plugins/git-provider/<name>/manifest.yaml` for the
+webhook with the URL above. `GIT_PROVIDER_PLUGIN` accepts a
+comma-separated list (e.g. `GIT_PROVIDER_PLUGIN=gitee,github,gitlab` in
+`.env`), so a single `el-build-listener` can ingest webhooks from every
+provider you list at once — no manual EventListener editing needed. Each
+provider's trigger short-circuits on its own header-type filter
+(`X-Gitee-Token` / `X-Hub-Signature-256` / `X-Gitlab-Event`), so an
+inbound push matches exactly one trigger and the rest no-op. Re-run
+`bash bootstrap.sh` after changing the list to re-assemble the
+EventListener (see `plugins/git-provider/<name>/manifest.yaml` for the
 trigger fragment shape).

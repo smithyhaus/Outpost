@@ -15,15 +15,24 @@ executor image (`gcr.io/kaniko-project/executor:v1.5.1`) is multi-arch
 `docker manifest inspect`), so it still works on Apple Silicon k3d for
 v0.1, but it won't get security/CI updates from upstream.
 
+**Update:** BuildKit has since been adopted as the **default** build engine
+(`BUILD_ENGINE_TASK` defaults to `buildkit` — `bootstrap.d/02-config.sh`,
+`core/k8s/05-tekton/task-buildkit.yaml`), which addresses the first bullet
+below for the common path. Both the `buildkit` and `kaniko` Tasks are still
+applied every bootstrap so operators can flip `BUILD_ENGINE_TASK=kaniko` as
+a one-word rollback — that fallback path is what remains open here.
+
 **Concrete TODO:** either
-- Switch to a maintained build Task (Buildah, BuildKit, `image-build` from
+- ~~Switch to a maintained build Task (Buildah, BuildKit, `image-build` from
   Tekton's newer catalogs); requires deciding whether to allow privileged
-  containers in the cluster, or
+  containers in the cluster~~ — done via the BuildKit default above, or
 - Bake our own minimal Task wrapping a recent `gcr.io/kaniko-project/executor`
-  image (v1.20+ pulls security fixes).
+  image (v1.20+ pulls security fixes), so the kaniko rollback path also
+  isn't stuck on a deprecated upstream Task.
 
 **Today's user-visible workaround:** none required — the deprecated
-Task functions correctly. Just be aware upstream may eventually delete it.
+Task functions correctly as the rollback path. Just be aware upstream may
+eventually delete it.
 
 **Depends on:** none.
 
@@ -488,54 +497,21 @@ Adoption-gated; phase 1 covers near-term need.
 
 ---
 
-## `outpost doctor` — ex-ante diagnostic
+## ✅ Done in v0.4 — `outpost doctor` ex-ante diagnostic
 
-**What:** A new subcommand `outpost doctor` (and `bash scripts/outpost doctor`)
-that runs *before* `bootstrap.sh` to surface the failure modes that today
-only show up halfway through phase 4–8 — when the error is a confusing
-Docker / kubectl message rather than a clear "your port 5432 is taken by
-the Homebrew postgres service."
-
-**Why:** `verify.sh` is ex-post (it tells you what's broken after
-bootstrap). `doctor` is ex-ante (it tells you what *will* break before
-you start). The two cheapest failure modes today have no good error:
-host port conflicts (5432/6379/5672/9308/15672) and Docker daemon down.
-On WSL2 a third one — host.docker.internal DNS — only surfaces when
-bridge ExternalName Services fail to resolve in phase 8.
-
-**Concrete checks (v0.3 minimum):**
-- Host ports 5432 / 6379 / 5672 / 15672 / 9308 free (Compose binds them
-  via `ports:`). Use `lsof -iTCP:<port> -sTCP:LISTEN` (Linux/macOS).
-- Docker daemon reachable + Compose v2 plugin present.
-- `host.docker.internal` resolvable from inside a throwaway container
-  (full-mode only). On Linux/WSL2 this requires the `--add-host` shim
-  Compose already applies; verify it actually works.
-- Disk free in `/var/lib/docker` (PG/Manticore eat space fast).
-- For full mode: `ROOT_DOMAIN` resolves via DNS, `CF_TUNNEL_TOKEN`
-  format looks right (base64 length).
-- macOS / arm64 specifics: kaniko `executor:v1.5.1` multi-arch
-  available (linked from existing kaniko TODO).
-
-**Pros:**
-- Cuts first-run failure rate without code changes to bootstrap itself.
-- Single binary for "Outpost won't start, what's wrong?" — currently
-  triages live in `docs/06-troubleshooting.md` only.
-- Output is JSON-friendly (same `--json` mode as `verify.sh`) so AI
-  agents can act on it.
-
-**Cons:**
-- Adds a 3rd health-check entry point next to `verify.sh` + `status.sh`.
-  Mitigate: keep `doctor` tightly scoped to *pre-bootstrap* checks;
-  `verify.sh` stays the post-bootstrap canonical.
-
-**Context:** today users hit a port conflict, get a Compose error like
-`Bind for 0.0.0.0:5432 failed: port is already allocated`, then have
-to grep `docs/06-troubleshooting.md`. `doctor` short-circuits that.
-
-**Depends on:** none. Slots into `outpost` CLI router + new
-`scripts/outpost-doctor.sh` (or inline in the router).
-
-**Milestone:** v0.3
+Shipped as v0.4 Phase 2 (`fe1505e`, see
+`docs/prp/reports/outpost-v0.4-phase2-doctor-preflight-report.md`).
+`bash scripts/outpost doctor` (and the standalone `doctor.sh`) runs
+*before* `bootstrap.sh` and mirrors `verify.sh`'s structure — human +
+`--json` output, exit `0`/`1`/`2`, fully read-only/idempotent, plus a
+`fix_hint` per check. Covers the failure modes that used to only
+surface mid-bootstrap: host port collisions (5432/6379/5672/9308/15672)
+with the actual `port_holder` process, Docker daemon down,
+`host.docker.internal` DNS resolution (full-mode/WSL2), disk free in
+`/var/lib/docker`, and for full mode `ROOT_DOMAIN` DNS resolution +
+`CF_TUNNEL_TOKEN` format. Pure check logic lives in
+`platform/lib/doctor-checks.sh` (unit-tested); `doctor.sh` is the
+orchestrator. 166/166 bats tests passing across the full suite.
 
 ---
 
@@ -603,39 +579,50 @@ or the in-cluster Docker Registry.
 but actually only refreshed the data layer. The k8s layer is silently
 unchanged. No warning, no exit code, no log line.
 
+**Update (post-v0.3):** the manifests are already vendored + version-pinned
+in-repo (`core/k8s/vendor/argocd-install-v3.4.5.yaml`,
+`tekton-pipeline-v1.14.0.yaml`, `sealed-secrets-controller-v0.38.4.yaml`,
+`argo-rollouts-install-v1.9.0.yaml`, etc. — see
+`bootstrap.d/06-sealed-secrets.sh` and `bootstrap.d/08-argocd-tekton.sh`).
+There is no more floating upstream URL to "controlled-bump" — re-applying
+the same local vendor file today is a true no-op. The remaining gap is
+purely (a) wiring `upgrade.sh` to re-run those same `kubectl apply
+--server-side` steps + the helm upgrades, and (b) a documented process for
+bumping the vendor/ pins themselves (fetch new upstream release → save to
+`core/k8s/vendor/<name>-vX.Y.Z.yaml` → update the bootstrap.d references →
+PR).
+
 **Concrete TODO:**
 - **`upgrade.sh` becomes mode-aware** (same pattern as `bootstrap.sh`):
   in `local` mode keep the current Compose-only behavior; in `full`
   mode also:
-  - `kubectl apply --server-side -f` re-apply the pinned ArgoCD /
-    Tekton / Sealed-Secrets manifests (the same URLs bootstrap.d/06
-    and 08 use). Image tags are already pinned via the upstream
-    `stable/install.yaml`-style URLs, so re-apply is a controlled bump
-    to whatever the pinned URL resolves to.
-  - `helm upgrade testkube` / `helm upgrade argo-rollouts` for the
-    helm-installed pieces (matches what 09-test-gate.sh installs).
+  - `kubectl apply --server-side -f` re-apply the already-vendored ArgoCD /
+    Tekton / Sealed-Secrets / Argo Rollouts manifests (the same
+    `core/k8s/vendor/*.yaml` files `bootstrap.d/06` and `08` apply).
+  - `helm upgrade testkube` for the helm-installed piece (matches what
+    `09-test-gate.sh` installs when `TESTKUBE_MODE=oss`).
   - Print a final diff/summary: "ArgoCD: X.Y.Z → A.B.C" etc.
-- **Or:** explicitly pin every upstream URL to a version (e.g.
-  `argo-cd/v2.13.0/manifests/install.yaml`) and have `upgrade.sh`
-  bump those pins in-repo, commit, then re-apply. Less magic, more
-  auditable.
+- **Separately:** define the vendor-pin bump procedure itself (which today
+  is manual and undocumented) — a short script or checklist for "fetch
+  release N+1, save under `core/k8s/vendor/`, update the `bootstrap.d`
+  reference, PR."
 
 **Pros:** closes a real security-relevant silent failure. Aligns with
 the bootstrap.d/ refactor (per-phase scripts are easy to call from
 upgrade.sh too).
 
 **Cons:** k8s component upgrades occasionally need pre-/post-migration
-hooks (ArgoCD has had a few of these). Mitigate: pin specific known-
-good versions, document the upgrade matrix in `docs/`. Don't chase
-`latest`.
+hooks (ArgoCD has had a few of these). Mitigate: document the upgrade
+matrix in `docs/`; bump vendor pins deliberately via PR, not automatically.
 
 **Context:** every existing user has been promised "re-running
 bootstrap.sh is idempotent" (README). That covers re-install but
 doesn't address version drift. `upgrade.sh` is the right surface to
 fix.
 
-**Depends on:** decision on pin strategy (pin-in-repo vs upstream
-floating). Recommend: pin in repo, bump via PR.
+**Depends on:** none — the pin strategy (pin-in-repo via `core/k8s/vendor/`)
+is already decided and implemented; what's missing is wiring `upgrade.sh`
+to it and a bump procedure for the pins.
 
 **Milestone:** v0.3
 

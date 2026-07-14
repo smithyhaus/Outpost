@@ -3,8 +3,8 @@
 # -----------------------------------------------------------------------------
 # A thin, NON-privileged buildctl client that drives the long-lived privileged
 # buildkitd daemon (core/k8s/08-buildkit) over gRPC. Selected by the pipeline's
-# ${BUILD_ENGINE_TASK} (default kaniko); flip to `buildkit` to cut over, flip
-# back to roll back — no other pipeline change.
+# ${BUILD_ENGINE_TASK} (default buildkit); set BUILD_ENGINE_TASK=kaniko to roll
+# back — no other pipeline change.
 #
 # WHY buildkit over kaniko: the daemon's persistent cache PVC keeps the
 # `RUN --mount=type=cache` pnpm store across builds, so an app whose Dockerfile

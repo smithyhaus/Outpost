@@ -31,8 +31,13 @@ buildArgs: []
 
 # Optional: kaniko flags appended to the platform defaults (after
 # --cache=true + --cache-repo=... + --insecure for self-hosted registry).
+# NOTE: this list is only fully honored when BUILD_ENGINE_TASK=kaniko. Under
+# the platform's default engine (buildkit), only `--build-arg=K=V` entries
+# are meaningful — every other kaniko flag (including the example below) is
+# a kaniko-only/daemon concern and is silently ignored by buildkit. See
+# core/k8s/05-tekton/task-buildkit.yaml for the full list of ignored flags.
 extraArgs: []
-# Example for a large/slow build:
+# Example for a large/slow build (kaniko engine only):
 #   extraArgs:
 #     - --single-snapshot
 #     - --use-new-run

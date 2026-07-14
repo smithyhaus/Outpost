@@ -75,7 +75,7 @@ Save each row.
 The Outpost host hasn't run cloudflared yet, so we only verify what we
 can see in the Cloudflare Dashboard at this point:
 
-- [ ] The Tunnel detail page shows all 9 Public Hostnames you just added
+- [ ] The Tunnel detail page shows all 11 Public Hostnames you just added
 - [ ] Tunnel status shows *Inactive* or *Down* — **expected**, because
       cloudflared isn't running locally yet
 - [ ] DNS check: `dig argocd.<root>` resolves to a Cloudflare IP range

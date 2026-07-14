@@ -150,7 +150,7 @@ ok "Git-provider plugin(s) applied: ${GIT_PROVIDER_PLUGIN}"
 kubectl apply -n tekton-pipelines -f core/k8s/05-tekton/catalog/git-clone-0.10.yaml
 kubectl apply -n tekton-pipelines -f core/k8s/05-tekton/catalog/kaniko-0.7.yaml
 
-# buildkit build engine (opt-in via BUILD_ENGINE_TASK=buildkit; default kaniko).
+# buildkit build engine (default via BUILD_ENGINE_TASK=buildkit; set to kaniko to roll back).
 # A long-lived privileged buildkitd daemon in its own `enforce=privileged` ns
 # (tekton-pipelines is `baseline`, which forbids privileged) owns a persistent
 # cache PVC, so RUN --mount=type=cache pnpm stores survive builds (warm ~2-3min

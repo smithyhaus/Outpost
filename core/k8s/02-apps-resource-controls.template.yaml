@@ -17,11 +17,16 @@
 #
 # **Dynamic per host:** values below are env-substituted by render_apply
 # at bootstrap time. bootstrap.d/02-config.sh auto-detects host capacity
-# via sysctl (macOS) / nproc + /proc/meminfo (Linux) and computes:
+# via sysctl (macOS) / nproc + /proc/meminfo (Linux) — see
+# platform/lib/host-capacity.sh's apps_quota_defaults() — and computes:
 #   requests.cpu     = max(1,   host_cpu / 2)
 #   limits.cpu       = host_cpu * 2                  (overcommit OK)
-#   requests.memory  = max(1Gi, host_mem_gb / 4)Gi
-#   limits.memory    = max(3Gi, host_mem_gb * 3 / 4)Gi
+#   reserve          = min(host_mem_gb / 2, 24)Gi     (build-engine share;
+#                      keep in sync with core/k8s/08-buildkit/deployment.yaml's
+#                      24Gi limit)
+#   effective        = host_mem_gb - reserve
+#   requests.memory  = max(1Gi, effective / 4)Gi
+#   limits.memory    = max(3Gi, effective * 3 / 4)Gi
 # Override any of these by setting the corresponding OUTPOST_APPS_* env
 # in .env before re-running bootstrap.sh.
 # =============================================================================

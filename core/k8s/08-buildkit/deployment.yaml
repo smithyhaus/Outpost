@@ -151,13 +151,15 @@ spec:
               cpu: "2"
               memory: 4Gi
             limits:
-              # Node has 24 CPU / 53GB. Sized for max-parallelism=6
-              # (buildkitd.toml): ~6 concurrent tsc/pnpm build steps can each
-              # spike a few GB, so 12Gi OOM-killed the daemon under a fleet
-              # re-push (the SIGKILL then left a stale buildkitd.lock that
-              # CrashLooped every replacement pod). 24Gi leaves ample headroom
-              # for the app workloads on a 53GB node; raise in lockstep with
-              # max-parallelism, never one without the other.
+              # Node has 24 CPU / 53GB. Sized to match buildkitd.toml's
+              # worker.oci.max-parallelism (currently 4): ~4 concurrent
+              # tsc/pnpm build steps can each spike a few GB, and an earlier
+              # run at max-parallelism=6 / 12Gi OOM-killed the daemon under a
+              # fleet re-push (the SIGKILL then left a stale buildkitd.lock
+              # that CrashLooped every replacement pod). 24Gi leaves ample
+              # headroom for the app workloads on a 53GB node; raise in
+              # lockstep with max-parallelism, never one without the other —
+              # keep this value and buildkitd.toml's in sync.
               cpu: "16"
               memory: 24Gi
           volumeMounts:
