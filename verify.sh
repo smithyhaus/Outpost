@@ -161,6 +161,7 @@ if kubectl_ok; then
                 "tekton-pipelines:tekton-triggers-controller" \
                 "tekton-pipelines:tekton-dashboard" \
                 "registry:docker-registry" \
+                "registry:verdaccio" \
                 "buildkit:buildkitd" \
                 "argo-rollouts:argo-rollouts" \
                 "argo-rollouts:argo-rollouts-dashboard" \

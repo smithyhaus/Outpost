@@ -1,11 +1,21 @@
 # ============================================================================
+# DEPRECATED — NOT APPLIED BY ANY BOOTSTRAP SCRIPT. Do not wire this up.
+# ----------------------------------------------------------------------------
+# Superseded by plugins/git-provider/gitee/manifest.yaml, which bootstrap.d/
+# 08-argocd-tekton.sh actually applies (render_apply
+# "plugins/git-provider/${_p}/manifest.yaml"). This file is kept only for
+# historical reference and is out of sync with the real binding — most
+# notably short-revision below used the full SHA ($(body.after)) instead of
+# the 7-char short SHA ($(extensions.short_sha)) that the image-tag pipeline
+# actually needs. Do not resurrect this file; edit the plugin manifest
+# instead.
+# ----------------------------------------------------------------------------
 # TriggerBinding — 从 Gitee Webhook payload 提取字段
 # Gitee Push Hook payload 关键字段（与 GitHub 不同）：
-#   - body.ref                = "refs/heads/main"
-#   - body.after              = commit SHA
-#   - body.repository.name    = 仓库名
-#   - body.repository.git_url = git@gitee.com:user/repo.git
-#   - body.repository.url     = https://gitee.com/user/repo
+#   - body.ref                     = "refs/heads/main"
+#   - body.after                   = commit SHA
+#   - body.repository.name         = 仓库名
+#   - body.repository.git_http_url = https://gitee.com/user/repo.git
 # Header:
 #   - X-Git-Oschina-Event: Push Hook
 #   - X-Gitee-Token: <secret>  （由 Gitee webhook 配置中的 Secret 字段填）
@@ -26,6 +36,6 @@ spec:
     - name: revision
       value: $(body.after)
     - name: short-revision
-      value: $(body.after)
+      value: $(extensions.short_sha)
     - name: pusher
       value: $(body.user_name)
