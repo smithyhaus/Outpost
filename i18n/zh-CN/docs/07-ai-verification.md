@@ -183,12 +183,21 @@ bash scripts/outpost status                  # 5. sync 新鲜且 ok 吗?
 
 ### `data.<service>`
 ```bash
-kubectl -n infra-bridges get pods
-kubectl -n infra-bridges logs sts/<service> --tail 200
-kubectl -n infra-bridges exec sts/postgres -- sh -c 'pg_isready -U "$POSTGRES_USER"'
+docker ps --filter name=<service>
+docker logs <service> --tail 200
+docker exec postgres sh -c 'pg_isready -U "$POSTGRES_USER"'
 ```
-这些是在 pod 内部执行的真实带认证探测,所以 FAIL 意味着服务真的挂了或在拒绝
-凭据 —— 不是网络层面的猜测。
+这些是在 Compose 容器内部执行的真实带认证探测,所以 FAIL 意味着服务真的挂了
+或在拒绝凭据 —— 不是网络层面的猜测。
+
+### `data.bridge_dns` / `data.bridge_reconciler`(full 模式)
+```bash
+kubectl -n kube-system get configmap coredns-custom -o yaml
+kubectl get nodes -o wide          # 对比 InternalIP 与上面条目里的 IP
+kubectl -n kube-system get cronjob coredns-hosts-reconciler
+```
+过期条目会在 ~2 分钟内自愈(reconciler CronJob);持续不一致说明
+reconciler 本身坏了。
 
 ### `edge.<sub>`
 v0.3 只有 `edge.search` / `edge.mq` / `edge.registry`

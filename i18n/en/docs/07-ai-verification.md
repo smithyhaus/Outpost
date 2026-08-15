@@ -192,12 +192,21 @@ the anti-silence layer is blind, onboard your apps).
 
 ### `data.<service>`
 ```bash
-kubectl -n infra-bridges get pods
-kubectl -n infra-bridges logs sts/<service> --tail 200
-kubectl -n infra-bridges exec sts/postgres -- sh -c 'pg_isready -U "$POSTGRES_USER"'
+docker ps --filter name=<service>
+docker logs <service> --tail 200
+docker exec postgres sh -c 'pg_isready -U "$POSTGRES_USER"'
 ```
-These are real auth'd probes inside the pod, so a FAIL means the service
-is down or rejecting credentials — not a networking guess.
+These are real auth'd probes inside the Compose container, so a FAIL means
+the service is down or rejecting credentials — not a networking guess.
+
+### `data.bridge_dns` / `data.bridge_reconciler` (full mode)
+```bash
+kubectl -n kube-system get configmap coredns-custom -o yaml
+kubectl get nodes -o wide          # compare InternalIP with the entry above
+kubectl -n kube-system get cronjob coredns-hosts-reconciler
+```
+A stale entry self-heals within ~2min (reconciler CronJob); a mismatch
+that persists longer means the reconciler itself is broken.
 
 ### `edge.<sub>`
 Only `edge.search` / `edge.mq` / `edge.registry` exist in v0.3 (the

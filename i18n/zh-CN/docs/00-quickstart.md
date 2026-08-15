@@ -63,8 +63,8 @@
 - [ ] **A1** 域名 NS 切到 Cloudflare(Free 计划够用),等 NS 生效
 - [ ] **A2** Zero Trust → Networks → Tunnels → **Create a tunnel** → 选 `Cloudflared` → 命名(随便,如 `outpost`)→ Save
 - [ ] **A3** 看到 install command 时**只复制 token**(`eyJhIjoi…` 长串),先放一边,**不要**执行那条 install 命令(我们用 Compose 跑 cloudflared,不是直接在主机)
-- [ ] **A4** 进入这个 Tunnel 的 **Public Hostname** 标签,添加 **4 条 HTTP 记录**,URL 全部填 `host.docker.internal:30080`(详见 `01-cloudflare-setup.md` §3 表格):
-  - `search` / `mq` / `registry` / `*`(兜底通配,覆盖所有 `<x>-apps.<root>` 应用)
+- [ ] **A4** 进入这个 Tunnel 的 **Public Hostname** 标签,添加 **4 条 HTTP 记录**(详见 `01-cloudflare-setup.md` §3 表格,含可选 raw-TCP 行):
+  - `search` / `mq` → `caddy:80`;`registry` / `*` → `host.docker.internal:30080`(兜底通配,覆盖所有 `<x>-apps.<root>` 应用)
   - **没有 `hooks` / `argocd` / `tekton` / `rollouts` 行** —— v0.3.0 删掉了整条入站 webhook 路径和所有集群内 CI/CD 面板
   - **不要填 `*.apps`** — 那是二级通配,免费 Universal SSL 不覆盖(要付费 ACM ~$10/月)。应用走 `<name>-apps.<root>` 命名约定,单条 `*.<root>` 兜底就够
   - **`registry` 那条额外**:展开 *Additional application settings → HTTP Settings → HTTP Host Header*,填 `registry.<你的根域名>`(Docker Registry 对 Host 头敏感,不写会拉镜像 401)

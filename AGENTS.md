@@ -53,7 +53,7 @@ If anything below contradicts `SKILL.md`, `SKILL.md` wins.
 bootstrap.sh              # orchestrator (60 lines); phases live in bootstrap.d/
 bootstrap.d/              # one file per phase (preflight → summary)
 core/compose/             # Compose stack (edge: cloudflared + caddy; local-data)
-core/k8s/                 # k3s manifests (03-ci, bridges/StatefulSets, buildkit)
+core/k8s/                 # k3s manifests (03-ci, ExternalName bridges, buildkit)
 platform/lib/             # portable.sh, registry-config.sh, onboard-lib.sh,
                           # sign-webhook.sh
 platform/systemd/         # GitHub Actions runner + outpost-verify.timer units

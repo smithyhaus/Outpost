@@ -167,15 +167,16 @@ revisit the generator idea then.
 ## Helm chart packaging
 
 **What:** Ship a Helm chart for the k3s layer (`outpost-ci` CI/CD glue +
-`infra-bridges` data StatefulSets + buildkit/registry + plugins) so
+`infra-bridges` ExternalName data bridges + buildkit/registry + plugins) so
 operators on existing clusters can install just that layer without using
 `bootstrap.sh`.
 
 **Updated for v0.3.0:** the ArgoCD + Tekton stack this item originally
 targeted is gone ([ADR-0003](docs/decisions/0003-github-actions-engine-swap.md)).
 The k3s layer is now considerably smaller — `manifest-sync` CronJob +
-RBAC/PVC/NodePorts (`core/k8s/03-ci/`), the data StatefulSets
-(`core/k8s/06-bridges/`), buildkitd (`core/k8s/08-buildkit/`), and the
+RBAC/PVC/NodePorts (`core/k8s/03-ci/`), the ExternalName data bridges +
+CoreDNS reconciler (`core/k8s/06-bridges/`), buildkitd
+(`core/k8s/08-buildkit/`), and the
 registry plugin. A Helm chart is arguably a better fit now than before
 (less to templatize, no Tekton-Task Go-template contortions), but the
 GitHub Actions **runner** piece is host-level (systemd), not k8s, and
@@ -604,7 +605,7 @@ unchanged.
   and (if `TESTKUBE_MODE=oss`) runs `helm upgrade testkube`, then
   re-runs `bootstrap.d/08-ci.sh`'s idempotent `kubectl apply` steps
   (buildkitd, `core/k8s/03-ci/*`, the runner registration check) so a
-  drifted CI engine also gets caught, not just the data-layer StatefulSets.
+  drifted CI engine also gets caught, not just the data-layer bridge Services.
 - Define the vendor-pin bump procedure for the one CRD that remains
   (Sealed-Secrets): fetch new upstream release → save under
   `core/k8s/vendor/<name>-vX.Y.Z.yaml` → update the `bootstrap.d`

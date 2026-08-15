@@ -23,8 +23,8 @@
 
 | Subdomain | Domain | Type | URL | 背后是谁 |
 |-----------|--------|------|-----|---------|
-| `search` | `<你的根域名>` | HTTP | `host.docker.internal:30080` | Traefik → `manticore.infra-bridges:9308` |
-| `mq` | `<你的根域名>` | HTTP | `host.docker.internal:30080` | Traefik → `rabbitmq.infra-bridges:15672` |
+| `search` | `<你的根域名>` | HTTP | `caddy:80` | Caddy `@search` → `manticore:9308`(Compose 容器) |
+| `mq` | `<你的根域名>` | HTTP | `caddy:80` | Caddy `@mq` → `rabbitmq:15672`(Compose 容器) |
 | `registry` | `<你的根域名>` | HTTP | `host.docker.internal:30080` | Traefik → 集群内 Docker Registry |
 | `*` | `<你的根域名>` | HTTP | `host.docker.internal:30080` | Traefik → `apps` 命名空间里你的应用 |
 
@@ -33,6 +33,16 @@
 `manifest-sync` 只做 CronJob 定时拉取,**没有任何东西需要从公网连进来**。构建状态看
 GitHub Actions UI,部署状态看 `outpost status`。见
 [ADR-0003](../../../docs/decisions/0003-github-actions-engine-swap.md)。
+
+**可选的 raw-TCP 行** —— 仅当你需要远程数据库/队列客户端穿隧道时才加
+(客户端用 `cloudflared access tcp`,见 `04-client-access.md`)。需要 QUIC
+传输,`CF_TUNNEL_PROTOCOL=http2` 时不可用:
+
+| Subdomain | Domain | Type | URL |
+|-----------|--------|------|-----|
+| `pg` | `<你的根域名>` | TCP | `postgres:5432` |
+| `redis` | `<你的根域名>` | TCP | `redis:6379` |
+| `rabbitmq` | `<你的根域名>` | TCP | `rabbitmq:5672` |
 
 > **关于通配符那一行**:Subdomain 填 `*`(不是 `*.apps`)。应用走命名约定
 > `<name>-apps.<root>`,被这条 `*.<root>` 兜底通配捕获,转给 k3s Traefik,
@@ -50,7 +60,7 @@ GitHub Actions UI,部署状态看 `outpost status`。见
 
 ### 重要细节
 
-- HTTP 行都填 `host.docker.internal:30080`:cloudflared 容器已配置 `extra_hosts: host-gateway`(见 `core/compose/docker-compose.yml`)
+- `registry` 和 `*` 行填 `host.docker.internal:30080`(k3s Traefik);`search`/`mq` 填 `caddy:80`,TCP 行直接填 Compose 容器名——它们和 cloudflared 在同一个 docker 网络里。cloudflared 容器已配置 `extra_hosts: host-gateway`(见 `core/compose/docker-compose.yml`)
 - 那条 `*` 兜底通配会接住所有没单独列出的子域。更具体的条目(比如 `registry.<域名>`)
   自动覆盖通配 — CF Tunnel 是 most-specific-wins 匹配,顺序无关
 - **`registry` 行额外配置**:展开 *Additional application settings → HTTP Settings → HTTP Host Header*,填 `registry.<你的根域名>`。Docker Registry 对 Host 头敏感,不写会拉镜像 401

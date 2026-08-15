@@ -1,16 +1,18 @@
 # 0001 — Two-layer split: Compose for data, k3s for apps
 
-> **Amended by [ADR-0004](0004-data-layer-in-k3s.md)** (2026-08-15): in
-> `full` mode, the stateful services described below move from Compose
-> into k3s `StatefulSet`s (Service names unchanged). The two-layer
-> Compose/k3s *split* itself — the subject of this ADR — is unaffected;
-> only which layer hosts the data services in `full` mode changes. `local`
-> mode still runs the data layer as pure Compose exactly as decided here.
+> **Amendment history**: [ADR-0004](0004-data-layer-in-k3s.md)
+> (2026-08-15) briefly moved the `full`-mode stateful services from
+> Compose into k3s `StatefulSet`s, but was **reverted the same day by
+> [ADR-0005](0005-data-layer-back-to-host.md)** before any deployment ran
+> it. The placement decided in THIS ADR — data in Compose, bridged into
+> k3s — is current again, now hardened with the
+> `coredns-hosts-reconciler` self-heal.
 
 ## Status
 
 `Accepted` (2026-05-06; carried through every release since). Amended by
-ADR-0004 (2026-08-15) — see note above.
+ADR-0004, whose change was reverted by ADR-0005 (both 2026-08-15) — the
+placement described here is current. See note above.
 
 ## Context
 

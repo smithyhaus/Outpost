@@ -6,16 +6,14 @@
 HTTP 服务（RabbitMQ UI / Manticore HTTP API / Registry）直接浏览器开 `https://...` 即可，**不需要本节**。
 **TCP 服务**（PostgreSQL / Redis / RabbitMQ AMQP）由于 IDE 客户端不会说 Cloudflare 隧道协议，需要在开发机装 `cloudflared`，本地起一个 TCP 隧道把远端服务映射到 `localhost:<port>`。
 
-> **v0.3.0 前置条件**。`cloudflared access tcp` 要能用，前提是那条 TCP
-> Public Hostname 的 origin 必须是 Outpost 主机上 `cloudflared` 容器真能连到的
-> 地址。`full` 模式下数据服务是 k3s 里 `infra-bridges` 命名空间的 StatefulSet，
-> 只有 ClusterIP Service，**Compose 里已经没有叫 `postgres` 的容器了**。所以要先
-> 在 Outpost 主机上把端口暴露出来（例如
-> `kubectl -n infra-bridges port-forward --address 0.0.0.0 svc/postgres 5432:5432`），
-> 再把 CF 的 TCP 行指向 `host.docker.internal:5432`。另外注意：
-> `CF_TUNNEL_PROTOCOL=http2`（网络封了 QUIC 的 UDP/7844 时的降级选项）
-> **完全无法承载 `cloudflared access` 的 TCP 路由** —— 这种网络下请改走
-> SSH / `kubectl port-forward` 连数据库。
+> **v0.3.1 说明**。数据服务就是与 `cloudflared` 同一 docker 网络里的 Compose
+> 容器，所以 TCP Public Hostname 直接指向容器名即可 ——
+> `pg.<域名>` → `tcp://postgres:5432`、`redis.<域名>` → `tcp://redis:6379`、
+> `rabbitmq.<域名>` → `tcp://rabbitmq:5672`（完整表见
+> `01-cloudflare-setup.md` §3）。**不需要**任何 port-forward 或主机侧准备。
+> 唯一限制：`CF_TUNNEL_PROTOCOL=http2`（网络封了 QUIC 的 UDP/7844 时的降级
+> 选项）**完全无法承载 `cloudflared access` 的 TCP 路由** —— 这种网络下请改走
+> SSH 连数据库。
 
 ## 一、装 cloudflared
 

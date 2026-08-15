@@ -14,10 +14,11 @@ below: `compose.*` / `cloudflared.*`, `k8s.*` / `buildkit.*`, `ci.*`,
 
 ## Compose layer
 
-In `full` mode the Compose stack is only `cloudflared` + `caddy` (the
-`edge` profile). The data services moved into k3s — see
-[ADR-0004](../../../docs/decisions/0004-data-layer-in-k3s.md). In `local`
-mode it is the four data services (`local-data` profile) and nothing else.
+In `full` mode the Compose stack is `cloudflared` + `caddy` (the `edge`
+profile) **plus** the four data services (`local-data` profile) — stateful
+services live in Compose in both modes; see
+[ADR-0005](../../../docs/decisions/0005-data-layer-back-to-host.md). In
+`local` mode it is the four data services and nothing else.
 
 ### Containers won't start
 ```bash
@@ -72,14 +73,19 @@ provisioner not running); `exceeded quota` (the `apps` namespace carries a
 a FAIL means the service is genuinely down or refusing credentials.
 
 ```bash
-kubectl -n infra-bridges get pods
-kubectl -n infra-bridges logs sts/postgres --tail 200
+docker ps --filter name=postgres --filter name=redis --filter name=rabbitmq --filter name=manticore
+docker logs postgres --tail 200
 
-# The same probes verify.sh runs
-kubectl -n infra-bridges exec sts/postgres  -- sh -c 'pg_isready -U "$POSTGRES_USER"'
-kubectl -n infra-bridges exec deploy/redis  -- sh -c 'redis-cli -a "$REDIS_PASSWORD" ping'
-kubectl -n infra-bridges exec sts/rabbitmq  -- rabbitmq-diagnostics -q ping
+# The same probes verify.sh runs (credentials expand inside the container)
+docker exec postgres sh -c 'pg_isready -U "$POSTGRES_USER"'
+docker exec -e REDIS_PASSWORD redis sh -c 'redis-cli -a "$REDIS_PASSWORD" ping'
+docker exec rabbitmq rabbitmq-diagnostics -q ping
 ```
+
+If the containers are healthy but *pods* still can't reach them, the
+bridge is the suspect: `verify.sh` reports it as `data.bridge_dns`
+(CoreDNS `host.docker.internal` entry vs the node's current IP — the
+`coredns-hosts-reconciler` CronJob rewrites a stale entry within ~2min).
 
 An app that can't reach a data service is almost always a wrong Service
 name in its connection string. The names never change across modes:

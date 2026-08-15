@@ -26,8 +26,8 @@ Four rows is the whole built-in surface:
 
 | Subdomain  | Domain          | Type | URL                          | Backend behind it |
 |------------|------------------|------|------------------------------|-------------------|
-| `search`   | your root domain | HTTP | `host.docker.internal:30080` | Traefik → `manticore.infra-bridges:9308` |
-| `mq`       | your root domain | HTTP | `host.docker.internal:30080` | Traefik → `rabbitmq.infra-bridges:15672` |
+| `search`   | your root domain | HTTP | `caddy:80` | Caddy `@search` → `manticore:9308` (Compose) |
+| `mq`       | your root domain | HTTP | `caddy:80` | Caddy `@mq` → `rabbitmq:15672` (Compose) |
 | `registry` | your root domain | HTTP | `host.docker.internal:30080` | Traefik → in-cluster Docker Registry |
 | `*`        | your root domain | HTTP | `host.docker.internal:30080` | Traefik → your apps in the `apps` namespace |
 
@@ -38,6 +38,17 @@ and `manifest-sync` polls the manifest repo on a CronJob schedule, so
 nothing needs to reach *in*. Build status lives in the GitHub Actions UI,
 deploy status in `outpost status`. See
 [ADR-0003](../../../docs/decisions/0003-github-actions-engine-swap.md).
+
+**Optional raw-TCP rows** — only if you want remote DB/queue clients
+through the tunnel (`cloudflared access tcp` on the client side; see
+`04-client-access.md`). Requires QUIC transport — unavailable when
+`CF_TUNNEL_PROTOCOL=http2`:
+
+| Subdomain  | Domain           | Type | URL              |
+|------------|------------------|------|------------------|
+| `pg`       | your root domain | TCP  | `postgres:5432`  |
+| `redis`    | your root domain | TCP  | `redis:6379`     |
+| `rabbitmq` | your root domain | TCP  | `rabbitmq:5672`  |
 
 > **Wildcard subdomain note**: enter `*` in the Subdomain field (not
 > `*.apps`). Apps follow the naming convention `<name>-apps.<root>` and
@@ -64,7 +75,10 @@ with an auto-issued cert.
 
 ### Notes
 
-- HTTP rows use `host.docker.internal:30080`. The cloudflared container
+- `registry` and `*` rows use `host.docker.internal:30080` (k3s Traefik);
+  `search`/`mq` use `caddy:80` and TCP rows use the Compose container
+  names directly — all targets sit on the same docker network as
+  cloudflared. The cloudflared container
   has `extra_hosts: host-gateway` configured for that lookup (see
   `core/compose/docker-compose.yml`).
 - The broad `*` wildcard catches every subdomain not specifically listed.

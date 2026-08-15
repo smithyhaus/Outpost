@@ -14,10 +14,10 @@
 
 ## Compose 层
 
-`full` 模式下 Compose 里只有 `cloudflared` + `caddy`(`edge` profile),
-数据服务已经搬进 k3s —— 见
-[ADR-0004](../../../docs/decisions/0004-data-layer-in-k3s.md)。
-`local` 模式下则只有那四个数据服务(`local-data` profile)。
+`full` 模式下 Compose 里是 `cloudflared` + `caddy`(`edge` profile)**加上**
+四个数据服务(`local-data` profile)——有状态服务两种模式都在 Compose,见
+[ADR-0005](../../../docs/decisions/0005-data-layer-back-to-host.md)。
+`local` 模式下则只有那四个数据服务。
 
 ### 容器起不来
 ```bash
@@ -70,14 +70,18 @@ provisioner 没跑);`exceeded quota`(`apps` 命名空间带 `ResourceQuota` —�
 意味着服务真的挂了或在拒绝凭据。
 
 ```bash
-kubectl -n infra-bridges get pods
-kubectl -n infra-bridges logs sts/postgres --tail 200
+docker ps --filter name=postgres --filter name=redis --filter name=rabbitmq --filter name=manticore
+docker logs postgres --tail 200
 
-# verify.sh 跑的就是这几条探测
-kubectl -n infra-bridges exec sts/postgres  -- sh -c 'pg_isready -U "$POSTGRES_USER"'
-kubectl -n infra-bridges exec deploy/redis  -- sh -c 'redis-cli -a "$REDIS_PASSWORD" ping'
-kubectl -n infra-bridges exec sts/rabbitmq  -- rabbitmq-diagnostics -q ping
+# verify.sh 跑的就是这几条探测(凭据在容器内部展开)
+docker exec postgres sh -c 'pg_isready -U "$POSTGRES_USER"'
+docker exec -e REDIS_PASSWORD redis sh -c 'redis-cli -a "$REDIS_PASSWORD" ping'
+docker exec rabbitmq rabbitmq-diagnostics -q ping
 ```
+
+容器都健康但 *pod* 仍连不上数据服务时,嫌疑在桥:`verify.sh` 会以
+`data.bridge_dns` 点名(CoreDNS 的 `host.docker.internal` 条目 vs 节点当前
+IP —— `coredns-hosts-reconciler` CronJob 会在 ~2 分钟内改写过期条目)。
 
 应用连不上数据服务,几乎总是连接串里的 Service 名写错了。这些名字在两种模式下
 都不变:
