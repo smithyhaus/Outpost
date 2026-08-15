@@ -2,9 +2,11 @@
 
 ## Status
 
-`Accepted` (2026-08-15). **Amends [ADR-0001](0001-two-layer-split.md)** —
-the two-layer Compose/k3s *split* is unchanged; what changes is which layer
-hosts the stateful services in `full` mode.
+`Superseded by [ADR-0005](0005-data-layer-back-to-host.md)` (2026-08-15) —
+reverted by owner decision before any real deployment ran this shape;
+stateful services stay in host Compose. Kept for the record of why the
+in-cluster move was attempted. Originally: Accepted (2026-08-15), amending
+[ADR-0001](0001-two-layer-split.md).
 
 ## Context
 

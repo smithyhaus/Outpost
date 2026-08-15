@@ -2,11 +2,12 @@
 
 > Supersedes [`wsl-wipe-rebootstrap.md`](wsl-wipe-rebootstrap.md) (deprecated,
 > kept for historical record). Use this runbook for any full WSL2
-> rebuild from v0.3.0 onward — the CI engine (GitHub Actions self-hosted
-> runner + manifest-sync CronJob) and the data layer (in-cluster
-> StatefulSets) are structurally different from what the old runbook
-> describes. See [ADR-0003](../../decisions/0003-github-actions-engine-swap.md)
-> and [ADR-0004](../../decisions/0004-data-layer-in-k3s.md) for the "why".
+> rebuild from v0.3.1 onward — the CI engine (GitHub Actions self-hosted
+> runner + manifest-sync CronJob) is structurally different from what the
+> old runbook describes; the data layer stays in host Compose (v0.3.0's
+> in-cluster move was reverted before shipping). See
+> [ADR-0003](../../decisions/0003-github-actions-engine-swap.md) and
+> [ADR-0005](../../decisions/0005-data-layer-back-to-host.md) for the "why".
 
 Applies to: accepting a full WSL2 distro wipe and rebuilding Outpost from
 zero on a fresh install, OR standing up a brand-new WSL2 box as a
@@ -32,24 +33,26 @@ cp .env ~/outpost-carry/.env
 #    undecryptable — you'd have to re-seal every app's secrets by hand.
 cp -r secrets-backup ~/outpost-carry/secrets-backup
 
-# 3. Postgres — full logical dump. In v0.3.0 full mode postgres runs
-#    in-cluster (infra-bridges StatefulSet), not in Compose — use kubectl:
-kubectl -n infra-bridges exec sts/postgres -- \
-  pg_dumpall -U "$POSTGRES_USER" > ~/outpost-carry/pg-all-$(date +%F).sql
+# 3. Postgres — full logical dump. The data layer runs in host Compose
+#    (true on the old box AND in v0.3.1's target shape — ADR-0005 reverted
+#    the brief v0.3.0 in-cluster move) — use docker. The single-quoted
+#    sh -c makes $POSTGRES_USER expand INSIDE the container (no .env
+#    sourcing needed on the host, no secret on the host command line):
+docker exec postgres sh -c 'pg_dumpall -U "$POSTGRES_USER"' \
+  > ~/outpost-carry/pg-all-$(date +%F).sql
 
 # 4. RabbitMQ — definitions export (queues/exchanges/bindings/users, not
 #    message bodies — in-flight messages are not durable across this move).
-kubectl -n infra-bridges exec sts/rabbitmq -- \
-  rabbitmqctl export_definitions /tmp/definitions.json
-kubectl -n infra-bridges cp infra-bridges/rabbitmq-0:/tmp/definitions.json \
+docker exec rabbitmq rabbitmqctl export_definitions /tmp/definitions.json
+docker cp rabbitmq:/tmp/definitions.json \
   ~/outpost-carry/rabbitmq-definitions-$(date +%F).json
 
 # 5. Manticore — standalone mode has no built-in snapshot/export command;
 #    it is treated as a rebuildable search index in this runbook (re-index
 #    from Postgres/source-of-truth after redeploy). If you have a real
-#    index you cannot rebuild, stop and back up the manticore PVC's
-#    underlying local-path directory instead
-#    (/var/lib/rancher/k3s/storage/... on the old box) before wiping.
+#    index you cannot rebuild, stop the container and archive the
+#    manticore_data Compose volume (docker volume inspect
+#    infra_manticore_data for the mountpoint) before wiping.
 
 tar czf ~/outpost-carry.tgz -C ~/outpost-carry .
 # Copy outpost-carry.tgz off the box (scp / a shared drive / etc.)
@@ -198,23 +201,22 @@ Both must show `active`. If the runner service is missing, check
 ## 5. Data restore + row-count spot-check
 
 ```bash
-# Postgres — restore the dump into the fresh in-cluster StatefulSet
-kubectl -n infra-bridges exec -i sts/postgres -- \
-  psql -U "$POSTGRES_USER" < ~/outpost-carry/pg-all-*.sql
+# Postgres — restore the dump into the fresh Compose container
+docker exec -i postgres sh -c 'psql -U "$POSTGRES_USER"' \
+  < ~/outpost-carry/pg-all-*.sql
 
 # RabbitMQ — replay definitions (queues/exchanges/bindings/users)
-kubectl -n infra-bridges cp ~/outpost-carry/rabbitmq-definitions-*.json \
-  infra-bridges/rabbitmq-0:/tmp/definitions.json
-kubectl -n infra-bridges exec sts/rabbitmq -- \
-  rabbitmqctl import_definitions /tmp/definitions.json
+docker cp ~/outpost-carry/rabbitmq-definitions-*.json \
+  rabbitmq:/tmp/definitions.json
+docker exec rabbitmq rabbitmqctl import_definitions /tmp/definitions.json
 ```
 
 **PASS/FAIL — row-count spot-check** (pick 2-3 tables you know the
 approximate old-box row count for):
 
 ```bash
-kubectl -n infra-bridges exec sts/postgres -- \
-  psql -U "$POSTGRES_USER" -c "SELECT count(*) FROM <known_table>;"
+docker exec postgres sh -c \
+  'psql -U "$POSTGRES_USER" -c "SELECT count(*) FROM <known_table>;"'
 ```
 Count within expected range = PASS. Zero or wildly off = FAIL — check the
 dump file wasn't truncated/empty (§0's PASS/FAIL check should have caught
@@ -274,15 +276,18 @@ The v0.3.0 ingress surface drops several routes:
 2. **Delete** `argocd.<domain>`, `tekton.<domain>`,
    `<rollouts-dashboard-host>.<domain>` Public Hostnames if they exist
    from a pre-v0.3.0 install — those dashboards are removed.
-3. **Confirm** `mq.<domain>` and `search.<domain>` route via the k3s
-   Traefik NodePort (`http://<host>:30080`), not a Compose caddy target —
-   they moved from Caddy reverse-proxy fragments to Traefik `IngressRoute`
-   when the data layer moved in-cluster (ADR-0004). If the Cloudflare
-   Public Hostname target is stale (pointing at the old `caddy:80`), it
-   still resolves in v0.3.0 because both `caddy:80` and Traefik `:30080`
-   sit behind the same `cloudflared` container's routing rules — but
-   double-check `curl -sS -o /dev/null -w '%{http_code}\n' https://mq.<domain>`
-   returns `200`, not a caddy 404.
+3. **Confirm** `mq.<domain>` and `search.<domain>` target `http://caddy:80`
+   — the v0.2 shape is BACK in v0.3.1 (ADR-0005): the data services are
+   Compose containers again and caddy's `@search`/`@mq` routes proxy to
+   them. A pre-existing route already pointing at caddy is correct; one
+   changed to `:30080` during a brief v0.3.0 window must be pointed back.
+   Double-check `curl -sS -o /dev/null -w '%{http_code}\n' https://mq.<domain>`
+   returns `200`, not a 404.
+4. **Confirm/restore** the raw-TCP Public Hostnames if you use remote TCP
+   access: `pg.<domain>` → `tcp://postgres:5432`, `redis.<domain>` →
+   `tcp://redis:6379`, `rabbitmq.<domain>` → `tcp://rabbitmq:5672`.
+   These need QUIC transport — with `CF_TUNNEL_PROTOCOL=http2` the
+   `cloudflared access` TCP path is unavailable (documented trade-off).
 
 **PASS/FAIL:**
 ```bash
@@ -363,14 +368,17 @@ Then reopen the WSL2 terminal (auto-starts the distro).
 ```bash
 systemctl is-active 'actions.runner.*'     # expect: active
 systemctl is-active outpost-verify.timer   # expect: active
-kubectl get pods -n infra-bridges          # expect: all Running (data layer self-heals)
-bash verify.sh --json | jq '.summary'      # expect: fail_count == 0
+docker inspect -f '{{.State.Health.Status}}' postgres redis rabbitmq manticore
+                                           # expect: healthy ×4 (compose restart policy)
+bash verify.sh --json | jq '.summary'      # expect: fail_count == 0 — this includes
+                                           # data.bridge_dns (coredns entry vs the NEW
+                                           # node IP) and data.bridge_reconciler
 ```
-Any non-active/non-Running/non-zero result = FAIL — this is exactly the
-class of failure ADR-0004 was written to eliminate (WSL IP drift no
-longer applies since the data layer is in-cluster, but systemd unit
-autostart across a WSL restart is still worth re-verifying on a fresh
-box).
+Any non-active/non-healthy/non-zero result = FAIL. The WSL restart is
+exactly when the bridge IP drifts — the coredns-hosts-reconciler CronJob
+must rewrite the entry within ~2min of the cluster coming back; if
+`data.bridge_dns` still FAILs after a few minutes, the reconciler is the
+thing to debug (`kubectl -n kube-system get cronjob,jobs | grep coredns`).
 
 ---
 

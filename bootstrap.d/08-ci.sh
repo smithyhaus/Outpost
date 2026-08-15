@@ -4,11 +4,13 @@
 #           CronJob + GitHub Actions self-hosted runner + verify timer.
 # -----------------------------------------------------------------------------
 # Replaces 08-argocd-tekton.sh. ArgoCD, Tekton (CRDs/controllers/webhooks/
-# dashboard/EventListener), dashboard BasicAuth, the CoreDNS
-# host.docker.internal bridge and inbound webhook registration are GONE —
-# CI is a GitHub Actions workflow on the host runner calling scripts/ci/*,
-# CD is the manifest-sync CronJob (ns outpost-ci). See
+# dashboard/EventListener), dashboard BasicAuth and inbound webhook
+# registration are GONE — CI is a GitHub Actions workflow on the host runner
+# calling scripts/ci/*, CD is the manifest-sync CronJob (ns outpost-ci). See
 # docs/prp/plans/outpost-cicd-dispatcher-engine.plan.md.
+# The CoreDNS host.docker.internal bridge is RETAINED (v0.3.1): stateful data
+# services stay in host Compose by owner decision, so pods still reach them
+# through the infra-bridges ExternalName Services + CoreDNS custom hosts.
 # =============================================================================
 phase "Phase 8 / 10 CI engine (buildkit, manifest-sync, GitHub runner)"
 
@@ -35,14 +37,31 @@ for _ns in argocd tekton-pipelines; do
   fi
 done
 
-# (b) CoreDNS host.docker.internal bridge — the data layer now lives
-#     in-cluster (core/k8s/06-bridges StatefulSets), nothing resolves
-#     host.docker.internal anymore.
-if kubectl -n kube-system get configmap coredns-custom >/dev/null 2>&1; then
-  log "  removing kube-system/configmap/coredns-custom (host.docker.internal bridge retired)"
-  kubectl -n kube-system delete configmap coredns-custom --ignore-not-found >/dev/null
-  kubectl -n kube-system rollout restart deploy/coredns >/dev/null 2>&1 || true
+# (b) v0.3.0's in-cluster data layer (StatefulSets in infra-bridges) —
+#     reverted in v0.3.1 before any real box deployed it; the data layer is
+#     host Compose again. Remove the workloads/config so the ExternalName
+#     bridge Services below can apply cleanly. PVCs are deliberately NOT
+#     touched: if a v0.3.0 install does exist, its data must be dumped and
+#     migrated by hand, never deleted by a cleanup pass.
+for _res in statefulset/postgres deployment/redis statefulset/rabbitmq \
+            statefulset/manticore configmap/postgres-init \
+            configmap/manticore-confd secret/infra-bridges-auth; do
+  kubectl -n infra-bridges delete "$_res" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+done
+kubectl -n infra-bridges delete ingressroute search mq --ignore-not-found >/dev/null 2>&1 || true
+# v0.3.0's Services were selector-backed ClusterIP; applying an ExternalName
+# Service over one is rejected (clusterIP is immutable) — delete them first.
+for _svc in postgres redis rabbitmq manticore; do
+  _svc_type=$(kubectl -n infra-bridges get svc "$_svc" -o jsonpath='{.spec.type}' 2>/dev/null || true)
+  if [[ -n "$_svc_type" && "$_svc_type" != "ExternalName" ]]; then
+    log "  removing infra-bridges/svc/$_svc (type=$_svc_type; replaced by ExternalName bridge)"
+    kubectl -n infra-bridges delete svc "$_svc" >/dev/null
+  fi
+done
+if kubectl -n infra-bridges get pvc -o name 2>/dev/null | grep -q .; then
+  warn "infra-bridges still has PVCs from a v0.3.0 install — data NOT deleted; dump + migrate manually (kubectl -n infra-bridges get pvc)"
 fi
+unset _res _svc _svc_type
 
 # (c) Argo Rollouts dashboard — controller-only in v0.3 (plugin default off).
 if kubectl -n argo-rollouts get deployment argo-rollouts-dashboard >/dev/null 2>&1; then
@@ -54,57 +73,49 @@ unset _ns
 ok "Orphan cleanup done"
 
 # -----------------------------------------------------------------------------
-# Data layer (in-cluster since v0.3 — ADR-0004): render + apply the
-# infra-bridges workloads, wait until every service is Ready, then flip their
-# PVs to Retain. Ordering matters twice over: (a) the first manifest-sync run
-# below deploys the 17 apps, which need a LIVE data layer — a down database
-# would fail the first-sync gate for the wrong reason; (b) local-path PVCs are
-# WaitForFirstConsumer, so the Retain patch can only land after the pods
-# scheduled and the volumes bound.
+# Data-layer bridge (v0.3.1 — host Compose is the data layer in BOTH modes,
+# owner decision; see the 修订记录 in
+# docs/prp/plans/outpost-cicd-dispatcher-engine.plan.md). Pods resolve
+# postgres/redis/rabbitmq/manticore.infra-bridges.svc → ExternalName
+# host.docker.internal → CoreDNS custom hosts entry (node InternalIP). The
+# coredns-hosts-reconciler CronJob (part of the directory apply below)
+# rewrites that entry within ~2min whenever a WSL restart hands the VM a new
+# IP — the self-heal for what used to be the #1 whole-site outage mode.
+# Ordering: the first manifest-sync run below deploys the app fleet, which
+# needs a LIVE data path — bridge DNS must be up before that gate.
 # -----------------------------------------------------------------------------
-log "Applying in-cluster data layer (infra-bridges)..."
-render_apply "core/k8s/06-bridges/secrets.template.yaml"
-render_apply "core/k8s/06-bridges/ingressroutes.template.yaml"
-for _f in core/k8s/06-bridges/*.yaml; do
-  case "$_f" in *.template.yaml) continue ;; esac
-  kubectl apply -f "$_f"
-done
-unset _f
+log "Applying data-layer bridge Services (infra-bridges → host Compose)..."
+kubectl apply -f core/k8s/06-bridges/
 
-log "Waiting for data services to be Ready (the app fleet depends on them)..."
-_DATA_OK=1
-kubectl -n infra-bridges rollout status statefulset/postgres  --timeout=300s || _DATA_OK=0
-kubectl -n infra-bridges rollout status deployment/redis      --timeout=180s || _DATA_OK=0
-kubectl -n infra-bridges rollout status statefulset/rabbitmq  --timeout=300s || _DATA_OK=0
-kubectl -n infra-bridges rollout status statefulset/manticore --timeout=300s || _DATA_OK=0
-if [[ "$_DATA_OK" -ne 1 ]]; then
-  err "Data layer failed to become Ready — nothing can run without it."
-  err "Inspect: kubectl -n infra-bridges get pods,pvc,events"
+# containerd does NOT hand pods the Docker Desktop-ism host.docker.internal —
+# inject a CoreDNS custom server block resolving it to the node's InternalIP.
+NODE_IP="$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)"
+if [[ -n "$NODE_IP" ]]; then
+  kubectl -n kube-system create configmap coredns-custom \
+    --from-literal=hostdockerinternal.server="host.docker.internal:53 {
+    hosts {
+        ${NODE_IP} host.docker.internal
+    }
+}" --dry-run=client -o yaml | kubectl apply -f -
+  kubectl -n kube-system rollout restart deploy/coredns >/dev/null 2>&1 || true
+  ok "CoreDNS host.docker.internal → ${NODE_IP} (bridge DNS live; reconciler self-heals drift)"
+else
+  err "node InternalIP not found — bridge DNS cannot be set and every app pod would CrashLoop."
+  err "Inspect: kubectl get nodes -o wide"
   exit 1
 fi
-unset _DATA_OK
 
-# Data-loss guard (same rationale as the registry/verdaccio PVs in Phase 7):
-# local-path PVs default to reclaimPolicy=Delete; these four hold ALL business
-# data. Rollout-Ready above guarantees the PVCs are bound; the short wait is
-# residual belt-and-braces. Idempotent — next bootstrap picks up stragglers.
-for _pvc in postgres-data redis-data rabbitmq-data manticore-data; do
-  _pv=""
-  for _ in {1..6}; do
-    _pv=$(kubectl -n infra-bridges get pvc "$_pvc" -o jsonpath='{.spec.volumeName}' 2>/dev/null || true)
-    [[ -n "$_pv" ]] && break
-    sleep 5
-  done
-  if [[ -n "$_pv" ]]; then
-    kubectl patch pv "$_pv" -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}' >/dev/null \
-      && ok "PV $_pv ($_pvc) reclaimPolicy=Retain" \
-      || warn "could not patch PV $_pv ($_pvc) to Retain"
-  else
-    warn "PVC $_pvc not bound yet — reclaimPolicy stays Delete until next bootstrap run"
+# Belt-and-braces: Phase 4's Compose health gate already proved the data
+# services are up; re-check the host-side ports because the first
+# manifest-sync below immediately deploys apps that depend on them.
+for _port in 5432 6379 5672 9308; do
+  if ! (exec 3<>"/dev/tcp/127.0.0.1/${_port}") 2>/dev/null; then
+    err "data service port ${_port} not reachable on 127.0.0.1 — check: docker compose ps"
+    exit 1
   fi
 done
-unset _pvc _pv
-ok "Data layer Ready in-cluster (postgres/redis/rabbitmq/manticore, PVs Retain)"
+unset _port
+ok "Data layer live on host (5432/6379/5672/9308) + bridge Services applied"
 
 # -----------------------------------------------------------------------------
 # buildkitd — the quenched build daemon block, KEPT VERBATIM from the Tekton

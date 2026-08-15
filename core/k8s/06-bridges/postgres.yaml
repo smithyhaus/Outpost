@@ -1,120 +1,17 @@
-# =============================================================================
-# PostgreSQL 16 + pgvector — in-cluster (full mode data layer).
-# -----------------------------------------------------------------------------
-# Replaces the old ExternalName-to-host.docker.internal bridge: apps keep
-# using postgres.infra-bridges.svc.cluster.local:5432 unchanged, but the
-# Service now points at a real in-cluster pod instead of the Compose
-# container. Production migration is still a one-line change — swap this
-# Service's selector for an ExternalName pointing at a managed Postgres.
+# ============================================================================
+# K8s → Compose 数据服务桥接
+# pod 内通过 postgres.infra-bridges.svc.cluster.local:5432 访问 Compose 的 PG
 #
-# Carried over from core/compose/docker-compose.yml `postgres`: image pin,
-# 4Gi memory cap, pg_isready healthcheck, postgres-init mount.
-# =============================================================================
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: postgres
-  namespace: infra-bridges
-  labels:
-    app: postgres
-spec:
-  serviceName: postgres
-  replicas: 1
-  # RWO local-path volume — a rolling update would deadlock the new pod on
-  # the still-attached volume of the old one. Single-node dev box: fine.
-  updateStrategy:
-    type: RollingUpdate
-  selector:
-    matchLabels:
-      app: postgres
-  template:
-    metadata:
-      labels:
-        app: postgres
-    spec:
-      containers:
-        - name: postgres
-          # m.daocloud.io/docker.io/... — index.docker.io is reset/unreachable
-          # in CN. Same mirror-prefix pattern as buildkitd/kaniko/verdaccio.
-          image: m.daocloud.io/docker.io/pgvector/pgvector:pg16
-          ports:
-            - containerPort: 5432
-          env:
-            - name: POSTGRES_USER
-              valueFrom:
-                secretKeyRef: { name: infra-bridges-auth, key: postgres-user }
-            - name: POSTGRES_PASSWORD
-              valueFrom:
-                secretKeyRef: { name: infra-bridges-auth, key: postgres-password }
-            - name: POSTGRES_DB
-              valueFrom:
-                secretKeyRef: { name: infra-bridges-auth, key: postgres-db }
-            - name: PGDATA
-              value: /var/lib/postgresql/data/pgdata
-          volumeMounts:
-            - name: data
-              mountPath: /var/lib/postgresql/data
-            - name: init-scripts
-              mountPath: /docker-entrypoint-initdb.d
-              readOnly: true
-          # Same cap as Compose's mem_limit: 4g — data services share the
-          # node's memory pool with every app pod; unbounded, one can starve
-          # the rest invisibly.
-          resources:
-            requests:
-              cpu: 250m
-              memory: 512Mi
-            limits:
-              memory: 4Gi
-          readinessProbe:
-            exec:
-              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\""]
-            initialDelaySeconds: 5
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 5
-          livenessProbe:
-            exec:
-              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\""]
-            initialDelaySeconds: 15
-            periodSeconds: 15
-            timeoutSeconds: 5
-            failureThreshold: 5
-      volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: postgres-data
-        - name: init-scripts
-          configMap:
-            name: postgres-init
----
-# local-path PVC. Data-loss guard: local-path defaults reclaimPolicy=Delete,
-# so a typo'd `kubectl delete pvc` would permanently destroy the database.
-# Same Retain-hardening as registry-data/verdaccio-storage
-# (bootstrap.d/07-registry-plugin.sh) — the bootstrap phase that applies
-# this directory must patch the bound PV to Retain the same way. See
-# followups: this PVC ships Delete until that wiring lands.
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: postgres-data
-  namespace: infra-bridges
-spec:
-  accessModes:
-    - ReadWriteOnce
-  storageClassName: local-path
-  resources:
-    requests:
-      storage: 20Gi
----
+# 生产环境只需把 externalName 改为云服务 endpoint，应用 connection string 不变
+# ============================================================================
 apiVersion: v1
 kind: Service
 metadata:
   name: postgres
   namespace: infra-bridges
 spec:
-  selector:
-    app: postgres
+  type: ExternalName
+  externalName: host.docker.internal
   ports:
     - port: 5432
       targetPort: 5432

@@ -22,22 +22,23 @@
                     ▼                 ▼
             ┌──────────────┐    ┌────────────────────┐
             │  Compose     │    │  k3s 集群            │
-            │  (edge)      │    │                     │
-            │  cloudflared │    │  Postgres + pgvector │
-            │  caddy       │    │  Redis/RabbitMQ/     │
-            │              │    │  Manticore (有状态)  │
-            │              │    │  Registry + buildkitd │
-            │              │    │  manifest-sync (CD)  │
-            │              │    │  你的应用            │
+            │  (edge+data) │    │                     │
+            │  cloudflared │    │  Registry + buildkitd │
+            │  caddy       │    │  manifest-sync (CD)  │
+            │  Postgres    │    │  你的应用            │
+            │  Redis       │    │                     │
+            │  RabbitMQ    │    │  (infra-bridges 桥   │
+            │  Manticore   │    │   → Compose 数据服务) │
             └──────────────┘    └────────────────────┘
                                         ▲
                                         │ (宿主机，仅出站)
                             GitHub Actions 自托管 runner
 ```
 
-- **数据层** —— `full` 模式下 Postgres/Redis/RabbitMQ/Manticore 以 k3s
-  `StatefulSet` 运行（`local` 模式下是纯 Compose）—— 几乎每个项目都需要
-  的有状态服务。
+- **数据层** —— Postgres/Redis/RabbitMQ/Manticore 两种模式下都以宿主
+  Compose 容器运行 —— 几乎每个项目都需要的有状态服务。`full` 模式的
+  k3s pod 经 `infra-bridges` ExternalName 桥（CoreDNS hosts 自愈）访问,
+  见 [ADR-0005](docs/decisions/0005-data-layer-back-to-host.md)。
 - **CI/CD** —— push 代码 → GitHub Actions 自托管 runner（宿主机 systemd
   服务，纯出站长轮询，全程无任何入站 webhook）构建并推送镜像 →
   `manifest-sync` CronJob 部署。详见 [`ARCHITECTURE.md`](ARCHITECTURE.md)

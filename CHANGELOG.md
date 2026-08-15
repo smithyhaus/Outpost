@@ -5,6 +5,22 @@ All notable changes to Outpost are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — 2026-08-15
+
+Data-layer revert: the v0.3.0 in-cluster move (ADR-0004) is reverted
+before any real deployment ran it — stateful services
+(postgres/redis/rabbitmq/manticore) stay in **host Compose in both modes**,
+per owner decision. The k3s side returns to the hardened
+`ExternalName → host.docker.internal` bridge (CoreDNS custom hosts +
+`coredns-hosts-reconciler` self-heal), now with two FAIL-level verify
+checks — `data.bridge_dns` (entry vs current node IP) and
+`data.bridge_reconciler` — so drift pages instead of silently stranding
+the fleet. Caddy's `@search`/`@mq` UI routes and the raw-TCP tunnel class
+(`pg.*`/`redis.*`/`rabbitmq.*`) are restored; `full` mode runs Compose
+with `--profile edge --profile local-data`. Bootstrap Phase 8 cleans up
+v0.3.0 in-cluster data workloads if present (never PVCs). See
+[ADR-0005](docs/decisions/0005-data-layer-back-to-host.md).
+
 ## [0.3.0] — 2026-08-15
 
 CI/CD engine swap: Tekton + ArgoCD are retired in favor of a GitHub Actions

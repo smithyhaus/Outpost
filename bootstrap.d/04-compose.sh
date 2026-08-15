@@ -4,9 +4,10 @@
 # -----------------------------------------------------------------------------
 #   local : `local-data` profile — Postgres / Redis / RabbitMQ / Manticore.
 #           This IS the data layer (no k3s at all in local mode).
-#   full  : `edge` profile — cloudflared + caddy only. The data layer moved
-#           in-cluster (core/k8s/06-bridges/, applied in a later phase); in
-#           full mode Compose's only job is the public ingress path.
+#   full  : `edge` + `local-data` — public ingress AND the same host-side
+#           data layer. Stateful services stay in Compose by design (owner
+#           decision, v0.3.1); k3s pods reach them through the infra-bridges
+#           ExternalName Services applied in Phase 8.
 # See core/compose/docker-compose.yml's header comment for the full
 # local-data/edge profile contract.
 # =============================================================================
@@ -30,22 +31,14 @@ done
 shopt -u nullglob
 
 if [[ "$OUTPOST_MODE" == "full" ]]; then
-  COMPOSE_ARGS+=(--profile edge)
-  HEALTH_SERVICES=("caddy" "cloudflared")
+  # Data services first in the health list: caddy/cloudflared route to them,
+  # and Phase 8's first manifest-sync deploys apps that need a LIVE data layer.
+  COMPOSE_ARGS+=(--profile edge --profile local-data)
+  HEALTH_SERVICES=("postgres" "redis" "rabbitmq" "manticore" "caddy" "cloudflared")
 else
   COMPOSE_ARGS+=(--profile local-data)
   HEALTH_SERVICES=("postgres" "redis" "rabbitmq" "manticore")
 fi
-
-# SEARCH_HOST / MQ_HOST defaults — exported here (not just left to Caddy's own
-# {$VAR:default} syntax) because core/k8s/06-bridges/ingressroutes.template.yaml
-# (full mode's replacement for the old Caddy @search/@mq routes) renders these
-# via render_template/envsubst, which has no built-in defaulting. Exporting
-# early (phase 4) means the value is already in the environment by the time a
-# later phase applies core/k8s/06-bridges/. Harmless no-op in local mode
-# (nothing consumes them there).
-export SEARCH_HOST="${SEARCH_HOST:-search}"
-export MQ_HOST="${MQ_HOST:-mq}"
 
 log "Pulling images..."
 docker compose "${COMPOSE_ARGS[@]}" pull

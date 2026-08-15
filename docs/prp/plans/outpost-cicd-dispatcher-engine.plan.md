@@ -7,7 +7,15 @@
 > **修订记录**：初版裁决为自研轮询 dispatcher；用户追加约束
 > **「尽量避免自建 CI/CD，优先现成组件（如 Drone 等）」** 后改选
 > GitHub Actions self-hosted runner（现成引擎）+ manifest-sync CronJob（胶水级 CD）。
-> 诊断结论、拆除清单、数据层裁决、防静默设计不变。
+> 诊断结论、拆除清单、防静默设计不变。
+>
+> **修订记录 2**（同日，v0.3.1）：数据层裁决被用户否决 ——
+> **「pg/redis/mq 这个有状态的，肯定要跑在宿主里，不跑在集群内」**。
+> 数据四件套回归宿主 Compose（两种模式一致），k3s 侧恢复加固版
+> ExternalName 桥（coredns-hosts-reconciler 自愈 + verify.sh 新增
+> data.bridge_dns / data.bridge_reconciler 两项 FAIL 级对账）。
+> 见 [ADR-0005](../../decisions/0005-data-layer-back-to-host.md)。
+> CI/CD 引擎选择（GHA runner + manifest-sync）不受影响。
 
 ## 0. 要回答的问题
 

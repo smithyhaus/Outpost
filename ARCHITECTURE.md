@@ -2,9 +2,11 @@
 
 Outpost is a two-layer self-hosted dev backend, designed so that the
 **stateful infrastructure** and **applications + CI/CD** are decoupled and
-swappable. As of v0.3.0, both layers live in-cluster (`full` mode) or as
-pure Compose (`local` mode) — see [ADR-0004](docs/decisions/0004-data-layer-in-k3s.md)
-for why the data layer moved off the `host.docker.internal` bridge.
+swappable. Stateful data services live in Compose on the host in BOTH
+modes; `full` mode adds k3s for apps + CI/CD, reaching the data layer over
+the hardened `host.docker.internal` bridge — see
+[ADR-0005](docs/decisions/0005-data-layer-back-to-host.md) (reverting
+[ADR-0004](docs/decisions/0004-data-layer-in-k3s.md)'s in-cluster move).
 
 ## High-level diagram
 
@@ -18,13 +20,13 @@ for why the data layer moved off the `host.docker.internal` bridge.
                     │                  │                          │
                     ▼                  ▼                          ▼
           ┌──────────────────┐  ┌────────────┐        ┌────────────────────┐
-          │ Compose (edge)   │  │ caddy:80   │        │  127.0.0.1:30080    │
-          │                  │  │ (app-team  │        │  (k3s Traefik       │
-          │ cloudflared      │  │  onboarded │        │   NodePort)         │
-          │ caddy            │  │  compose   │        │                     │
+          │ Compose (edge +  │  │ caddy:80   │        │  127.0.0.1:30080    │
+          │  local-data)     │  │ (@search   │        │  (k3s Traefik       │
+          │ cloudflared caddy│  │  @mq + app │        │   NodePort)         │
+          │ pg/redis/mq/mant │  │  compose   │        │                     │
           └──────────────────┘  │  routes)   │        │  registry.*  → OCI  │
-                                 └────────────┘        │  search.*    → IR   │
-                                                        │  mq.*        → IR   │
+                                 └────────────┘        │                     │
+                                                        │                     │
                                                         │  *.<domain>  → apps │
                                                         │  (k3s namespace     │
                                                         │   `apps`)           │
@@ -35,14 +37,14 @@ for why the data layer moved off the `host.docker.internal` bridge.
                                           ▼                        ▼                        ▼
                                  ┌────────────────┐    ┌────────────────────┐   ┌──────────────────┐
                                  │ infra-bridges   │    │  outpost-ci         │   │  buildkit /       │
-                                 │ (StatefulSets)  │    │  manifest-sync      │   │  registry          │
-                                 │                 │    │  CronJob            │   │                    │
+                                 │ (ExternalName → │    │  manifest-sync      │   │  registry          │
+                                 │  host Compose)  │    │  CronJob            │   │                    │
                                  │ postgres:5432   │    │  (git pull → apply  │   │  buildkitd (NodePort│
                                  │ redis:6379      │    │   -k → rollout wait │   │  30750 for the host │
                                  │ rabbitmq:5672   │    │   → heartbeat CM)   │   │  runner)             │
                                  │ manticore:9308  │    │                     │   │  registry (NodePort  │
-                                 │ (local-path PVC,│    │  ServiceAccount     │   │  30500 for the host  │
-                                 │  Retain policy) │    │  outpost-sync       │   │  runner + CLI)       │
+                                 │ +coredns-custom │    │  ServiceAccount     │   │  30500 for the host  │
+                                 │ +IP-drift heal  │    │  outpost-sync       │   │  runner + CLI)       │
                                  └────────────────┘    │  (apply rights,     │   └──────────────────┘
                                                         │   no cluster-admin) │
                                                         └────────────────────┘
@@ -64,42 +66,49 @@ for why the data layer moved off the `host.docker.internal` bridge.
 
 | Layer | Purpose | Lifetime expectations |
 |-------|---------|----------------------|
-| Compose | Public ingress edge (`cloudflared` + `caddy`); `local`-mode data layer. | Long-lived. Rare upgrades. |
-| k3s | Stateful data layer (`full` mode) + stateless apps + CI/CD glue. State is rebuildable from manifests + PVC snapshots + the container registry. | Short-lived except the data PVCs. Frequent app rollouts. |
+| Compose | Public ingress edge (`cloudflared` + `caddy`) + the stateful data layer (both modes). | Long-lived. Rare upgrades. Data volumes outlive the cluster. |
+| k3s | Stateless apps + CI/CD glue (`full` mode). State is rebuildable from manifests + the container registry. | Short-lived by design. Frequent app rollouts. |
 
 This split has three concrete benefits:
 
-1. **You can blow away the app-facing pieces of k3s and rebuild them
-   without losing data.** Apps are defined declaratively in the manifest
-   repo; `manifest-sync` recreates them. Data StatefulSets keep their PVCs
-   (`Retain` policy) across a `reset.sh` unless explicitly told otherwise.
-2. **Production migration is easy.** Swap a bridge Service's selector for
-   an `ExternalName` pointing at managed Postgres / Redis / RabbitMQ;
-   application connection strings are unchanged either way.
+1. **You can blow away k3s entirely and rebuild it without losing data.**
+   Apps are defined declaratively in the manifest repo; `manifest-sync`
+   recreates them. The data volumes are Compose-managed on the host —
+   `reset.sh`, k3s reinstalls and CRD surgery cannot touch them.
+2. **Production migration is easy.** Point a bridge Service's
+   `externalName` at managed Postgres / Redis / RabbitMQ instead of
+   `host.docker.internal`; application connection strings are unchanged.
 3. **Operational scope is contained.** `local` mode needs nothing beyond
-   Docker; `full` mode's data layer is an ordinary single-node
-   `StatefulSet` + `local-path` PVC — no multi-node volume complexity.
+   Docker; `full` mode adds k3s for the stateless side only — stateful
+   ops stay plain `docker compose` / `docker exec`.
 
 ## Bridge services (the load-bearing piece)
 
 The data layer is reached through Services in the `infra-bridges`
-namespace — same DNS names as always, now backed by real in-cluster pods
-instead of a `host.docker.internal` bridge:
+namespace — `ExternalName` records pointing at `host.docker.internal`,
+which CoreDNS resolves to the node's InternalIP via a custom hosts entry
+(injected by bootstrap Phase 8):
 
 ```
-postgres.infra-bridges.svc.cluster.local       → StatefulSet postgres:5432
-redis.infra-bridges.svc.cluster.local          → StatefulSet redis:6379
-rabbitmq.infra-bridges.svc.cluster.local       → StatefulSet rabbitmq:5672
-manticore.infra-bridges.svc.cluster.local      → StatefulSet manticore:9308 (HTTP)
-manticore.infra-bridges.svc.cluster.local      → StatefulSet manticore:9306 (SQL)
+postgres.infra-bridges.svc.cluster.local   → host.docker.internal:5432      → Compose postgres
+redis.infra-bridges.svc.cluster.local      → host.docker.internal:6379      → Compose redis
+rabbitmq.infra-bridges.svc.cluster.local   → host.docker.internal:5672      → Compose rabbitmq
+manticore.infra-bridges.svc.cluster.local  → host.docker.internal:9308/9306 → Compose manticore
 ```
+
+The load-bearing part is keeping that hosts entry TRUE: WSL2 hands the VM
+a new IP across restarts. The `coredns-hosts-reconciler` CronJob (applied
+with the bridge manifests) compares the entry against the current node IP
+every 2 minutes and rewrites it on drift; `verify.sh` treats a mismatch or
+a missing reconciler as FAIL (`data.bridge_dns` / `data.bridge_reconciler`),
+so a stale bridge pages instead of silently stranding the app fleet.
 
 Apps reference the K8s DNS names, never a host address directly. To move to
-managed cloud services in production, change ONLY the Service's selector
-(or type) to `ExternalName` — application connection strings stay
-identical. See [ADR-0001](docs/decisions/0001-two-layer-split.md) (and its
-amendment, [ADR-0004](docs/decisions/0004-data-layer-in-k3s.md)) for the
-full rationale.
+managed cloud services in production, change ONLY the `externalName` target
+— application connection strings stay identical. See
+[ADR-0001](docs/decisions/0001-two-layer-split.md) and
+[ADR-0005](docs/decisions/0005-data-layer-back-to-host.md) for the full
+rationale.
 
 `local` mode is unaffected: it stays pure Compose (`local-data` profile) —
 no k3s required at all.
@@ -113,16 +122,16 @@ onboarded Compose services) or the k3s Traefik NodePort (everything else):
 | Subdomain            | Type | Backend                                                              |
 |-----------------------|------|-----------------------------------------------------------------------|
 | `<app>.<domain>` (Compose apps) | HTTP | `caddy:80` → `Caddyfile.d/<app>.caddy` (via `outpost onboard`, tier=compose) |
-| `mq.<domain>`          | HTTP | Traefik `IngressRoute` → `rabbitmq.infra-bridges` :15672 (`core/k8s/06-bridges/ingressroutes.template.yaml`) |
-| `search.<domain>`      | HTTP | Traefik `IngressRoute` → `manticore.infra-bridges` :9308 |
+| `mq.<domain>`          | HTTP | `caddy:80` → `@mq` → `rabbitmq:15672` (Compose container) |
+| `search.<domain>`      | HTTP | `caddy:80` → `@search` → `manticore:9308` (Compose container) |
 | `registry.<domain>`    | HTTP | Traefik `IngressRoute` → in-cluster registry (`plugins/registry/self-hosted/manifest.yaml`) |
 | `*.<domain>`           | HTTP | Traefik → k3s `apps` namespace (catch-all; apps named `<x>-apps.<domain>` by convention) |
 
-v0.2's raw TCP tunnel rows (`pg.` / `redis.` / `rabbitmq.`) are gone: the
-data layer is in-cluster ClusterIP-only now. For ad-hoc external access use
-`kubectl -n infra-bridges port-forward svc/postgres 5432:5432` (optionally
-fronted by a CF Dashboard TCP route pointing at the forwarded host port) —
-nothing ships permanently exposed by default.
+Raw-TCP tunnel routes (`pg.` / `redis.` / `rabbitmq.`) go straight to the
+Compose containers — the second route class alongside the HTTP UIs above.
+Client side uses `cloudflared access tcp --hostname pg.<domain> --url
+localhost:5432`; note the tunnel must run QUIC transport
+(`CF_TUNNEL_PROTOCOL=http2` cannot carry `cloudflared access` TCP routes).
 
 Cloudflare terminates TLS at the edge — internal traffic is plain HTTP.
 The single `*.<domain>` wildcard avoids two-level subdomains so the free

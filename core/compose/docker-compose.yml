@@ -1,26 +1,29 @@
 name: infra
 
 # =============================================================================
-# Layer 1: stateful data services (local mode) + public ingress (full mode)
+# Layer 1: stateful data services + public ingress
 # -----------------------------------------------------------------------------
-# Two mutually-exclusive profiles, selected by bootstrap.d/04-compose.sh from
-# OUTPOST_MODE (see that file for the exact selection logic):
+# Two profiles, selected by bootstrap.d/04-compose.sh from OUTPOST_MODE
+# (see that file for the exact selection logic):
 #
-#   local-data : postgres / redis / rabbitmq / manticore. Used ONLY in
-#                `local` mode, where these ARE the data layer (no k3s at
-#                all). Apps reach them directly on localhost.
+#   local-data : postgres / redis / rabbitmq / manticore — the data layer in
+#                BOTH modes (stateful services stay on the host by design;
+#                owner decision, v0.3.1).
+#                `local` mode: apps reach them directly on localhost.
+#                `full` mode: k3s pods reach them through the infra-bridges
+#                ExternalName Services (core/k8s/06-bridges/) resolving
+#                host.docker.internal → node IP via CoreDNS custom hosts,
+#                self-healed by the coredns-hosts-reconciler CronJob.
 #
-#   edge       : cloudflared + caddy. Used ONLY in `full` mode, where the
-#                data layer instead runs in-cluster (core/k8s/06-bridges/) —
-#                Compose's only job is the public ingress path. `edge` is
-#                the renamed/extended `tunnel` profile from earlier releases;
-#                keep the two profiles additive, not layered — a service
-#                should never need both.
+#   edge       : cloudflared + caddy — `full` mode only (public ingress).
+#                `edge` is the renamed/extended `tunnel` profile from
+#                earlier releases. Keep the two profiles additive, not
+#                layered — a service should never need both.
 #
-# Port exposure policy (local-data services only):
-#   * Data services bind 0.0.0.0:<port> so host processes / apps outside
-#     Docker can reach them directly. Not used in full mode — the in-cluster
-#     bridges (core/k8s/06-bridges/) are the full-mode data path.
+# Port exposure policy:
+#   * Data services bind 0.0.0.0:<port> so both host processes AND k3s pods
+#     (via host.docker.internal) can reach them.
+#   * Other HTTP services are reachable only within the docker network.
 # =============================================================================
 
 networks:
@@ -89,13 +92,15 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      # ROOT_DOMAIN is required (host matchers depend on it). The built-in
-      # data-service UI routes (search/mq) moved OFF Caddy and onto a
-      # Traefik IngressRoute in-cluster — see
-      # core/k8s/06-bridges/ingressroutes.template.yaml. Caddy now only
-      # carries per-app onboarded fragments (Caddyfile.d/*.caddy) and the
-      # opt-in k8s-api route.
+      # ROOT_DOMAIN is required (host matchers depend on it).
+      # The remaining vars are optional — Caddyfile uses {$VAR:default}
+      # syntax, so leaving them unset falls back to the documented defaults.
+      # Passing them through here makes them substitutable by Caddy at startup.
       ROOT_DOMAIN: ${ROOT_DOMAIN}
+      SEARCH_HOST: ${SEARCH_HOST:-search}
+      SEARCH_UPSTREAM: ${SEARCH_UPSTREAM:-manticore:9308}
+      MQ_HOST: ${MQ_HOST:-mq}
+      MQ_UPSTREAM: ${MQ_UPSTREAM:-rabbitmq:15672}
     networks:
       - infra
     volumes:
@@ -115,11 +120,12 @@ services:
 
   # =========================================================================
   # PostgreSQL 16 + pgvector
-  # `local-data` profile — `local` mode ONLY. In `full` mode Postgres runs
-  # in-cluster instead (core/k8s/06-bridges/postgres.yaml); apps connect to
-  # the SAME Service name (postgres.infra-bridges.svc.cluster.local:5432)
-  # either way, so nothing in app config changes when switching modes.
-  # Bound to 0.0.0.0:5432 so host processes can reach it directly.
+  # `local-data` profile — active in BOTH modes. In `full` mode k3s pods
+  # connect to postgres.infra-bridges.svc.cluster.local:5432, which is an
+  # ExternalName bridge (core/k8s/06-bridges/postgres.yaml) back to this
+  # container — so app connection strings are identical across modes.
+  # Bound to 0.0.0.0:5432 so k3s pods (via host.docker.internal) and host
+  # processes can reach it.
   # =========================================================================
   postgres:
     profiles: ["local-data"]
@@ -150,9 +156,8 @@ services:
 
   # =========================================================================
   # Redis 7 (AOF + RDB persistence, password required)
-  # `local-data` profile — see the postgres block above for the full
-  # local/full mode split; full mode runs Redis in-cluster instead
-  # (core/k8s/06-bridges/redis.yaml).
+  # `local-data` profile — active in BOTH modes; full-mode pods reach it via
+  # the redis.infra-bridges ExternalName bridge (see the postgres block).
   # =========================================================================
   redis:
     profiles: ["local-data"]
@@ -186,10 +191,9 @@ services:
   # =========================================================================
   # RabbitMQ 3.13 + management plugin
   # AMQP on 5672 / Management UI on 15672
-  # `local-data` profile — see the postgres block above for the full
-  # local/full mode split; full mode runs RabbitMQ in-cluster instead
-  # (core/k8s/06-bridges/rabbitmq.yaml), UI reached via a Traefik
-  # IngressRoute instead of Caddy.
+  # `local-data` profile — active in BOTH modes; full-mode pods reach it via
+  # the rabbitmq.infra-bridges ExternalName bridge, and the management UI is
+  # served through Caddy's @mq route (mq.<ROOT_DOMAIN>).
   # =========================================================================
   rabbitmq:
     profiles: ["local-data"]
@@ -220,10 +224,9 @@ services:
   # - 9312 : binary protocol + reserved port for future replication
   # The conf.d mount is inert in standalone (default config does not
   # `include` it). To enable replication, see core/compose/manticore/README.md.
-  # `local-data` profile — see the postgres block above for the full
-  # local/full mode split; full mode runs Manticore in-cluster instead
-  # (core/k8s/06-bridges/manticore.yaml), UI reached via a Traefik
-  # IngressRoute instead of Caddy.
+  # `local-data` profile — active in BOTH modes; full-mode pods reach it via
+  # the manticore.infra-bridges ExternalName bridge, and the HTTP UI is
+  # served through Caddy's @search route (search.<ROOT_DOMAIN>).
   # =========================================================================
   manticore:
     profiles: ["local-data"]

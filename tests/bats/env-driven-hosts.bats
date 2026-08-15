@@ -3,15 +3,15 @@
 # Built-in service subdomain prefixes — env-driven invariants.
 #
 # Guards Goal #1 of the v0.5 refactor: every built-in service public hostname
-# (search, mq, argocd, hooks, registry) must be operator-overridable via .env,
-# not hardcoded in a template. caddyfile-fragments.bats covers search/mq
-# (which live in the Caddyfile); this file covers the k3s-tier ingress
-# templates + the registry plugin + the cloudflared reference doc.
+# (search, mq, registry) must be operator-overridable via .env, not hardcoded
+# in a template. caddyfile-fragments.bats covers search/mq (which live in the
+# Caddyfile again since the v0.3.1 host-data-layer revert); this file covers
+# the registry plugin + the cloudflared reference doc.
 #
 # Why a separate file: the search/mq vars are read by Caddy at runtime
-# (via `{$VAR:default}` syntax inside the Caddyfile). The argocd/hooks/
-# registry vars are substituted by render_template at install time. Different
-# mechanisms, different assertions.
+# (via `{$VAR:default}` syntax inside the Caddyfile). The registry vars are
+# substituted by render_template at install time. Different mechanisms,
+# different assertions.
 # =============================================================================
 
 setup() {
@@ -22,37 +22,8 @@ setup() {
   REGISTRY_MANIFEST="${INFRA_ROOT}/plugins/registry/self-hosted/manifest.yaml"
   REGISTRY_CFG="${INFRA_ROOT}/platform/lib/registry-config.sh"
   CONFIG_PHASE="${INFRA_ROOT}/bootstrap.d/02-config.sh"
-  COMPOSE_PHASE="${INFRA_ROOT}/bootstrap.d/04-compose.sh"
-  INGRESSROUTES="${INFRA_ROOT}/core/k8s/06-bridges/ingressroutes.template.yaml"
   CLOUDFLARED_REF="${INFRA_ROOT}/core/compose/cloudflared/config.template.yml"
   ENV_EXAMPLE="${INFRA_ROOT}/.env.example"
-}
-
-@test "bridges ingressroutes: Host() uses \${SEARCH_HOST}/\${MQ_HOST}, not literal 'search'/'mq'" {
-  # search/mq moved off Caddy in v0.3.0 (data layer now in-cluster); this
-  # Traefik IngressRoute is their new home. Same env-driven contract as
-  # argocd/hooks below, just a different rendering mechanism (render_template
-  # via bootstrap.d/04-compose.sh's export, not bootstrap.d/02-config.sh —
-  # see the comment in ingressroutes.template.yaml for why).
-  [ -r "$INGRESSROUTES" ]
-  run grep -E 'Host\(`\$\{SEARCH_HOST\}\.\$\{ROOT_DOMAIN\}`\)' "$INGRESSROUTES"
-  [ "$status" -eq 0 ]
-  run grep -E 'Host\(`\$\{MQ_HOST\}\.\$\{ROOT_DOMAIN\}`\)' "$INGRESSROUTES"
-  [ "$status" -eq 0 ]
-  run grep -E 'Host\(`search\.\$\{ROOT_DOMAIN\}`\)' "$INGRESSROUTES"
-  [ "$status" -ne 0 ]
-  run grep -E 'Host\(`mq\.\$\{ROOT_DOMAIN\}`\)' "$INGRESSROUTES"
-  [ "$status" -ne 0 ]
-}
-
-@test "bootstrap 04-compose: exports defaults for SEARCH_HOST / MQ_HOST" {
-  # Defaults must be set (and exported, so later-sourced phases inherit them)
-  # before render_template renders ingressroutes.template.yaml — its strict
-  # \${VAR} residue check would otherwise reject an unset SEARCH_HOST/MQ_HOST.
-  run grep -E 'export SEARCH_HOST="\$\{SEARCH_HOST:-search\}"' "$COMPOSE_PHASE"
-  [ "$status" -eq 0 ]
-  run grep -E 'export MQ_HOST="\$\{MQ_HOST:-mq\}"' "$COMPOSE_PHASE"
-  [ "$status" -eq 0 ]
 }
 
 @test "registry plugin manifest: Host() uses computed \${REGISTRY_HOST}" {
@@ -116,15 +87,26 @@ setup() {
   [ "$status" -ne 0 ]
 }
 
-@test "cloudflared reference doc: search/mq route to k3s Traefik NodePort, not caddy" {
-  # v0.3.0: search/mq are in-cluster now (core/k8s/06-bridges/), reached the
-  # same way every other k3s route is — not proxied through caddy anymore.
-  run grep -E 'hostname:\s+\$\{SEARCH_HOST\}\.\$\{ROOT_DOMAIN\}' "$CLOUDFLARED_REF"
-  [ "$status" -eq 0 ]
-  run grep -E 'hostname:\s+\$\{MQ_HOST\}\.\$\{ROOT_DOMAIN\}' "$CLOUDFLARED_REF"
-  [ "$status" -eq 0 ]
+@test "cloudflared reference doc: search/mq route through caddy (host data layer)" {
+  # v0.3.1: the data services are Compose containers again; their UIs ride
+  # the caddy HTTP tunnel class (@search/@mq in core/compose/Caddyfile),
+  # NOT the k3s Traefik NodePort.
   run grep -E 'service:\s+http://caddy:80' "$CLOUDFLARED_REF"
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 0 ]
+}
+
+@test "cloudflared reference doc: raw-TCP data tunnels present (pg/redis/rabbitmq)" {
+  # The second tunnel class alongside the HTTP UIs: raw-protocol passthrough
+  # straight to the Compose containers (cloudflared access tcp). Restored
+  # with the v0.3.1 host-data-layer revert.
+  run grep -E 'hostname:\s+pg\.\$\{ROOT_DOMAIN\}' "$CLOUDFLARED_REF"
+  [ "$status" -eq 0 ]
+  run grep -E 'hostname:\s+redis\.\$\{ROOT_DOMAIN\}' "$CLOUDFLARED_REF"
+  [ "$status" -eq 0 ]
+  run grep -E 'hostname:\s+rabbitmq\.\$\{ROOT_DOMAIN\}' "$CLOUDFLARED_REF"
+  [ "$status" -eq 0 ]
+  run grep -E 'service:\s+tcp://postgres:5432' "$CLOUDFLARED_REF"
+  [ "$status" -eq 0 ]
 }
 
 @test "REGISTRY_SUBDOMAIN override end-to-end: registry-config.sh respects override" {

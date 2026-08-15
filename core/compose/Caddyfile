@@ -1,20 +1,14 @@
 # =============================================================================
 # Caddy — internal HTTP reverse proxy
 # -----------------------------------------------------------------------------
+# - cloudflared forwards HTTP traffic for data UI subdomains here
 # - Caddy routes by Host header
 # - TLS is terminated at the Cloudflare edge — internal traffic is plain HTTP
+# - All host prefixes and upstreams are env-var driven (Caddy's {$VAR:default}
+#   syntax). Override in .env to relocate routes without forking this file.
 # - App-specific routes go in ./Caddyfile.d/*.caddy fragments — never edit
 #   this file to add an application route. See `outpost onboard` (the CLI
 #   subcommand) and docs/onboarding/example-fragments/ for the pattern.
-#
-# The built-in data-service UIs (search/mq) used to live here as @search/@mq
-# reverse-proxy handlers, back when Postgres/Redis/RabbitMQ/Manticore ran as
-# Compose containers reachable by container name. Now that they run
-# in-cluster (full mode: core/k8s/06-bridges/), those routes are a Traefik
-# IngressRoute instead — see core/k8s/06-bridges/ingressroutes.template.yaml.
-# They reach the outside world the same way every other k3s route does: CF
-# edge -> cloudflared -> host.docker.internal:30080 (Traefik NodePort),
-# bypassing Caddy entirely.
 # =============================================================================
 
 {
@@ -26,6 +20,20 @@
 }
 
 :80 {
+    # ----- built-in data-service UIs ----------------------------------------
+    # SEARCH_HOST / SEARCH_UPSTREAM / MQ_HOST / MQ_UPSTREAM all default to the
+    # in-network container names. Override only if you swap implementations or
+    # need different subdomain prefixes for your org.
+    @search host {$SEARCH_HOST:search}.{$ROOT_DOMAIN}
+    handle @search {
+        reverse_proxy {$SEARCH_UPSTREAM:manticore:9308}
+    }
+
+    @mq host {$MQ_HOST:mq}.{$ROOT_DOMAIN}
+    handle @mq {
+        reverse_proxy {$MQ_UPSTREAM:rabbitmq:15672}
+    }
+
     # ----- app-defined route fragments --------------------------------------
     # Each onboarded app drops one `.caddy` file in Caddyfile.d/ (via
     # `outpost onboard <repo>`). Adding routes here directly is an anti-pattern:

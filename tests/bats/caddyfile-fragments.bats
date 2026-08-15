@@ -1,19 +1,17 @@
 #!/usr/bin/env bats
 # =============================================================================
-# Caddyfile fragment loading + the data-service-UI migration off Caddy.
+# Caddyfile fragment loading + the built-in data-service UI routes.
 #
-# Guards invariants introduced by the env-ify refactor (v0.5) that are still
-# true after the v0.3.0 data-layer migration:
+# Guards invariants introduced by the env-ify refactor (v0.5):
 #   1. The main Caddyfile imports per-app fragments from Caddyfile.d/*.caddy.
 #   2. The compose caddy service mounts Caddyfile.d/ read-only.
+#   3. The @search/@mq UI handlers are env-driven ({$VAR:default}), never
+#      hardcoded per-org values.
 #
-# v0.3.0 moved Postgres/Redis/RabbitMQ/Manticore in-cluster (full mode); the
-# old @search/@mq reverse-proxy handlers (and their SEARCH_HOST/MQ_HOST/
-# SEARCH_UPSTREAM/MQ_UPSTREAM env passthrough) are GONE from this file — the
-# equivalent routes now live in
-# core/k8s/06-bridges/ingressroutes.template.yaml as a Traefik IngressRoute.
-# This file guards that migration stays clean (no regression back to Caddy
-# proxying data services it no longer runs).
+# History: v0.3.0 briefly moved the data layer in-cluster (handlers moved to
+# a Traefik IngressRoute); v0.3.1 reverted that by owner decision — stateful
+# services stay in host Compose, and the k3s side is an ExternalName bridge
+# (core/k8s/06-bridges/). This file guards the restored shape.
 #
 # These prevent regression back to the per-app-edit anti-pattern documented in
 # ADR 0002 (docs/decisions/0002-onboarding-primitives-in-platform.md).
@@ -24,32 +22,42 @@ setup() {
   CADDYFILE="${INFRA_ROOT}/core/compose/Caddyfile"
   COMPOSE="${INFRA_ROOT}/core/compose/docker-compose.yml"
   FRAG_DIR="${INFRA_ROOT}/core/compose/Caddyfile.d"
-  INGRESSROUTES="${INFRA_ROOT}/core/k8s/06-bridges/ingressroutes.template.yaml"
+  BRIDGES_DIR="${INFRA_ROOT}/core/k8s/06-bridges"
   [ -r "$CADDYFILE" ] || skip "core/compose/Caddyfile missing"
 }
 
-@test "Caddyfile: @search / @mq data-service UI handlers are gone (moved to k3s)" {
-  # Regression guard for the v0.3.0 data-layer migration — these routes must
-  # NOT come back to Caddy; Postgres/Redis/RabbitMQ/Manticore no longer run
-  # as Compose containers in full mode. Checks active directives only (not
-  # comment lines — the header comment above legitimately mentions the old
-  # @search/@mq names while explaining where they moved).
-  active_lines="$(grep -vE '^\s*#' "$CADDYFILE")"
-  ! grep -E '@search|@mq|SEARCH_UPSTREAM|MQ_UPSTREAM' <<< "$active_lines"
-}
-
-@test "ingressroutes.template.yaml: carries the search/mq routes instead" {
-  [ -r "$INGRESSROUTES" ]
-  run grep -E 'Host\(`\$\{SEARCH_HOST\}\.\$\{ROOT_DOMAIN\}`\)' "$INGRESSROUTES"
+@test "Caddyfile: @search / @mq data-service UI handlers present and env-driven" {
+  # v0.3.1 host-data-layer shape: the UIs ride Caddy again, with env-driven
+  # prefixes/upstreams ({$VAR:default}) so operators override via .env
+  # without forking the file.
+  run grep -E '@search host \{\$SEARCH_HOST:search\}\.\{\$ROOT_DOMAIN\}' "$CADDYFILE"
   [ "$status" -eq 0 ]
-  run grep -E 'Host\(`\$\{MQ_HOST\}\.\$\{ROOT_DOMAIN\}`\)' "$INGRESSROUTES"
+  run grep -E '@mq host \{\$MQ_HOST:mq\}\.\{\$ROOT_DOMAIN\}' "$CADDYFILE"
+  [ "$status" -eq 0 ]
+  run grep -E 'reverse_proxy \{\$SEARCH_UPSTREAM:manticore:9308\}' "$CADDYFILE"
+  [ "$status" -eq 0 ]
+  run grep -E 'reverse_proxy \{\$MQ_UPSTREAM:rabbitmq:15672\}' "$CADDYFILE"
   [ "$status" -eq 0 ]
 }
 
-@test "docker-compose: caddy service no longer exports SEARCH_HOST/MQ_HOST" {
-  # Dead-env cleanup — Caddy has no consumer for these anymore.
-  run grep -E 'SEARCH_HOST:|MQ_HOST:|SEARCH_UPSTREAM:|MQ_UPSTREAM:' "$COMPOSE"
+@test "06-bridges: ExternalName bridge Services only (no in-cluster data workloads)" {
+  # The k3s side of the data path is ExternalName → host.docker.internal.
+  # StatefulSets/Deployments must not come back without a new owner decision
+  # (v0.3.0's in-cluster move was reverted in v0.3.1).
+  for f in postgres redis rabbitmq manticore; do
+    run grep -E 'type:\s*ExternalName' "$BRIDGES_DIR/$f.yaml"
+    [ "$status" -eq 0 ]
+  done
+  run grep -rE '^kind:\s*(StatefulSet|Deployment)' "$BRIDGES_DIR"
   [ "$status" -ne 0 ]
+  [ ! -e "$BRIDGES_DIR/ingressroutes.template.yaml" ]
+}
+
+@test "docker-compose: caddy service passes SEARCH/MQ host + upstream env through" {
+  run grep -E 'SEARCH_HOST: \$\{SEARCH_HOST:-search\}' "$COMPOSE"
+  [ "$status" -eq 0 ]
+  run grep -E 'MQ_UPSTREAM: \$\{MQ_UPSTREAM:-rabbitmq:15672\}' "$COMPOSE"
+  [ "$status" -eq 0 ]
 }
 
 @test "Caddyfile: imports per-app fragments from Caddyfile.d/" {
@@ -81,17 +89,16 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-@test ".env.example: documents the SEARCH_HOST/MQ_HOST subdomain overrides (commented)" {
-  # SEARCH_UPSTREAM/MQ_UPSTREAM are NOT asserted here anymore — that
-  # "swap the upstream container:port" knob only made sense when Caddy
-  # proxied to a Compose container by name. The Traefik IngressRoute target
-  # (core/k8s/06-bridges/ingressroutes.template.yaml) is a fixed in-cluster
-  # Service name, not swappable via env.
+@test ".env.example: documents the SEARCH/MQ subdomain + upstream overrides (commented)" {
   ENV_EXAMPLE="${INFRA_ROOT}/.env.example"
   [ -r "$ENV_EXAMPLE" ] || skip "no .env.example"
   run grep -E '^#\s*SEARCH_HOST=' "$ENV_EXAMPLE"
   [ "$status" -eq 0 ]
   run grep -E '^#\s*MQ_HOST=' "$ENV_EXAMPLE"
+  [ "$status" -eq 0 ]
+  run grep -E '^#\s*SEARCH_UPSTREAM=' "$ENV_EXAMPLE"
+  [ "$status" -eq 0 ]
+  run grep -E '^#\s*MQ_UPSTREAM=' "$ENV_EXAMPLE"
   [ "$status" -eq 0 ]
 }
 

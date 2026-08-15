@@ -1,101 +1,11 @@
-# =============================================================================
-# RabbitMQ 3.13 + management plugin — in-cluster.
-# -----------------------------------------------------------------------------
-# AMQP on 5672 / Management UI on 15672 — same ports, same Service name
-# (rabbitmq.infra-bridges.svc.cluster.local) as the old ExternalName bridge.
-# The management UI itself now reaches the outside world via a Traefik
-# IngressRoute (see ingressroutes.template.yaml) instead of Caddy.
-#
-# Carried over from core/compose/docker-compose.yml `rabbitmq`: image pin,
-# 1536Mi memory cap, rabbitmq-diagnostics ping healthcheck.
-# =============================================================================
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: rabbitmq
-  namespace: infra-bridges
-  labels:
-    app: rabbitmq
-spec:
-  serviceName: rabbitmq
-  replicas: 1
-  updateStrategy:
-    type: RollingUpdate
-  selector:
-    matchLabels:
-      app: rabbitmq
-  template:
-    metadata:
-      labels:
-        app: rabbitmq
-    spec:
-      containers:
-        - name: rabbitmq
-          image: m.daocloud.io/docker.io/library/rabbitmq:3.13-management-alpine
-          ports:
-            - name: amqp
-              containerPort: 5672
-            - name: management
-              containerPort: 15672
-          env:
-            - name: RABBITMQ_DEFAULT_USER
-              valueFrom:
-                secretKeyRef: { name: infra-bridges-auth, key: rabbitmq-user }
-            - name: RABBITMQ_DEFAULT_PASS
-              valueFrom:
-                secretKeyRef: { name: infra-bridges-auth, key: rabbitmq-password }
-          volumeMounts:
-            - name: data
-              mountPath: /var/lib/rabbitmq
-          # Same cap as Compose's mem_limit: 1536m.
-          resources:
-            requests:
-              cpu: 100m
-              memory: 256Mi
-            limits:
-              memory: 1536Mi
-          readinessProbe:
-            exec:
-              command: ["rabbitmq-diagnostics", "ping"]
-            initialDelaySeconds: 20
-            periodSeconds: 30
-            timeoutSeconds: 10
-            failureThreshold: 5
-          livenessProbe:
-            exec:
-              command: ["rabbitmq-diagnostics", "ping"]
-            initialDelaySeconds: 30
-            periodSeconds: 30
-            timeoutSeconds: 10
-            failureThreshold: 5
-      volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: rabbitmq-data
----
-# local-path PVC. Same Retain-hardening note as postgres-data — see
-# postgres.yaml and the followups list.
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: rabbitmq-data
-  namespace: infra-bridges
-spec:
-  accessModes:
-    - ReadWriteOnce
-  storageClassName: local-path
-  resources:
-    requests:
-      storage: 10Gi
----
 apiVersion: v1
 kind: Service
 metadata:
   name: rabbitmq
   namespace: infra-bridges
 spec:
-  selector:
-    app: rabbitmq
+  type: ExternalName
+  externalName: host.docker.internal
   ports:
     - name: amqp
       port: 5672

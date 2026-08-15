@@ -14,10 +14,11 @@ treatises.
 
 | #    | Title                                            | Status   |
 |------|--------------------------------------------------|----------|
-| 0001 | [Two-layer split: Compose + k3s](0001-two-layer-split.md) | Accepted (amended by 0004) |
+| 0001 | [Two-layer split: Compose + k3s](0001-two-layer-split.md) | Accepted (placement restored by 0005) |
 | 0002 | [Onboarding primitives belong in the platform](0002-onboarding-primitives-in-platform.md) | Accepted |
 | 0003 | [CI/CD engine swap: GitHub Actions runner + manifest-sync](0003-github-actions-engine-swap.md) | Accepted |
-| 0004 | [Data layer moves into k3s (full mode)](0004-data-layer-in-k3s.md) | Accepted |
+| 0004 | [Data layer moves into k3s (full mode)](0004-data-layer-in-k3s.md) | Superseded by 0005 |
+| 0005 | [Data layer stays on the host (revert of 0004)](0005-data-layer-back-to-host.md) | Accepted |
 
 ## Authoring a new ADR
 

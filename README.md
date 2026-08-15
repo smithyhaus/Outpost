@@ -22,22 +22,24 @@
                        ▼                 ▼
               ┌──────────────┐    ┌──────────────────────────┐
               │  Compose     │    │  k3s cluster              │
-              │  (edge)      │    │                            │
-              │  cloudflared │    │  Postgres + pgvector       │
-              │  caddy       │    │  Redis / RabbitMQ / Manti- │
-              │              │    │  core (StatefulSets)       │
-              │              │    │  Registry + buildkitd       │
-              │              │    │  manifest-sync (CD)        │
-              │              │    │  Your apps                 │
+              │  (edge+data) │    │                            │
+              │  cloudflared │    │  Registry + buildkitd       │
+              │  caddy       │    │  manifest-sync (CD)        │
+              │  Postgres    │    │  Your apps                 │
+              │  Redis       │    │                            │
+              │  RabbitMQ    │    │  (infra-bridges ExternalName│
+              │  Manticore   │    │   → Compose data services) │
               └──────────────┘    └──────────────────────────┘
                                           ▲
                                           │ (host, outbound-only)
                               GitHub Actions self-hosted runner
 ```
 
-- **Data layer** — Postgres/Redis/RabbitMQ/Manticore run as k3s
-  `StatefulSet`s in `full` mode (pure Compose in `local` mode) — the
-  stateful services almost every project needs in development.
+- **Data layer** — Postgres/Redis/RabbitMQ/Manticore run as Compose
+  containers on the host in BOTH modes — the stateful services almost
+  every project needs. `full`-mode k3s pods reach them through the
+  `infra-bridges` ExternalName bridge with a self-healing CoreDNS hosts
+  entry. See [ADR-0005](docs/decisions/0005-data-layer-back-to-host.md).
 - **CI/CD** — push to git → a GitHub Actions self-hosted runner (host
   systemd service, pure outbound long-poll, no inbound webhook anywhere)
   builds and pushes the image → `manifest-sync` CronJob deploys it. See

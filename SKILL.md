@@ -61,27 +61,26 @@ Host (outside both Compose and k3s):
   outpost-verify.timer (systemd, 30min) → verify.sh --quiet → notify on FAIL
 ```
 
-**Layer boundaries in v0.3.0:**
-- Compose (`edge` profile) is ingress-only in `full` mode: `cloudflared` +
-  `caddy`. `local` mode additionally carries the whole data layer in
-  Compose (`local-data` profile) — no k3s at all.
-- k3s carries the `full`-mode data layer (`infra-bridges` StatefulSets),
-  stateless apps, and the CI/CD glue (`outpost-ci` namespace).
-- Apps reach the data layer via ordinary in-cluster Service DNS in
-  `infra-bridges` — no bridge/`ExternalName` indirection anymore
-  ([ADR-0004](docs/decisions/0004-data-layer-in-k3s.md)):
+**Layer boundaries in v0.3.1:**
+- Compose carries the data layer in BOTH modes (`local-data` profile:
+  postgres/redis/rabbitmq/manticore) plus, in `full` mode, the public
+  ingress edge (`edge` profile: `cloudflared` + `caddy`).
+- k3s carries stateless apps and the CI/CD glue (`outpost-ci` namespace).
+- `full`-mode pods reach the data layer through the `infra-bridges`
+  `ExternalName` bridge → `host.docker.internal` → a CoreDNS custom hosts
+  entry, self-healed by the `coredns-hosts-reconciler` CronJob
+  ([ADR-0005](docs/decisions/0005-data-layer-back-to-host.md)):
 
 ```
-postgres.infra-bridges.svc.cluster.local       → StatefulSet postgres:5432
-redis.infra-bridges.svc.cluster.local          → StatefulSet redis:6379
-rabbitmq.infra-bridges.svc.cluster.local       → StatefulSet rabbitmq:5672
-manticore.infra-bridges.svc.cluster.local      → StatefulSet manticore:9308 (HTTP)
-manticore.infra-bridges.svc.cluster.local      → StatefulSet manticore:9306 (SQL)
+postgres.infra-bridges.svc.cluster.local   → host.docker.internal:5432      → Compose postgres
+redis.infra-bridges.svc.cluster.local      → host.docker.internal:6379      → Compose redis
+rabbitmq.infra-bridges.svc.cluster.local   → host.docker.internal:5672      → Compose rabbitmq
+manticore.infra-bridges.svc.cluster.local  → host.docker.internal:9308/9306 → Compose manticore
 ```
 
 Apps reference these DNS names. To migrate to managed cloud services in
-production, swap the Service to `ExternalName` — application code stays
-unchanged either way.
+production, point the `externalName` at the managed endpoint — application
+code stays unchanged either way.
 
 ## 3. File pointer map
 
@@ -99,7 +98,7 @@ unchanged either way.
 | Traefik NodePort config | `core/k8s/01-traefik-config.yaml` |
 | CI/CD engine (RBAC, PVC, sync CronJob, NodePorts) | `core/k8s/03-ci/` |
 | Buildkitd (do-not-modify, quenched) | `core/k8s/08-buildkit/` |
-| Bridge services (data layer StatefulSets, `full` mode) | `core/k8s/06-bridges/` |
+| Bridge services (ExternalName → host Compose data, + CoreDNS reconciler) | `core/k8s/06-bridges/` |
 | GitHub Actions workflow template | `templates/github/outpost-build.yml` |
 | Host-run CI scripts (build/test/publish) | `scripts/ci/` |
 | In-cluster manifest-sync script | `scripts/sync/manifest-sync.sh` |
@@ -331,9 +330,10 @@ kubectl get cronjob -n outpost-ci manifest-sync
 kubectl get configmap sync-heartbeat -n outpost-ci -o yaml
 kubectl get jobs -n outpost-ci -l app=manifest-sync --sort-by=.metadata.creationTimestamp | tail -5
 
-# Bridges (data layer, full mode — real in-cluster pods now)
-kubectl get pods -n infra-bridges
+# Bridges (data layer bridge, full mode — ExternalName → host Compose)
 kubectl get svc -n infra-bridges
+kubectl -n kube-system get cronjob coredns-hosts-reconciler
+docker inspect -f '{{.State.Health.Status}}' postgres redis rabbitmq manticore
 
 # CI (host side)
 systemctl status 'actions.runner.*'
@@ -461,8 +461,8 @@ docker compose -f core/compose/docker-compose.yml restart cloudflared
 - Production HA / multi-node / backup-restore (intentionally not the goal)
 - GPU pass-through
 - cert-manager / ACME (TLS lives at Cloudflare edge)
-- Automated StatefulSet volume snapshots / backups for the data layer
-  (single-node/single-operator scope — see ADR-0004; manual dump-first
+- Automated volume snapshots / backups for the data layer
+  (single-node/single-operator scope — see ADR-0005; manual dump-first
   discipline is the current answer)
 - Reintroducing an inbound webhook path (see ADR-0003 — this was tried,
   and repeatedly failed silently)

@@ -124,12 +124,13 @@ record PASS "platform.os" "$SK_OS"
 record PASS "platform.mode" "OUTPOST_MODE=$OUTPOST_MODE"
 
 # ---- 2. Compose layer -------------------------------------------------------
-# Per-profile: full = `edge` (caddy + cloudflared; data layer lives in k3s),
-# local = `local-data` (the four data services ARE the stack).
-section "2. Compose ($([[ "$OUTPOST_MODE" == "full" ]] && echo edge || echo local-data) profile)"
+# Per-profile: full = `edge` + `local-data` (ingress AND the data layer —
+# stateful services stay in Compose in both modes, owner decision v0.3.1),
+# local = `local-data` only (the four data services ARE the stack).
+section "2. Compose ($([[ "$OUTPOST_MODE" == "full" ]] && echo "edge + local-data" || echo local-data) profiles)"
 if docker_ok; then
   if [[ "$OUTPOST_MODE" == "full" ]]; then
-    COMPOSE_SVCS=(cloudflared caddy)
+    COMPOSE_SVCS=(cloudflared caddy postgres redis rabbitmq manticore)
   else
     COMPOSE_SVCS=(postgres redis rabbitmq manticore)
   fi
@@ -510,26 +511,59 @@ else
   fi
 fi
 
-# ---- 7. Data layer (in-cluster, real probes) ----------------------------------
-# Capability≠liveness: a Running pod can still refuse auth/connections. Probe
-# each service with its OWN protocol from inside the pod (credentials expand
-# IN-POD from the container env — no secret ever appears in a host command
-# line or in this output). Refusal = FAIL: 17 apps die with the data layer.
-section "7. Data layer (infra-bridges)"
-if kubectl_ok; then
+# ---- 7. Data layer (host Compose + k3s bridge, real probes) ------------------
+# Capability≠liveness: a running container can still refuse auth/connections.
+# Probe each service with its OWN protocol via docker exec. Credentials travel
+# through the environment (in-container env, or `docker exec -e VAR`
+# propagation for redis) — no secret ever appears in a host command line or in
+# this output. Refusal = FAIL: 17 apps die with the data layer.
+section "7. Data layer (host Compose + infra-bridges bridge)"
+if docker_ok; then
   data_probe() {
-    # $1 id-suffix, $2 workload (kind/name), $3... command
-    local id="$1" wl="$2"; shift 2
-    if kubectl -n infra-bridges exec --request-timeout=10s "$wl" -- "$@" >/dev/null 2>&1; then
-      record PASS "data.$id" "live ($wl probe ok)"
+    # $1 id-suffix, $2 container, remaining args = in-container command
+    local id="$1" ctr="$2"; shift 2
+    if docker exec "$ctr" "$@" >/dev/null 2>&1; then
+      record PASS "data.$id" "live ($ctr probe ok)"
     else
-      record FAIL "data.$id" "$wl probe FAILED — service down or refusing auth (kubectl -n infra-bridges get pods)"
+      record FAIL "data.$id" "$ctr probe FAILED — container down or refusing auth (docker logs $ctr --tail 20)"
     fi
   }
-  data_probe postgres  sts/postgres   sh -c 'pg_isready -U "$POSTGRES_USER"'
-  data_probe redis     deploy/redis   sh -c 'redis-cli -a "$REDIS_PASSWORD" ping 2>/dev/null | grep -q PONG'
-  data_probe rabbitmq  sts/rabbitmq   rabbitmq-diagnostics -q ping
-  data_probe manticore sts/manticore  sh -c 'wget -q -O- http://127.0.0.1:9308/ >/dev/null 2>&1 || curl -fsS http://127.0.0.1:9308/ >/dev/null 2>&1 || mysql -h127.0.0.1 -P9306 -e "SHOW STATUS" >/dev/null 2>&1'
+  data_probe postgres  postgres  sh -c 'pg_isready -U "$POSTGRES_USER"'
+  # Compose passes REDIS_PASSWORD only into redis-server's command line, not
+  # the container env — hand it to the probe via `docker exec -e` (env-to-env
+  # propagation from verify.sh's sourced .env; never on an argv).
+  if docker exec -e REDIS_PASSWORD redis sh -c 'redis-cli -a "$REDIS_PASSWORD" ping 2>/dev/null | grep -q PONG' >/dev/null 2>&1; then
+    record PASS "data.redis" "live (redis probe ok)"
+  else
+    record FAIL "data.redis" "redis probe FAILED — container down or refusing auth (docker logs redis --tail 20)"
+  fi
+  data_probe rabbitmq  rabbitmq  rabbitmq-diagnostics -q ping
+  data_probe manticore manticore sh -c 'wget -q -O- http://127.0.0.1:9308/ >/dev/null 2>&1 || curl -fsS http://127.0.0.1:9308/ >/dev/null 2>&1 || mysql -h127.0.0.1 -P9306 -e "SHOW STATUS" >/dev/null 2>&1'
+fi
+# Bridge freshness (full mode): pods reach the Compose data layer via
+# ExternalName → host.docker.internal → the coredns-custom hosts entry. A WSL
+# restart hands the VM a NEW IP; a stale entry strands every app pod at once
+# (the recorded #1 whole-site outage mode). The reconciler CronJob rewrites it
+# within ~2min — a mismatch here is either that short window or a dead
+# reconciler; treat as FAIL so it never fades into background noise.
+if [[ "$OUTPOST_MODE" == "full" ]] && kubectl_ok; then
+  _node_ip=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || true)
+  _dns_ip=$(kubectl -n kube-system get configmap coredns-custom \
+    -o jsonpath='{.data.hostdockerinternal\.server}' 2>/dev/null \
+    | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+  if [[ -z "$_dns_ip" ]]; then
+    record FAIL "data.bridge_dns" "coredns-custom hosts entry missing — pods cannot resolve host.docker.internal (rerun bootstrap Phase 8)"
+  elif [[ "$_dns_ip" != "$_node_ip" ]]; then
+    record FAIL "data.bridge_dns" "bridge DNS stale: coredns-custom → $_dns_ip but node InternalIP is $_node_ip (reconciler heals in ~2min; persistent mismatch = reconciler dead)"
+  else
+    record PASS "data.bridge_dns" "host.docker.internal → $_node_ip (matches node InternalIP)"
+  fi
+  if kubectl -n kube-system get cronjob coredns-hosts-reconciler >/dev/null 2>&1; then
+    record PASS "data.bridge_reconciler" "coredns-hosts-reconciler CronJob present"
+  else
+    record FAIL "data.bridge_reconciler" "coredns-hosts-reconciler CronJob missing — next WSL IP drift strands all app pods (kubectl apply -f core/k8s/06-bridges/)"
+  fi
+  unset _node_ip _dns_ip
 fi
 
 # ---- 8. Public ingress ------------------------------------------------------
