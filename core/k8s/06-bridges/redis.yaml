@@ -1,11 +1,117 @@
+# =============================================================================
+# Redis 7 (AOF + RDB persistence, password required) — in-cluster.
+# -----------------------------------------------------------------------------
+# Deployment, not StatefulSet: single replica, no per-pod network identity
+# needed — the ClusterIP Service below is the stable address apps already
+# use (redis.infra-bridges.svc.cluster.local:6379, unchanged).
+#
+# Carried over from core/compose/docker-compose.yml `redis`: image pin,
+# persistence flags, 4gb maxmemory / allkeys-lru, 5Gi memory cap, redis-cli
+# ping healthcheck.
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: infra-bridges
+  labels:
+    app: redis
+spec:
+  replicas: 1
+  # RWO local-path volume — a second pod can't attach it. Single-node dev
+  # box: fine, mirrors Compose's single-container model.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: m.daocloud.io/docker.io/library/redis:7-alpine
+          ports:
+            - containerPort: 6379
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: infra-bridges-auth, key: redis-password }
+          command: ["redis-server"]
+          # $(VAR) is k8s' own container-field substitution (not a shell
+          # feature) — it resolves from the container's own `env:` above.
+          args:
+            - "--requirepass"
+            - "$(REDIS_PASSWORD)"
+            - "--appendonly"
+            - "yes"
+            - "--appendfsync"
+            - "everysec"
+            - "--save"
+            - "900 1"
+            - "--save"
+            - "300 10"
+            - "--save"
+            - "60 10000"
+            - "--maxmemory"
+            - "4gb"
+            - "--maxmemory-policy"
+            - "allkeys-lru"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          # maxmemory 4g (above) + AOF/fork overhead headroom — same 5Gi cap
+          # as Compose's mem_limit.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 5Gi
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" ping"]
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: redis-data
+---
+# local-path PVC. Same Retain-hardening note as postgres-data — see
+# postgres.yaml and the followups list.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data
+  namespace: infra-bridges
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 6Gi
+---
 apiVersion: v1
 kind: Service
 metadata:
   name: redis
   namespace: infra-bridges
 spec:
-  type: ExternalName
-  externalName: host.docker.internal
+  selector:
+    app: redis
   ports:
     - port: 6379
       targetPort: 6379

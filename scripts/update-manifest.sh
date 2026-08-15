@@ -1,11 +1,11 @@
 #!/bin/sh
 # =============================================================================
 # update-manifest.sh — bump the image reference for one app in the manifest
-# repo and commit the change. Used by the `update-manifest-task` Tekton Task
-# (mounted via ConfigMap) AND directly by `tests/bats/update-manifest.bats`.
+# repo and commit the change. Called by the GHA workflow's update-manifest
+# step (templates/github/outpost-build.yml), by `outpost rollback`, AND
+# directly by `tests/bats/update-manifest.bats`.
 #
-# Single source of truth: edit ONLY this file. The Tekton Task ConfigMap is
-# rebuilt from this file on every `bootstrap.sh` run.
+# Single source of truth: edit ONLY this file.
 #
 # ----- Inputs (env vars, all required) -----
 #   MANIFEST_REPO_URL   HTTPS URL ending in .git
@@ -13,12 +13,15 @@
 #   APP_NAME            subdir under apps/, e.g. hello-go
 #   IMAGE               full image ref, e.g. registry.example.com/hello-go:abc1234
 #   COMMIT_MESSAGE      git commit subject
-#   WORK_DIR            writable scratch dir (Tekton workspace path)
+#   WORK_DIR            writable scratch dir (workflow: $RUNNER_TEMP)
 #
 # Optional:
 #   GIT_CRED_FILE       path to .git-credentials (default: $WORK_DIR/.git-credentials)
-#   GIT_USER_EMAIL      committer email   (default: tekton-ci@local)
-#   GIT_USER_NAME       committer name    (default: Tekton CI)
+#                       When absent, GIT_USER+GIT_TOKEN env vars (from .env,
+#                       sourced by the workflow step) synthesize the store
+#                       entry for the MANIFEST_REPO_URL host.
+#   GIT_USER_EMAIL      committer email   (default: outpost-ci@local)
+#   GIT_USER_NAME       committer name    (default: Outpost CI)
 #   YQ_BIN              path to yq        (default: /usr/local/bin/yq)
 #                       If yq is missing, the script will install
 #                       mikefarah/yq v4.44.3 to /usr/local/bin/yq.
@@ -43,6 +46,15 @@
 # =============================================================================
 set -eu
 
+# ---- Shared repo-name → apps/<dir> mapping ----------------------------------
+# The resolution convention lives in scripts/lib/manifest-map.sh so verify.sh
+# reconciliation and `outpost rollback` use the EXACT same mapping. Resolve
+# the lib relative to this script BEFORE any cd; MANIFEST_MAP_LIB overrides
+# for callers that relocate the script (e.g. a ConfigMap mount).
+_SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=lib/manifest-map.sh
+. "${MANIFEST_MAP_LIB:-$_SCRIPT_DIR/lib/manifest-map.sh}"
+
 # ---- Validate required inputs ------------------------------------------------
 : "${MANIFEST_REPO_URL:?env MANIFEST_REPO_URL is required}"
 : "${MANIFEST_BRANCH:?env MANIFEST_BRANCH is required}"
@@ -52,8 +64,8 @@ set -eu
 : "${WORK_DIR:?env WORK_DIR is required}"
 
 GIT_CRED_FILE="${GIT_CRED_FILE:-$WORK_DIR/.git-credentials}"
-GIT_USER_EMAIL="${GIT_USER_EMAIL:-tekton-ci@local}"
-GIT_USER_NAME="${GIT_USER_NAME:-Tekton CI}"
+GIT_USER_EMAIL="${GIT_USER_EMAIL:-outpost-ci@local}"
+GIT_USER_NAME="${GIT_USER_NAME:-Outpost CI}"
 YQ_BIN="${YQ_BIN:-/usr/local/bin/yq}"
 
 # ---- Ensure yq is available --------------------------------------------------
@@ -103,8 +115,15 @@ IMAGE_NAME="${IMAGE%:*}"
 IMAGE_TAG="${IMAGE##*:}"
 
 # ---- Configure git credentials ----------------------------------------------
+# File-shaped first (the old Tekton-workspace contract, still used by bats);
+# env-shaped fallback (GIT_USER/GIT_TOKEN from .env — the GHA workflow path,
+# same branch manifest-sync.sh uses). NEVER echo the token.
 if [ -f "$GIT_CRED_FILE" ]; then
   cp "$GIT_CRED_FILE" "$HOME/.git-credentials"
+elif [ -n "${GIT_USER:-}" ] && [ -n "${GIT_TOKEN:-}" ]; then
+  _cred_host=$(printf '%s' "$MANIFEST_REPO_URL" | sed -E 's|^[a-z+]+://([^/]+)/.*$|\1|')
+  printf 'https://%s:%s@%s\n' "$GIT_USER" "$GIT_TOKEN" "$_cred_host" > "$HOME/.git-credentials"
+  unset _cred_host
 fi
 git config --global credential.helper "store"
 git config --global user.email "$GIT_USER_EMAIL"
@@ -116,19 +135,12 @@ rm -rf repo
 git clone --depth 1 --branch "$MANIFEST_BRANCH" "$MANIFEST_REPO_URL" repo
 cd repo
 
-# Resolve the manifest app dir. The GitHub repo name (APP_NAME) often carries an
-# `fst-` prefix or `-web` suffix that the manifest dir drops
-# (fst-product-service -> product-service, fst-admin-web -> fst-admin,
-# fst-bff-ops -> bff-ops). The BFFs live INSIDE their frontend's app dir
-# (fst-bff-admin -> apps/fst-admin, fst-bff-miniapp -> apps/fst-miniapp),
-# hence the fst-bff-* -> fst-* variant. Try the known variants in order.
-APP_DIR=""
-_bff_cand=$(printf '%s' "$APP_NAME" | sed 's/^fst-bff-/fst-/')
-for _cand in "$APP_NAME" "${APP_NAME#fst-}" "${APP_NAME%-web}" "$_bff_cand"; do
-  if [ -d "apps/$_cand" ]; then APP_DIR="apps/$_cand"; break; fi
-done
-if [ -z "$APP_DIR" ]; then
-  echo "ERROR: no manifest dir for '$APP_NAME' (tried apps/$APP_NAME, apps/${APP_NAME#fst-}, apps/${APP_NAME%-web}, apps/$_bff_cand)." >&2
+# Resolve the manifest app dir via the shared mapping lib (repo-name affix
+# variants: fst- prefix, -web suffix, fst-bff-* → fst-*). See
+# scripts/lib/manifest-map.sh for the full convention writeup.
+if ! APP_DIR=$(resolve_manifest_app_dir "$APP_NAME" .); then
+  _tried=$(manifest_app_dir_candidates "$APP_NAME" | sort -u | sed 's|^|apps/|' | tr '\n' ' ')
+  echo "ERROR: manifest dir for '$APP_NAME' not found (tried: ${_tried})." >&2
   echo "       Add the directory with either kustomization.yaml or deployment.yaml first." >&2
   exit 1
 fi

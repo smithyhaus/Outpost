@@ -27,8 +27,8 @@ git push -u origin main
 
 ## Wire up the manifest repo
 
-Copy the four YAMLs (3 in `manifest/`, plus `argocd-application.yaml`)
-into your manifest repo. Replace `example.com` and the manifest repo
-URL with your real values.
+Copy the YAMLs in `manifest/` into your manifest repo under
+`apps/<name>/` (or let `outpost manifest scaffold` generate them).
+Replace `example.com` with your real domain.
 
 Full walkthrough: `../README.md`.

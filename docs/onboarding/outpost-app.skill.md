@@ -112,16 +112,20 @@ Ask the user (only on first-time install — skip if `outpost` already exists):
 
 > Outpost needs to know whether to run in **local mode** (just stateful
 > services on your laptop — zero config) or **full mode** (public access
-> via your own domain + Cloudflare Tunnel + GitOps CI/CD).
+> via your own domain + Cloudflare Tunnel + CI/CD).
 >
 > 1. Mode? [`local` / `full`]
 >
 > If `full`, also need:
 >   2. `ROOT_DOMAIN` (e.g. `mycompany.com`)
 >   3. `CF_TUNNEL_TOKEN` (Cloudflare Dashboard → Zero Trust → Tunnels)
->   4. `GIT_USER` + `GIT_TOKEN` (for ArgoCD + Tekton)
->   5. `MANIFEST_REPO_URL` (an empty Git repo with `apps/` and
->      `argocd-apps/` directories — ArgoCD's source of truth)
+>   4. `GIT_USER` + `GIT_TOKEN` (for the manifest repo)
+>   5. `MANIFEST_REPO_URL` (an empty Git repo with an `apps/` directory —
+>      the deploy source of truth `manifest-sync` pulls from)
+>   6. `GITHUB_RUNNER_URL` (e.g. `https://github.com/<org>`) +
+>      `GITHUB_RUNNER_PAT` (a PAT scoped to mint runner registration
+>      tokens) — for the CI runner that builds on push. No webhook secret
+>      needed anywhere; the runner is pure outbound long-poll.
 
 Default to `local` if the user says "just deploy locally" or doesn't know.
 
@@ -132,7 +136,7 @@ Default to `local` if the user says "just deploy locally" or doesn't know.
 curl -fsSL https://raw.githubusercontent.com/smithyhaus/Outpost/main/install.sh \
   | APP_REPO="<this-app's-git-url-or-local-path>" bash
 
-# Full mode (with Cloudflare + GitOps):
+# Full mode (with Cloudflare + CI/CD):
 curl -fsSL https://raw.githubusercontent.com/smithyhaus/Outpost/main/install.sh \
   | OUTPOST_MODE=full \
     ROOT_DOMAIN=<value> \
@@ -140,16 +144,46 @@ curl -fsSL https://raw.githubusercontent.com/smithyhaus/Outpost/main/install.sh 
     GIT_USER=<value> \
     GIT_TOKEN=<value> \
     MANIFEST_REPO_URL=<value> \
+    GITHUB_RUNNER_URL=<value> \
+    GITHUB_RUNNER_PAT=<value> \
     APP_REPO="<this-app's-git-url-or-local-path>" \
     bash
 ```
 
 `APP_REPO` makes the installer automatically run `outpost onboard` after
-bootstrap completes — no second command needed.
+bootstrap completes — which registers the repo in `OUTPOST_REPOS` and
+prints the CI workflow + dual-push setup (see §6). No second command
+needed for registration; the workflow-copy / dual-push steps below are
+still manual (they touch the app repo, not this machine).
 
 ## 6. Onboarding an app on an existing Outpost
 
 If `outpost` is already on PATH (re-trigger, second app on same machine):
+
+### CI registration (every onboard, both tiers)
+
+`outpost onboard <repo-url-or-path>` **always** does this part first,
+regardless of tier:
+
+1. Appends the repo's clone URL to `OUTPOST_REPOS` in `.env` — this is
+   what makes `verify.sh`'s reconciliation layer watch the repo; an
+   unregistered repo is invisible to it.
+2. Prints the CI hookup steps and offers to copy
+   `templates/github/outpost-build.yml` straight into
+   `<repo>/.github/workflows/outpost-build.yml`.
+3. Reminds you to set up **dual-push** so the github copy (the CI trigger
+   surface) tracks gitee (the primary push target):
+   ```bash
+   git remote set-url --add --push origin <gitee-url>
+   git remote set-url --add --push origin <github-url>
+   ```
+   (alternative: gitee's official **one-way** push-mirror gitee→github —
+   never the bidirectional mirror, gitee's own docs warn of a lost-commit
+   race). **There is no webhook to register anywhere** — the runner
+   long-polls github.com outbound-only.
+
+Commit the workflow file, push (both remotes fire on one `git push` with
+dual-push configured), and the next push after that builds automatically.
 
 ### tier=k3s (stateless — DEFAULT for applications)
 
@@ -158,7 +192,8 @@ If `outpost` is already on PATH (re-trigger, second app on same machine):
 git clone "$MANIFEST_REPO_URL" ~/code/my-manifests
 
 # Onboard scaffolds deployment.yaml + service.yaml + ingress.yaml +
-# kustomization.yaml + the argocd-app pointing at it.
+# kustomization.yaml pointing at it (in addition to the CI registration
+# above).
 cd "$REPO_ROOT"
 outpost onboard . \
   --manifests-dir ~/code/my-manifests \
@@ -172,7 +207,8 @@ matching `Host(`<name>-apps.<ROOT_DOMAIN>`)`. See
 `examples/outpost.app.yaml.multiproduct.example` (in the Outpost repo)
 for the reference comment block.
 
-Then commit + push the manifest repo — ArgoCD picks it up automatically.
+Then commit + push the manifest repo — the `manifest-sync` CronJob picks
+it up within `MANIFEST_SYNC_INTERVAL` minutes (default 2).
 
 ### tier=compose (stateful infrastructure — rare)
 
@@ -201,8 +237,8 @@ automatically takes precedence over `*.example.com` (wildcard).
 # Compose-tier infra: container running?
 docker ps | grep "<your-name>"
 
-# k3s-tier apps: ArgoCD synced + pods running?
-outpost status
+# k3s-tier apps: manifest-sync converged + pods running?
+outpost status          # sync-heartbeat: last_sync_ts / applied_head / last_result
 kubectl get pods -n apps
 
 # Public reachability (full mode):
@@ -217,7 +253,7 @@ curl -i "https://<host-from-outpost.app.yaml-or-ingress>"
 | `tier=compose host ... ends with the apps naming convention` | Used the `-apps.<root>` suffix for a compose-tier service | Switch to `tier=k3s` (probably what you want) OR pick a non-apps top-level prefix |
 | `outpost: command not found` | `~/.local/bin` not on PATH | Append `export PATH=...` to shell rc |
 | `caddy reload failed` | Fragment syntax error | `docker logs caddy --tail 30`; fix yaml; rerun `outpost onboard .` |
-| 502 from `<my-app>-apps.<root>` | App pod not Healthy in ArgoCD | `kubectl get pods -n apps`; `kubectl logs -n apps <pod>` |
+| 502 from `<my-app>-apps.<root>` | App pod not Running/Ready, or manifest-sync hasn't applied the latest manifest yet | `kubectl get pods -n apps`; `kubectl logs -n apps <pod>`; `outpost logs sync` |
 | `tier=compose host '<x>-apps.<root>'` rejected | tried to put an app on the apps naming convention as tier=compose | switch to `tier=k3s` (probably what you want) OR pick a non-apps prefix |
 
 ## 9. What this skill must NOT do

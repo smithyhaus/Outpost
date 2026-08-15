@@ -6,12 +6,25 @@
 > dev workstation, just connect to `localhost:5432` and **skip this
 > entire doc**.
 
-HTTP services (ArgoCD UI / RabbitMQ UI / Manticore HTTP / Registry) work
-directly in the browser via `https://...` and do NOT need this doc.
+HTTP services (RabbitMQ UI / Manticore HTTP API / Registry) work directly
+in the browser via `https://...` and do NOT need this doc.
 **TCP services** (PostgreSQL / Redis / RabbitMQ AMQP) need a different
 path because IDE clients can't speak Cloudflare's tunnel protocol — you
 install `cloudflared` on the dev workstation and have it map the remote
 service to `localhost:<port>`.
+
+> **v0.3.0 prerequisite.** A `cloudflared access tcp` client needs a TCP
+> Public Hostname whose origin the Outpost host's `cloudflared` container
+> can actually reach. In `full` mode the data services are k3s
+> `StatefulSet`s behind ClusterIP Services in `infra-bridges` — there is no
+> Compose container named `postgres` any more — so expose the port on the
+> Outpost host first (e.g.
+> `kubectl -n infra-bridges port-forward --address 0.0.0.0 svc/postgres 5432:5432`)
+> and point the CF TCP row at `host.docker.internal:5432`. Also note that
+> `CF_TUNNEL_PROTOCOL=http2` (the fallback for networks that block QUIC's
+> UDP/7844) **cannot serve `cloudflared access` TCP routes at all** — on
+> such a network, reach the databases over SSH/`kubectl port-forward`
+> instead.
 
 ## 1. Install cloudflared
 

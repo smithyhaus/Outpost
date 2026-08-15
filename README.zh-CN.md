@@ -22,18 +22,26 @@
                     ▼                 ▼
             ┌──────────────┐    ┌────────────────────┐
             │  Compose     │    │  k3s 集群            │
-            │              │    │                     │
-            │  Postgres    │    │  ArgoCD (GitOps CD) │
-            │  + pgvector  │    │  Tekton + Webhook   │
-            │  Redis       │    │  Docker Registry    │
-            │  RabbitMQ    │    │  你的应用            │
-            │  Manticore   │    │                     │
+            │  (edge)      │    │                     │
+            │  cloudflared │    │  Postgres + pgvector │
+            │  caddy       │    │  Redis/RabbitMQ/     │
+            │              │    │  Manticore (有状态)  │
+            │              │    │  Registry + buildkitd │
+            │              │    │  manifest-sync (CD)  │
+            │              │    │  你的应用            │
             └──────────────┘    └────────────────────┘
+                                        ▲
+                                        │ (宿主机，仅出站)
+                            GitHub Actions 自托管 runner
 ```
 
-- **数据层（Compose）** —— 跑几乎每个项目都需要的有状态服务。
-- **应用层（k3s）** —— 跑你的应用 + 完整 GitOps 流水线：
-  push 代码 → Tekton 构建 → 推 Registry → ArgoCD 部署。
+- **数据层** —— `full` 模式下 Postgres/Redis/RabbitMQ/Manticore 以 k3s
+  `StatefulSet` 运行（`local` 模式下是纯 Compose）—— 几乎每个项目都需要
+  的有状态服务。
+- **CI/CD** —— push 代码 → GitHub Actions 自托管 runner（宿主机 systemd
+  服务，纯出站长轮询，全程无任何入站 webhook）构建并推送镜像 →
+  `manifest-sync` CronJob 部署。详见 [`ARCHITECTURE.md`](ARCHITECTURE.md)
+  和 [ADR-0003](docs/decisions/0003-github-actions-engine-swap.md)。
 - **一个 Cloudflare Tunnel** 把所有东西暴露在你自己域名的子域上。
   不需要路由器配置、不需要公网 IP，双层 NAT 也能用。
 
@@ -44,7 +52,7 @@ Outpost 提供两种模式，按当前需求挑一个。
 | 模式 | 跑什么 | 必填项 | 适用场景 |
 |------|--------|--------|----------|
 | **`local`** *(默认)* | Compose 数据服务跑在 `localhost`：PG、Redis、RabbitMQ、Manticore Search | 无 —— 全部默认值或自动生成 | 本机当个人开发后端，不需要公网，不需要 CI/CD |
-| **`full`** | `local` 的全部 + Cloudflare Tunnel + k3s + ArgoCD + Tekton | `ROOT_DOMAIN`、`CF_TUNNEL_TOKEN`、`GIT_USER`、`GIT_TOKEN`、`MANIFEST_REPO_URL` | 需要把服务挂到自己域名上 + push 即部署的 GitOps |
+| **`full`** | k3s 数据层 + Cloudflare Tunnel + GitHub Actions 自托管 runner + manifest-sync CD | `ROOT_DOMAIN`、`CF_TUNNEL_TOKEN`、`GIT_USER`、`GIT_TOKEN`、`MANIFEST_REPO_URL`、`GITHUB_RUNNER_URL`、`GITHUB_RUNNER_PAT` | 需要把服务挂到自己域名上 + push 即部署的 CI/CD |
 
 通过修改 `.env` 里的 `OUTPOST_MODE` 切换。重跑 `bash bootstrap.sh` 是幂等的；`.env` 里已有的密码会被复用。
 
@@ -71,22 +79,33 @@ bash bootstrap.sh          # 默认就是 local 模式，无需改 .env
 
 需要先准备：
 1. 一个 Cloudflare 账号 + 域名（NS 已切到 Cloudflare）+ 一个 Tunnel token（[`docs/01`](i18n/zh-CN/docs/01-cloudflare-setup.md)）
-2. 一个 Gitee / GitHub / GitLab **空 manifest 仓库**（含 `apps/` 和 `argocd-apps/` 两个空目录）+ 一个 PAT
-3. `.env` 里 6 个必填字段：`OUTPOST_MODE=full`、`ROOT_DOMAIN`、`CF_TUNNEL_TOKEN`、`GIT_USER`、`GIT_TOKEN`、`MANIFEST_REPO_URL`
+2. 一个 Gitee / GitHub / GitLab **空 manifest 仓库**（含 `apps/` 空目录）+ 一个 PAT
+3. 一个 GitHub org（或个人账号）用来注册自托管 runner，以及一个能签发
+   runner 注册 token 的 PAT
+4. `OUTPOST_REPOS` —— 要监视的 app 仓库（逗号分隔的 clone URL 列表）；
+   `.env` 必填字段：`OUTPOST_MODE=full`、`ROOT_DOMAIN`、`CF_TUNNEL_TOKEN`、
+   `GIT_USER`、`GIT_TOKEN`、`MANIFEST_REPO_URL`、`GITHUB_RUNNER_URL`、
+   `GITHUB_RUNNER_PAT`、`OUTPOST_REPOS`
 
 ```bash
 git clone https://github.com/smithyhaus/outpost.git ~/outpost
 cd ~/outpost
-cp .env.example .env       # 编辑上面 6 项；密码字段留空会自动生成
-bash bootstrap.sh          # ~5 分钟
+cp .env.example .env       # 编辑上面必填项；密码字段留空会自动生成
+bash bootstrap.sh          # 安装并把 GitHub Actions runner 注册为 systemd 服务
 bash verify.sh             # 应全 PASS
 ```
+
+每个 app 仓库都需要 CI workflow + 一份与 gitee 同步的 github 副本 ——
+`outpost onboard <repo-url>` 会完成注册并打印具体步骤（拷贝
+`templates/github/outpost-build.yml`、配置双推或 gitee→github 单向镜像）。
+全程不需要在任何地方注册 webhook —— runner 纯出站长轮询 github.com。
 
 完成后：
 
 - 打开 `INFRA.zh-CN.md` 查看所有连接串与密码
-- ArgoCD UI: `https://argocd.<你的域名>`
-- 给你的 Git 提供商配 webhook 用：`https://hooks.<你的域名>`
+- 构建状态：app 仓库的 GitHub Actions 页面（或本机
+  `journalctl -u actions.runner.*`）
+- 部署状态：`outpost status`（manifest-sync 心跳）或 `outpost logs sync`
 
 ## 为什么用 Outpost
 
@@ -94,7 +113,7 @@ bash verify.sh             # 应全 PASS
 |------|----------|
 | "我开发要 Postgres + Redis + RabbitMQ，但每个都要自己起 + 暴露很烦。" | 一行 `bootstrap.sh`，全部服务起来 + TLS 终止的公网域名。 |
 | "我家宽没公网 IP / 运营商封 80/443。" | Cloudflare Tunnel —— 仅出站连接，任何 NAT 后都能用。 |
-| "我想 push 即部署，但不想搞 Jenkins。" | Tekton + ArgoCD 已预接好。push 到你的 Git，应用自动滚动发布。 |
+| "我想 push 即部署，但不想搞 Jenkins，也不想跑一个 webhook 接收端。" | GitHub Actions 自托管 runner（纯出站长轮询）+ manifest-sync CronJob 已预接好。push 到你的 Git，应用自动滚动发布 —— 全程无任何入站端点。 |
 | "我用 macOS / Linux / WSL2，大多教程只面向其中一种。" | 一个安装器自动识别 OS，走对应路径。 |
 | "我不想被某个 Docker 仓库 / Git 平台绑死。" | Plugin 模型 —— 改一个环境变量就能切（self-hosted ↔ 阿里云 ACR；Gitee / GitHub / GitLab）。 |
 
@@ -104,23 +123,25 @@ bash verify.sh             # 应全 PASS
 |--------------|------------------------------------------------------------|------------------------------------------|
 | Registry     | `self-hosted` (默认), `aliyun-acr`                         | `REGISTRY_PLUGIN`                        |
 | Git 提供商   | `gitee` (默认), `github`, `gitlab`                         | `GIT_PROVIDER_PLUGIN`                    |
-| 测试运行器   | `testkube` (默认), `catalog-tasks`                         | `TEST_RUNNER`                            |
-| 渐进发布     | `argo-rollouts` (默认 — 金丝雀 + 自动回滚)                  | `ROLLOUT_PLUGIN`                         |
+| 测试运行器   | `testkube` (默认)                                           | `TEST_RUNNER`                            |
+| 渐进发布     | `argo-rollouts`（可选，金丝雀 + 自动回滚，仅 controller）    | `ROLLOUT_PLUGIN` *(默认 `none`)*         |
 | 通知通道     | `dingtalk`, `feishu`, `wecom`, `webhook-generic`           | `NOTIFICATION_PROVIDERS` *(逗号分隔)*    |
 
-v0.3+ 三个 git provider 都已端到端打通：EventListener 由"通用外壳 +
-当前选中 plugin 的 sibling `trigger.yaml`"装配而成，切换
-`GIT_PROVIDER_PLUGIN` 会真正改变 webhook 路由。GitHub 使用 Tekton 内置
-HMAC interceptor（X-Hub-Signature-256）；Gitee / GitLab 使用
-`GIT_WEBHOOK_SECRET` 做明文 token 比对。
+**v0.3.0：不再有 webhook。** `git-provider` plugin 现在是"凭据 +
+`git ls-remote` 预检"契约，不再是 webhook 接线契约 —— CI 由 GitHub
+Actions 自托管 runner（纯出站长轮询）承担，没有入站端点需要按 provider
+分流。`GIT_PROVIDER_PLUGIN` 在 v0.3.0 是逗号列表（如 `gitee,github`），
+因为"gitee 主推 + github 作为 CI 触发面"是双 provider 的常态配置，而非
+边缘情况。详见 [`plugins/README.md`](plugins/README.md) 与
+[ADR-0003](docs/decisions/0003-github-actions-engine-swap.md)。
 
 通过 `.env` 切换:
 
 ```env
 REGISTRY_PLUGIN=aliyun-acr
-GIT_PROVIDER_PLUGIN=github
+GIT_PROVIDER_PLUGIN=gitee,github
 TEST_RUNNER=testkube
-ROLLOUT_PLUGIN=argo-rollouts
+ROLLOUT_PLUGIN=argo-rollouts          # 默认: none
 NOTIFICATION_PROVIDERS=dingtalk,feishu        # 任意组合
 ```
 
@@ -133,15 +154,16 @@ Plugin 协议与编写指南见 [`plugins/README.md`](plugins/README.md)。
 
 ## 日常 CLI
 
-`scripts/outpost` 把每天用的 kubectl / argocd / kubeseal 命令包成单一入口:
+`scripts/outpost` 把每天用的 kubectl / registry / kubeseal 命令包成单一入口:
 
 ```bash
-outpost status                       # Compose + k8s 总览
+outpost status                       # manifest-sync 心跳 + Compose/k8s 总览
 outpost verify [--app <name>]        # 健康检查;--app 只看某个应用
-outpost open <argocd|tekton|rollouts|search|mq|registry>
-                                     # 打印 URL + 凭据并自动开浏览器
-outpost logs <app> [--build]         # tail 容器日志 / 最近一次 PipelineRun 日志
-outpost rollback <app>               # argocd app rollback(有确认)
+outpost open <search|mq|registry>    # 打印 URL + 凭据并自动开浏览器
+outpost logs [sync|<app>] [--build]  # sync: 最近一次 manifest-sync Job 日志
+                                     # <app>: 'apps' 命名空间下的 pod；--build: 构建日志现在在哪
+outpost rollback <app> [sha]         # 列出 registry tag，回写 manifest 仓，等待 sync 收敛
+outpost onboard <repo-url>           # 注册 OUTPOST_REPOS + 打印 CI workflow/双推设置
 outpost seal <app> KEY=VALUE ...     # 封装 kubeseal,直接出 SealedSecret YAML
 outpost new-app <name> --lang go|... # 从 examples/hello-world/<lang> scaffold
 outpost decommission <app>           # 引导式清理
@@ -186,14 +208,14 @@ make uninstall                        # 只移除指向本仓库的 symlink
 
 ## 项目状态
 
-Outpost 当前为 **v0.2.0** —— 自 v0.1 之后新增内容见
-[`CHANGELOG.md`](CHANGELOG.md)：零摩擦的 `local` 模式、CI/CD 测试网关 +
-自动回滚 + 多通道告警、`outpost` CLI、kaniko 构建缓存、EventListener CEL
-白名单、SealedSecret 主密钥跨重置保留、Dashboard BasicAuth 等。
+Outpost 当前为 **v0.3.0** —— 详见 [`CHANGELOG.md`](CHANGELOG.md)：CI/CD
+引擎替换（Tekton + ArgoCD → GitHub Actions 自托管 runner + manifest-sync
+CronJob）、入站 webhook 路径整体退役、数据层在 `full` 模式下迁入 k3s。
+决策依据见 [ADR-0003](docs/decisions/0003-github-actions-engine-swap.md) /
+[ADR-0004](docs/decisions/0004-data-layer-in-k3s.md)。
 
-macOS / Linux / WSL2 上的真机端到端验证仍在进行中；路线图
-（多 git provider EventListener 真接入、tunnel plugin 抽象、Helm 打包、
-应用团队 DX 功能）见 [`TODOS.md`](TODOS.md)。
+macOS / Linux / WSL2 上的真机端到端验证仍在进行中；路线图见
+[`TODOS.md`](TODOS.md)。
 当前版本号也可在 [`VERSION`](VERSION) 中查到；`outpost version`
 会打印 `v<VERSION> (commit <sha>)`。
 

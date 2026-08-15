@@ -1,14 +1,18 @@
 # Outpost
 
 > Cross-platform self-hosted dev backend — Postgres / Redis / RabbitMQ /
-> Manticore Search + Tekton + ArgoCD GitOps, exposed via Cloudflare Tunnel.
-> Two layers (Docker Compose + k3s), plugin-driven, AI-verifiable.
+> Manticore Search + a GitHub Actions self-hosted-runner CI/CD pipeline,
+> exposed via Cloudflare Tunnel. Two layers (Docker Compose + k3s),
+> plugin-driven, AI-verifiable.
 
 Outpost gives a single developer (or a small team) the same backend
 substrate every project needs — managed databases, message broker, search,
-container registry, CI runner, GitOps controller — running on their own
+container registry, CI runner, deploy automation — running on their own
 machine and exposed on their own domain. It targets macOS, Linux, and
-Windows (WSL2). One `bash bootstrap.sh` brings it all up.
+Windows (WSL2). One `bash bootstrap.sh` brings it all up. CI is a GitHub
+Actions self-hosted runner (pure outbound long-poll, no inbound webhook);
+CD is a manifest-sync CronJob in-cluster. See
+[ADR-0003](docs/decisions/0003-github-actions-engine-swap.md).
 
 ## Project map
 
@@ -18,7 +22,8 @@ Windows (WSL2). One `bash bootstrap.sh` brings it all up.
 - [README.zh-CN](README.zh-CN.md): Chinese version of the README
 - [ARCHITECTURE](ARCHITECTURE.md): static system diagram, layer split, bridge model
 - [SKILL](SKILL.md): operating skill for AI agents (Claude format), with invariants and task playbooks
-- [TODOS](TODOS.md): explicit roadmap (v0.2/v0.3 deferred items)
+- [docs/decisions/](docs/decisions/): architecture decision records (ADRs) — why key calls were made
+- [TODOS](TODOS.md): explicit roadmap (v0.4+ deferred items)
 - [CONTRIBUTING](CONTRIBUTING.md): how to add plugins, translate docs, run tests
 - [CODE_OF_CONDUCT](CODE_OF_CONDUCT.md)
 - [SECURITY](SECURITY.md): vulnerability disclosure policy
@@ -27,19 +32,31 @@ Windows (WSL2). One `bash bootstrap.sh` brings it all up.
 ## How it works (concrete)
 
 - [core/compose/](core/compose/): docker-compose.yml + Caddyfile + cloudflared
-- [core/k8s/](core/k8s/): k3s manifests (namespaces, traefik config, ArgoCD,
-  Tekton, ExternalName bridge services)
+- [core/k8s/](core/k8s/): k3s manifests (namespaces, traefik config,
+  `03-ci/` CI/CD engine, `06-bridges/` data-layer StatefulSets, buildkit)
+- [scripts/ci/](scripts/ci/): host-run CI scripts invoked by the GitHub
+  Actions workflow (build-image, run-tests, publish-npm)
+- [scripts/sync/](scripts/sync/): manifest-sync.sh — the in-cluster CD
+  CronJob logic
+- [templates/github/outpost-build.yml](templates/github/outpost-build.yml):
+  the app-repo CI workflow template
 - [platform/](platform/): per-OS bootstrap hooks (macos.sh, linux.sh, wsl2.sh)
+- [platform/systemd/](platform/systemd/): GitHub Actions runner +
+  outpost-verify.timer systemd units
 - [platform/lib/portable.sh](platform/lib/portable.sh): cross-platform shell
   helpers including `render_template` (envsubst with anti-silent-failure
   ${VAR} residue check)
 - [plugins/registry/](plugins/registry/): pluggable Docker registry backend
   (built-in: self-hosted, aliyun-acr)
-- [plugins/git-provider/](plugins/git-provider/): pluggable Git webhook
-  source (built-in: gitee, github, gitlab)
+- [plugins/git-provider/](plugins/git-provider/): credential + `git
+  ls-remote` preflight contract (built-in: gitee, github, gitlab) — no
+  inbound webhook in v0.3.0
 - [bootstrap.sh](bootstrap.sh): single-command installer that detects OS,
-  selects plugins, generates secrets, brings up both layers
-- [verify.sh](verify.sh): structured health check (`--json` for AI agents)
+  selects plugins, generates secrets, brings up both layers + registers
+  the CI runner
+- [verify.sh](verify.sh): structured health check (`--json` for AI agents);
+  reconciles every `OUTPOST_REPOS` entry's live HEAD against its deployed
+  tag as the anti-silent-failure ultimate judge
 
 ## AI-agent tools
 

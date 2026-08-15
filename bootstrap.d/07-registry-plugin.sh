@@ -1,7 +1,8 @@
 # shellcheck shell=bash
 # =============================================================================
-# Phase 7 — Registry plugin (git-provider plugin deferred to Phase 8 because
-# it needs Tekton CRDs to exist first).
+# Phase 7 — Registry plugin. (git-provider plugins are credential contracts
+# since v0.3 — their authenticated ls-remote preflights already ran in
+# Phase 2; there is nothing of theirs to apply here.)
 # =============================================================================
 phase "Phase 7 / 10 Plugins (registry)"
 
@@ -112,5 +113,5 @@ EOF
   fi
 fi
 
-# git-provider plugin contains Tekton TriggerBinding (triggers.tekton.dev CRD).
-# Defer it to Phase 8 right after `kubectl apply` of Tekton triggers/release.yaml.
+# git-provider plugins carry no k8s manifests since v0.3 (credentials + host
+# conventions + Phase-2 preflight probes only) — nothing more to apply here.

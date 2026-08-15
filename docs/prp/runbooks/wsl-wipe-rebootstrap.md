@@ -1,6 +1,13 @@
-# WSL 清空重装 Runbook(一条 bootstrap 收敛)
+# WSL 清空重装 Runbook(一条 bootstrap 收敛) — 已废弃
 
-> 适用场景:接受丢弃 WSL 上全部数据,从零重建 Outpost。
+> **已废弃，改用 [`wsl2-redeploy-0.3.md`](wsl2-redeploy-0.3.md)。**
+> 本文档写于 v0.3.0 CI/CD 引擎替换（Tekton+ArgoCD → GitHub Actions
+> runner + manifest-sync；[ADR-0003](../../decisions/0003-github-actions-engine-swap.md)）
+> 与数据层入 k3s（[ADR-0004](../../decisions/0004-data-layer-in-k3s.md)）
+> 之前，内容中的 `register-webhooks`、ArgoCD/Tekton 相关步骤已不适用于
+> v0.3.0+ 的部署。保留仅作历史记录。
+
+> 适用场景（历史版本，v0.2.x 及以前）:接受丢弃 WSL 上全部数据,从零重建 Outpost。
 > 2026-07-13 goal-review 后编写;彼时 main 已含:CN egress vendoring、
 > buildkitd 自愈、coredns IP 自愈、verdaccio 接入 bootstrap、verify 收尾自检。
 

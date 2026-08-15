@@ -1,38 +1,54 @@
 # Plugin: git-provider / github
 
-GitHub Push event → Tekton EventListener → PipelineRun.
+GitHub is Outpost's **CI trigger surface**: a self-hosted Actions runner on
+this host authenticates outbound (long-poll, no inbound endpoint) and runs
+`templates/github/outpost-build.yml` on every push to the deploy branch.
 
-## Webhook configuration
+## v0.3 change: no more inbound webhook
 
-In your GitHub repo: **Settings → Webhooks → Add webhook**
+Earlier versions wired GitHub's Push event straight into a Tekton
+EventListener (HMAC-SHA256 verified). That path is retired — the GitHub
+Actions self-hosted runner replaces it with a pure outbound connection, so
+there's nothing to configure on the GitHub webhook UI anymore.
 
-| Field         | Value                                  |
-|---------------|----------------------------------------|
-| Payload URL   | `https://hooks.<ROOT_DOMAIN>`          |
-| Content type  | `application/json`                     |
-| Secret        | value of `GIT_WEBHOOK_SECRET` from `.env` |
-| SSL verify    | enabled                                |
-| Events        | **Just the push event**                |
-| Active        | yes                                    |
+## Setting up the runner
 
-## How signature verification works
+1. Create (or reuse) a GitHub org and add every app repo you'll build.
+2. Set `GITHUB_RUNNER_URL=https://github.com/<org>` in `.env` — **org-level**
+   registration is recommended: one runner serves every private repo in the
+   org (see GitHub Docs: runner groups). A single-repo URL
+   (`https://github.com/<owner>/<repo>`) also works but only serves that repo.
+3. Set `GITHUB_RUNNER_PAT` to a PAT with the minimal scope needed to mint
+   runner *registration* tokens (`admin:org` for org-level, or repo admin for
+   single-repo). This PAT is used ONLY to mint short-lived registration
+   tokens via the GitHub API — it is never stored as the runner's long-lived
+   credential, and preflight.sh never echoes it.
+4. Re-run `bash bootstrap.sh` — it installs the official `actions/runner` as
+   a systemd service under `$HOME/actions-runner`.
+5. Leave both empty to run this repo's own test/e2e suite without a real
+   GitHub org — preflight WARNs loudly and skips the runner install instead
+   of failing (a supported CI/e2e mode, not silent).
 
-GitHub signs the payload body with HMAC-SHA256 keyed on the webhook secret
-and sends the digest in `X-Hub-Signature-256`. Tekton's built-in
-`github` interceptor verifies it before any downstream processing — invalid
-signatures never reach the pipeline.
+## Getting app repos onto GitHub
 
-## Field mapping
+App repos are usually primarily on gitee. See
+`plugins/git-provider/gitee/README.md` for the dual-push / push-mirror setup
+that keeps a github.com copy in sync so the workflow has something to
+trigger from.
 
-| Pipeline param | GitHub field                    |
-|----------------|---------------------------------|
-| `repo-url`     | `body.repository.clone_url`     |
-| `repo-name`    | `body.repository.name`          |
-| `branch`       | `body.ref`                      |
-| `revision`     | `body.after`                    |
-| `pusher`       | `body.pusher.name`              |
+## How the preflight check works
 
-## Limitations (v0.1)
+- Authenticated `git ls-remote` against every `OUTPOST_REPOS` entry whose
+  host is `github.com` (credentials resolved the same way as every other
+  git-provider plugin: primary `GIT_USER`/`GIT_TOKEN` when `GIT_HOST` matches,
+  else a `GIT_CREDENTIALS_EXTRA` entry).
+- When `GITHUB_RUNNER_URL`/`GITHUB_RUNNER_PAT` are set: validates the URL
+  shape and calls the GitHub API (`GET /user`) with the PAT to confirm it
+  authenticates. The token is masked in all output.
 
-- Only `push` events. PR / issue / release events are out of scope.
+## Limitations (unchanged from v0.1)
+
 - Only public + private GitHub.com. GitHub Enterprise Server is untested.
+- Runner group scope: keep the runner group limited to your private repos
+  (GitHub's default) — never attach it to a group that accepts public-repo
+  PRs, since the runner executes arbitrary workflow code on this host.

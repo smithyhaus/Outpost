@@ -1,0 +1,32 @@
+# =============================================================================
+# outpost-verify.service — oneshot payload of outpost-verify.timer.
+# -----------------------------------------------------------------------------
+# TEMPLATE (exception to the *.template.yaml naming: systemd requires the
+# literal unit filename, so bootstrap.d/08-ci.sh render_template's this file
+# — substituting ${OUTPOST_ROOT} — into /etc/systemd/system/ under the SAME
+# name). Do not `cp` it raw; the placeholder would break ExecStart.
+#
+# The wrapper (platform/systemd/outpost-verify-run.sh) runs verify.sh --quiet
+# and fans out a `verify-failed` notification on FAIL. The unit intentionally
+# propagates the wrapper's exit code: a FAIL shows up red in
+# `systemctl status outpost-verify` — no cosmetic success.
+# =============================================================================
+[Unit]
+Description=Outpost health verification run (verify.sh --quiet + notify on FAIL)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Run as the OPERATOR, not root: kubeconfig + docker group + .env all live in
+# the operator's account (platform/linux.sh provisions ~/.kube/config there).
+# ${OUTPOST_UNIT_USER}/${OUTPOST_UNIT_HOME} are rendered by bootstrap.d/08-ci.sh.
+User=${OUTPOST_UNIT_USER}
+WorkingDirectory=${OUTPOST_ROOT}
+ExecStart=/usr/bin/env bash ${OUTPOST_ROOT}/platform/systemd/outpost-verify-run.sh
+# verify.sh can shell out to kubectl/docker/git — give it a sane PATH.
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=HOME=${OUTPOST_UNIT_HOME}
+Environment=KUBECONFIG=${OUTPOST_UNIT_HOME}/.kube/config
+# A verify run that hangs (API timeouts stack up) must not wedge the timer.
+TimeoutStartSec=600

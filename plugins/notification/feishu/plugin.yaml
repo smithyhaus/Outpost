@@ -11,7 +11,10 @@ optional_env:
 provides:
   - channel: feishu
   - delivery: HTTPS POST to open.feishu.cn
-  - integrates: argocd-notifications-cm + outpost-notify Tekton task
+  - events: build-failed, deploy-succeeded, deploy-failed, verify-failed
+  - integrates: manifest-sync CronJob (ns outpost-ci, volume-mounted) + host
+      callers (GitHub Actions workflow, verify.sh systemd timer) via
+      scripts/notify-fanout.sh --env-file
 caveats:
   - Without sign secret, the bot accepts any traffic with the URL. Rotate if leaked.
   - Per-bot rate limit ≈ 100 msg/min (more generous than DingTalk).

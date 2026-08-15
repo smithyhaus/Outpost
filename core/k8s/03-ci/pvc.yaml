@@ -1,0 +1,21 @@
+# =============================================================================
+# manifest-cache PVC — warm manifest-repo checkout for the sync CronJob.
+# -----------------------------------------------------------------------------
+# Mounted at /var/lib/outpost in the sync pod. A warm clone turns every
+# 2-minute run into a cheap `git fetch` (one small pack over the domestic
+# gitee path) instead of a full clone; it also carries the applied_head
+# history implicitly (the heartbeat ConfigMap is the authoritative record).
+# 1Gi is generous — the manifest repo is YAML-only.
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: manifest-cache
+  namespace: outpost-ci
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: local-path

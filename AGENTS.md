@@ -23,9 +23,12 @@ If anything below contradicts `SKILL.md`, `SKILL.md` wins.
 
 1. **Two modes.** `OUTPOST_MODE=local` runs Compose data services only (PG /
    Redis / RabbitMQ / Manticore on `localhost`, zero required input).
-   `OUTPOST_MODE=full` adds Cloudflare Tunnel + k3s + ArgoCD + Tekton GitOps
-   and requires `ROOT_DOMAIN`, `CF_TUNNEL_TOKEN`, `GIT_USER`, `GIT_TOKEN`,
-   `MANIFEST_REPO_URL`. Don't break the local-mode zero-prompt path.
+   `OUTPOST_MODE=full` moves the data layer into k3s and adds Cloudflare
+   Tunnel + a GitHub Actions self-hosted runner (CI) + a manifest-sync
+   CronJob (CD) — requires `ROOT_DOMAIN`, `CF_TUNNEL_TOKEN`, `GIT_USER`,
+   `GIT_TOKEN`, `MANIFEST_REPO_URL`, `GITHUB_RUNNER_URL`,
+   `GITHUB_RUNNER_PAT`, `OUTPOST_REPOS`. Don't break the local-mode
+   zero-prompt path.
 2. **Plugin model.** Five kinds: `registry`, `git-provider`, `test-runner`,
    `rollout`, `notification`. Each plugin is a directory under
    `plugins/<kind>/<name>/` with a strict contract (see
@@ -39,19 +42,24 @@ If anything below contradicts `SKILL.md`, `SKILL.md` wins.
    masks a real error — surface it.
 4. **Tests first.** Logic that lives in `scripts/*.sh` has bats coverage in
    `tests/bats/*.bats`. The split is intentional: scripts are
-   canonical-and-testable; ConfigMap-mounted into Tekton Tasks at run-time.
-   When you change a script, run the corresponding bats. When you add new
-   logic, add the bats first.
+   canonical-and-testable; ConfigMap-mounted into the sync CronJob (and,
+   for `scripts/ci/*`, invoked directly by the GitHub Actions workflow) at
+   run-time. When you change a script, run the corresponding bats. When
+   you add new logic, add the bats first.
 
 ## Repo layout at a glance
 
 ```
 bootstrap.sh              # orchestrator (60 lines); phases live in bootstrap.d/
 bootstrap.d/              # one file per phase (preflight → summary)
-core/compose/             # Compose stack (data services + tunnel + caddy)
-core/k8s/                 # k3s manifests (ArgoCD, Tekton, bridges, dashboards)
-platform/lib/             # portable.sh, registry-config.sh, cel-helpers.sh,
-                          # eventlistener-assemble.sh, sign-webhook.sh
+core/compose/             # Compose stack (edge: cloudflared + caddy; local-data)
+core/k8s/                 # k3s manifests (03-ci, bridges/StatefulSets, buildkit)
+platform/lib/             # portable.sh, registry-config.sh, onboard-lib.sh,
+                          # sign-webhook.sh
+platform/systemd/         # GitHub Actions runner + outpost-verify.timer units
+scripts/ci/               # host-run CI scripts (build/test/publish), invoked
+                          # by templates/github/outpost-build.yml
+scripts/sync/             # manifest-sync.sh (in-cluster CD)
 plugins/<kind>/<name>/    # plugin directories — copy a sibling of the same
                           # kind to scaffold (cross-kind copy trips the
                           # per-kind contract test)
@@ -83,12 +91,18 @@ bash scripts/outpost status        # ongoing health
 
 - **Don't hand-edit `INFRA.md` / `INFRA.zh-CN.md`** — they're regenerated
   from templates on every bootstrap; your edits get clobbered.
-- **Don't `kubectl apply` into the `apps` namespace by hand** — ArgoCD owns
-  it; self-heal will revert you.
+- **Don't `kubectl apply` into the `apps` namespace by hand** — the
+  manifest repo (via `manifest-sync`) is the enforced source of truth;
+  there's no self-heal loop, but a hand-applied change silently drifts and
+  gets clobbered the next time that app's manifest changes.
 - **Don't introduce a new top-level dependency on `yq`/`jq`/`bash` without
   flagging it in `bootstrap.d/01-preflight.sh`.** Outpost runs on
   default-ish macOS/Linux/WSL2 installs and adding a hard prereq is a real
   cost to onboarding.
-- **Don't mirror logic in two places.** If a script and a Tekton Task need
-  the same function, write it once and ConfigMap-mount the script (see
-  `update-manifest`, `read-build-config`, `notify-fanout` for the pattern).
+- **Don't mirror logic in two places.** If `scripts/ci/*` and the sync
+  CronJob need the same function, write it once and either source it or
+  ConfigMap-mount it (see `update-manifest`, `read-build-config`,
+  `notify-fanout`, `scripts/lib/manifest-map.sh` for the pattern).
+- **Don't add an inbound webhook path, anywhere.** The entire v0.3.0
+  engine swap exists to eliminate that failure class — see
+  [ADR-0003](docs/decisions/0003-github-actions-engine-swap.md).

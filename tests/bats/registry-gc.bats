@@ -223,8 +223,13 @@ teardown() {
 }
 
 @test "phase 2 sets OUTPOST_REGISTRY_GC_SCHEDULE + KEEP_TAGS_PER_REPO defaults" {
+  # v0.3.0: OUTPOST_REGISTRY_KEEP_TAGS is now the documented .env knob
+  # (default bumped 5 → 10); OUTPOST_REGISTRY_KEEP_TAGS_PER_REPO is the
+  # legacy name gc.yaml + registry-gc.sh still consume, aliased to it
+  # (explicit legacy value still wins if an old .env set it directly).
   grep -qE 'OUTPOST_REGISTRY_GC_SCHEDULE="\$\{OUTPOST_REGISTRY_GC_SCHEDULE:-0 \*/6 \* \* \*\}"' "$PHASE2"
-  grep -qE 'OUTPOST_REGISTRY_KEEP_TAGS_PER_REPO="\$\{OUTPOST_REGISTRY_KEEP_TAGS_PER_REPO:-5\}"' "$PHASE2"
+  grep -qE 'OUTPOST_REGISTRY_KEEP_TAGS="\$\{OUTPOST_REGISTRY_KEEP_TAGS:-10\}"' "$PHASE2"
+  grep -qE 'OUTPOST_REGISTRY_KEEP_TAGS_PER_REPO="\$\{OUTPOST_REGISTRY_KEEP_TAGS_PER_REPO:-\$\{OUTPOST_REGISTRY_KEEP_TAGS\}\}"' "$PHASE2"
 }
 
 @test "phase 2 persists OUTPOST_REGISTRY_GC_SCHEDULE via env_kv (cron spaces)" {

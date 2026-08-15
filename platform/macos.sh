@@ -52,11 +52,13 @@ sk_install_k3s() {
 sk_setup_autostart() {
   local agent="$HOME/Library/LaunchAgents/io.smithyhaus.outpost.compose.plist"
   local infra_dir="${SK_INFRA_DIR:-$HOME/outpost}"
-  # In full mode the cloudflared+caddy services are gated behind --profile tunnel.
-  # In local mode they don't exist; including --profile is a harmless no-op.
-  local profile_flag="--profile tunnel"
+  # v0.3 profiles: full mode runs the `edge` profile (caddy + cloudflared;
+  # data lives in k3s), local mode runs `local-data` (the four data services).
+  # Nothing in docker-compose.yml is un-profiled anymore, so the flag is
+  # REQUIRED in both modes — an empty flag would start zero services.
+  local profile_flag="--profile edge"
   if [[ "${OUTPOST_MODE:-}" == "local" ]]; then
-    profile_flag=""
+    profile_flag="--profile local-data"
   fi
 
   mkdir -p "$(dirname "$agent")"

@@ -81,13 +81,35 @@ teardown() {
   [ ! -f "$STAGE/curl.log" ]
 }
 
-@test "provider with webhook but no template → [WARN] skip" {
+@test "provider with webhook but no mounted template → built-in default delivers" {
+  # v0.3: a missing /templates/<p>/body.tmpl no longer skips the provider —
+  # the script falls back to its built-in per-provider template so host
+  # callers (workflow build-failed step, verify timer) deliver without any
+  # ConfigMap mounts.
   mkdir -p "$STAGE/secrets/dingtalk"
   echo "https://example.com/hook" > "$STAGE/secrets/dingtalk/webhook-url"
-  PAYLOAD='{"event":"x"}' PROVIDERS="dingtalk" run "$TEST_SCRIPT"
+  PAYLOAD='{"event":"x","app":"a","commit":"abc1234"}' PROVIDERS="dingtalk" run "$TEST_SCRIPT"
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "dingtalk: no body.tmpl" ]]
-  [ ! -f "$STAGE/curl.log" ]
+  [ -f "$STAGE/curl.log" ]
+  grep -q "https://example.com/hook" "$STAGE/curl.log"
+}
+
+@test "env-var fallback: no /secrets mount but DINGTALK_WEBHOOK_URL set → delivers" {
+  # Host callers have no volume mounts at all — provider config resolves from
+  # env (sourced from .env via --env-file, or envFrom in the sync pod).
+  PAYLOAD='{"event":"x","app":"a"}' PROVIDERS="dingtalk" \
+    DINGTALK_WEBHOOK_URL="https://example.com/env-hook" run "$TEST_SCRIPT"
+  [ "$status" -eq 0 ]
+  [ -f "$STAGE/curl.log" ]
+  grep -q "https://example.com/env-hook" "$STAGE/curl.log"
+}
+
+@test "provider name normalization: webhook-generic → generic (env fallback + raw payload)" {
+  PAYLOAD='{"event":"x","app":"a"}' PROVIDERS="webhook-generic" \
+    GENERIC_WEBHOOK_URL="https://example.com/generic" run "$TEST_SCRIPT"
+  [ "$status" -eq 0 ]
+  [ -f "$STAGE/curl.log" ]
+  grep -q "https://example.com/generic" "$STAGE/curl.log"
 }
 
 # ---- 4. Happy path: wecom (no signing) -------------------------------------
@@ -166,4 +188,49 @@ EOF
   [ "$status" -eq 0 ]
   grep -q "https://example.com/dingtalk" "$STAGE/curl.log"
   grep -q "https://example.com/wecom" "$STAGE/curl.log"
+}
+
+# ---- 9. --env-file flag -----------------------------------------------------
+
+@test "--env-file PATH: sourced before dispatch, PAYLOAD/PROVIDERS come from the file" {
+  mkdir -p "$STAGE/secrets/wecom" "$STAGE/templates/wecom"
+  echo "https://example.com/wecom" > "$STAGE/secrets/wecom/webhook-url"
+  echo '{"to":"${NOTIFY_APP}"}' > "$STAGE/templates/wecom/body.tmpl"
+  cat > "$STAGE/env-file" <<'EOF'
+PAYLOAD='{"app":"from-env-file"}'
+PROVIDERS="wecom"
+EOF
+  run "$TEST_SCRIPT" --env-file "$STAGE/env-file"
+  [ "$status" -eq 0 ]
+  [ -f "$STAGE/curl.log" ]
+  grep -q "from-env-file" "$STAGE/curl.log"
+}
+
+@test "--env-file=PATH (equals form) is also accepted" {
+  mkdir -p "$STAGE/secrets/wecom" "$STAGE/templates/wecom"
+  echo "https://example.com/wecom" > "$STAGE/secrets/wecom/webhook-url"
+  echo '{"to":"${NOTIFY_APP}"}' > "$STAGE/templates/wecom/body.tmpl"
+  cat > "$STAGE/env-file" <<'EOF'
+PAYLOAD='{"app":"equals-form"}'
+PROVIDERS="wecom"
+EOF
+  run "$TEST_SCRIPT" "--env-file=$STAGE/env-file"
+  [ "$status" -eq 0 ]
+  grep -q "equals-form" "$STAGE/curl.log"
+}
+
+@test "--env-file PATH: missing file warns but does not fail the script" {
+  PAYLOAD='{}' PROVIDERS="" run "$TEST_SCRIPT" --env-file "$STAGE/does-not-exist"
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "not found" ]]
+  [[ "$output" =~ "notify-fanout done" ]]
+}
+
+@test "no --env-file: PAYLOAD/PROVIDERS still come straight from the environment (positional API unchanged)" {
+  mkdir -p "$STAGE/secrets/wecom" "$STAGE/templates/wecom"
+  echo "https://example.com/wecom" > "$STAGE/secrets/wecom/webhook-url"
+  echo '{"to":"${NOTIFY_APP}"}' > "$STAGE/templates/wecom/body.tmpl"
+  PAYLOAD='{"app":"no-flag"}' PROVIDERS="wecom" run "$TEST_SCRIPT"
+  [ "$status" -eq 0 ]
+  grep -q "no-flag" "$STAGE/curl.log"
 }

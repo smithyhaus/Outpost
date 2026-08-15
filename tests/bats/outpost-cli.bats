@@ -19,9 +19,25 @@ setup() {
   run bash "$CLI" help
   [ "$status" -eq 0 ]
   [[ "$output" =~ "outpost" ]]
-  for sub in status verify doctor open logs rollback seal seal-from-template db manifest new-app decommission setup-argocd-webhook; do
+  for sub in status verify doctor open logs rollback seal seal-from-template db manifest new-app onboard off-board decommission; do
     [[ "$output" == *"$sub"* ]] || { echo "missing subcommand in help: $sub"; return 1; }
   done
+}
+
+@test "outpost help: no dead v0.2 engine commands (argocd/tekton/webhooks)" {
+  run bash "$CLI" help
+  [ "$status" -eq 0 ]
+  for gone in setup-argocd-webhook register-webhooks tekton rollouts ArgoCD; do
+    [[ "$output" != *"$gone"* ]] || { echo "stale reference in help: $gone"; return 1; }
+  done
+}
+
+@test "outpost setup-argocd-webhook / register-webhooks: removed, exit non-zero" {
+  run bash "$CLI" setup-argocd-webhook
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "unknown" ]]
+  run bash "$CLI" register-webhooks
+  [ "$status" -ne 0 ]
 }
 
 @test "outpost help: verify documents --namespace flag" {
@@ -36,13 +52,12 @@ setup() {
 
 @test "outpost verify: --namespace flag parses without 'unknown option'" {
   # No cluster needed — verify the CLI accepts the flag in its argparse loop.
-  # With no kubectl present this will error on the FIRST kubectl call (which
-  # is `kubectl get application`), so we look for the ArgoCD-lookup header
-  # to confirm we got past flag parsing.
+  # The structural assertion is that the script reached the app-scoped pod
+  # section WITH the custom namespace, not that kubectl succeeded.
+  command -v kubectl >/dev/null 2>&1 || skip "kubectl not available"
   run bash "$CLI" verify --app testapp --namespace customns 2>&1
-  # Exit code may be non-zero (no cluster); the structural assertion is that
-  # the script reached the kubectl section, not bailed on flag parsing.
-  [[ "$output" =~ "ArgoCD Application" ]] \
+  # Exit code may be non-zero (no cluster); check we got past flag parsing.
+  [[ "$output" =~ "Pods in customns namespace" ]] \
     || { echo "verify --namespace appears to short-circuit"; echo "$output"; return 1; }
 }
 
@@ -80,7 +95,28 @@ setup() {
 @test "outpost open <unknown>: rejects with hint" {
   run bash "$CLI" open mars-rover
   [ "$status" -ne 0 ]
-  [[ "$output" =~ "unknown" ]] || [[ "$output" =~ "argocd" ]]
+  [[ "$output" =~ "unknown" ]] || [[ "$output" =~ "search" ]]
+}
+
+@test "outpost open: v0.2 dashboard targets (argocd/tekton/rollouts) are gone" {
+  for t in argocd tekton rollouts; do
+    run bash "$CLI" open "$t"
+    [ "$status" -ne 0 ] || { echo "open $t should be rejected"; return 1; }
+  done
+}
+
+@test "outpost onboard: requires a repo-url-or-path argument" {
+  run bash "$CLI" onboard
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "onboard" ]]
+}
+
+@test "outpost rollback: without sha it only lists tags (needs no confirm)" {
+  # No registry reachable in tests — the command must die on tag listing,
+  # not on a missing argocd CLI (v0.2 behavior).
+  run bash "$CLI" rollback someapp
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "tags" ]] || [[ "$output" =~ "registry" ]]
 }
 
 @test "outpost new-app: requires --lang" {

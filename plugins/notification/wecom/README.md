@@ -4,9 +4,13 @@ Sends Outpost CI/CD events to a WeCom (企业微信) group robot as a markdown m
 
 ## What gets installed
 
-- `Secret/wecom-webhook` in `tekton-pipelines`.
-- `ConfigMap/wecom-template` in `tekton-pipelines`.
-- Merge fragments into `argocd-notifications-cm` and `argocd-notifications-secret`.
+- `Secret/wecom-webhook` in `outpost-ci`, volume-mounted by the manifest-sync CronJob.
+- `ConfigMap/wecom-template` in `outpost-ci`.
+
+Host-run callers (the GitHub Actions workflow's `build-failed` step, and the
+`verify.sh` systemd timer's `verify-failed` check) invoke
+`notify-fanout.sh --env-file $OUTPOST_ROOT/.env ...` instead of relying on
+the volume mount.
 
 ## How to enable
 

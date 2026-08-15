@@ -9,7 +9,10 @@ optional_env: []
 provides:
   - channel: wecom
   - delivery: HTTPS POST to qyapi.weixin.qq.com
-  - integrates: argocd-notifications-cm + outpost-notify Tekton task
+  - events: build-failed, deploy-succeeded, deploy-failed, verify-failed
+  - integrates: manifest-sync CronJob (ns outpost-ci, volume-mounted) + host
+      callers (GitHub Actions workflow, verify.sh systemd timer) via
+      scripts/notify-fanout.sh --env-file
 caveats:
   - WeCom does not offer per-message HMAC signing — protect the URL itself.
   - Rate limit ≈ 20 msg/min per bot.

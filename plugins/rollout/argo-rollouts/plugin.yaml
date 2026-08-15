@@ -1,24 +1,29 @@
 kind: rollout
 name: argo-rollouts
 description: |
-  Argo Rollouts — progressive delivery + automated rollback. Ships:
+  Argo Rollouts — progressive delivery + automated rollback. Controller-only
+  in v0.3 (ROLLOUT_PLUGIN defaults to `none` — this is opt-in). Ships:
    - Rollouts controller in `argo-rollouts` namespace
-   - Dashboard at https://rollouts.${ROOT_DOMAIN}
    - Default AnalysisTemplate (Web provider HTTP probe — works without Testkube)
    - Smoke AnalysisTemplate (Job provider — runs Testkube TestWorkflow)
+
+  No dashboard, no IngressRoute — the manifest-sync CronJob (not a UI) drives
+  deploys and is Rollout-kind aware (waits on Rollout status the same way it
+  waits on a plain Deployment).
 
   Apps adopt `Rollout` CRD instead of `Deployment`. Failure thresholds default
   to consecutiveErrorLimit=3, failureLimit=2. Auto-rollback on threshold breach.
 required_env: []
-optional_env:
-  - ROLLOUTS_DASHBOARD_HOST   # default: rollouts.${ROOT_DOMAIN}
+optional_env: []
 provides:
   - controller: argoproj/argo-rollouts
-  - dashboard: https://rollouts.${ROOT_DOMAIN}
   - crds: Rollout, AnalysisTemplate, AnalysisRun, Experiment
   - default-templates: outpost-default (Web), outpost-smoke (Job + Testkube)
 caveats:
+  - Default OFF (ROLLOUT_PLUGIN=none). Set ROLLOUT_PLUGIN=argo-rollouts to
+    install the controller.
   - Apps must convert Deployment → Rollout to gain canary + rollback.
     Plugin install does NOT force-convert existing apps.
   - Smoke template assumes test-runner=testkube (Job provider runs the CLI image).
-    With test-runner=catalog-tasks, only the default Web template applies.
+  - No bundled dashboard/UI in v0.3 — canary progress is visible via
+    `kubectl argo rollouts get rollout <name>` or `kubectl describe rollout`.

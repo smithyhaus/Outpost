@@ -11,7 +11,10 @@ optional_env:
 provides:
   - channel: dingtalk
   - delivery: HTTPS POST to oapi.dingtalk.com
-  - integrates: argocd-notifications-cm + outpost-notify Tekton task
+  - events: build-failed, deploy-succeeded, deploy-failed, verify-failed
+  - integrates: manifest-sync CronJob (ns outpost-ci, volume-mounted) + host
+      callers (GitHub Actions workflow, verify.sh systemd timer) via
+      scripts/notify-fanout.sh --env-file
 caveats:
   - "Without DINGTALK_SIGN_SECRET, anyone with the URL can post. Rotate if leaked."
   - "Per-bot rate limit ~ 20 msg/min — heavy outage may drop messages."

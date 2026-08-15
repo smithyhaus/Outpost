@@ -1,9 +1,22 @@
 # CI/CD Test Gate + Automated Rollback + Multi-Channel Notifications
 
-> **Status:** **Approved** (2026-05-10) — Phase 1 MVP in flight
+> ⚠️ **Superseded in v0.3.0** — the Tekton (CI) + ArgoCD (CD) engine this
+> proposal builds on was replaced by a GitHub Actions self-hosted runner
+> plus a `manifest-sync` CronJob, so the Gate-A wiring, the ArgoCD
+> Notifications backend, and the Rollouts dashboard described below no
+> longer match the code. See
+> [ADR-0003](../../../../docs/decisions/0003-github-actions-engine-swap.md).
+> What survived: Gate A is still opt-in via `outpost.test.yaml` (now run by
+> `scripts/ci/run-tests.sh` on the runner host), notifications are still
+> plugin-driven (now `scripts/notify-fanout.sh` with the events
+> `build-failed` / `deploy-succeeded` / `deploy-failed` / `verify-failed`),
+> and Argo Rollouts is still the auto-rollback option — controller-only,
+> `ROLLOUT_PLUGIN=none` by default. Kept below as design history.
+
+> **Status:** **Approved** (2026-05-10) — superseded 2026-08-15
 > **Authors:** Outpost Eng
 > **Created:** 2026-05-10
-> **Related:** `plugins/git-provider/`, `plugins/registry/`, `core/k8s/05-tekton/`, `core/k8s/06-argocd/`
+> **Related:** `plugins/git-provider/`, `plugins/registry/`, `core/k8s/05-tekton/`, `core/k8s/06-argocd/` *(both `core/k8s` paths removed in v0.3.0)*
 
 ---
 

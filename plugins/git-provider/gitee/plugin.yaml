@@ -1,14 +1,22 @@
 kind: git-provider
 name: gitee
 description: |
-  Gitee webhook -> Tekton EventListener trigger.
-  Validates X-Gitee-Token header against GIT_WEBHOOK_SECRET (plain compare).
+  Gitee — primary push target, manifest-repo host, and reconciliation basis.
+  v0.3 retires the inbound webhook path entirely (CI is triggered by GitHub
+  Actions on a self-hosted runner, not by an inbound Gitee webhook). This
+  plugin is now a credential + host-matching contract: preflight.sh runs a
+  real authenticated `git ls-remote` against every OUTPOST_REPOS entry whose
+  host is gitee.com, so a revoked/expired GIT_TOKEN fails loudly at bootstrap
+  instead of silently breaking build triggers and reconciliation weeks later.
 required_env:
   - GIT_USER
   - GIT_TOKEN
-  - GIT_WEBHOOK_SECRET
 provides:
-  - webhook-url: https://hooks.${ROOT_DOMAIN}
-  - signature-mode: plain-token (X-Gitee-Token header equality)
+  - host: gitee.com
+  - preflight: authenticated `git ls-remote` probe per matching OUTPOST_REPOS entry
+  - role: primary push target + MANIFEST_REPO_URL host + verify.sh reconciliation basis
 caveats:
-  - Plain-token signature is weaker than HMAC; rotate GIT_WEBHOOK_SECRET if leaked.
+  - No cluster objects are applied by this plugin (v0.3) — it is a host +
+    credential contract only, consumed by preflight.sh and verify.sh.
+  - App repos also need a github.com copy for the CI trigger surface — see
+    README.md for dual-push and gitee's official push-mirror options.

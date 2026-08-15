@@ -11,8 +11,12 @@
 Registry plugin：`${REGISTRY_PLUGIN}`
 Git provider plugin：`${GIT_PROVIDER_PLUGIN}`
 Test runner：`${TEST_RUNNER}`(模式:`${TESTKUBE_MODE}`)
-Rollout plugin：`${ROLLOUT_PLUGIN}`
+Rollout plugin：`${ROLLOUT_PLUGIN}`(默认 `none` —— 可选金丝雀,仅 controller)
 通知插件:`${NOTIFICATION_PROVIDERS}`(空 = 未启用)
+
+> v0.3.0：CI 是 GitHub Actions 自托管 runner（§6），CD 是 manifest-sync
+> CronJob（§7）。没有 dashboard，没有入站 webhook —— 详见
+> [ADR-0003](../../docs/decisions/0003-github-actions-engine-swap.md)。
 
 ---
 
@@ -25,10 +29,13 @@ Rollout plugin：`${ROLLOUT_PLUGIN}`
 | RabbitMQ AMQP  | `rabbitmq.${ROOT_DOMAIN}`      | 5672 | `${RABBITMQ_USER}` | `${RABBITMQ_PASSWORD}`     |
 | RabbitMQ UI    | `https://mq.${ROOT_DOMAIN}`    | —   | `${RABBITMQ_USER}` | `${RABBITMQ_PASSWORD}`     |
 | Manticore HTTP | `https://search.${ROOT_DOMAIN}` | —  | （无）            | — （standalone 无内建鉴权）|
-| ArgoCD         | `https://argocd.${ROOT_DOMAIN}` | —  | `admin`           | （见 §6）                  |
-| Tekton Dashboard | `https://tekton.${ROOT_DOMAIN}` | — | `${OUTPOST_DASHBOARD_USER}`(BasicAuth) | `${OUTPOST_DASHBOARD_PASSWORD}` |
-| Argo Rollouts UI | `https://${ROLLOUTS_DASHBOARD_HOST}` | — | `${OUTPOST_DASHBOARD_USER}`(BasicAuth) | `${OUTPOST_DASHBOARD_PASSWORD}` |
 | Registry       | `https://registry.${ROOT_DOMAIN}` | —| (匿名)            | —                          |
+| GitHub Actions runner | (宿主机,无公网 URL) | — | — | `${GITHUB_RUNNER_PAT}`(仅用于换取注册令牌) |
+
+没有 ArgoCD / Tekton / Argo Rollouts dashboard 这几行 —— 这些 UI 在
+v0.3.0 全部退役。构建状态看 app 仓库的 GitHub Actions 页面（或本机
+`journalctl -u actions.runner.* -n 200`）；部署状态用 `outpost status` /
+`outpost logs sync`。
 
 ---
 
@@ -107,61 +114,70 @@ curl https://search.${ROOT_DOMAIN}/
 mysql -h127.0.0.1 -P9306 -e 'SHOW STATUS'
 ```
 
-## 6. ArgoCD
+## 6. CI —— GitHub Actions 自托管 runner
 
-- Web UI：`https://argocd.${ROOT_DOMAIN}`
-- 用户：`admin`
-- 初始密码（也写入 .env 的 `ARGOCD_ADMIN_PASSWORD`）：
-  ```bash
-  kubectl -n argocd get secret argocd-initial-admin-secret \
-    -o jsonpath='{.data.password}' | base64 -d
-  ```
-- 首次登录后建议改密码：`argocd account update-password`
-- 监听的 manifest 仓库：`${MANIFEST_REPO_URL}` (branch: `${MANIFEST_REPO_BRANCH}`)
-- **manifest 仓库 instant-sync webhook**(配一次,所有 app 自动受益):
-  - URL:`https://argocd.${ROOT_DOMAIN}/api/webhook`
-  - Secret:`${ARGOCD_WEBHOOK_SECRET}`
-  - Push event,Content-Type=application/json
-  - 配上之后,ArgoCD 从默认 3 min 轮询变成 ~5s 立即 sync
-  - 重新打印:`bash scripts/outpost setup-argocd-webhook`
+- 安装目录：`$HOME/actions-runner`（systemd 服务 `actions.runner.*`）
+- Runner URL：`${GITHUB_RUNNER_URL}`（推荐 org 级 —— 一个 runner 服务 org
+  下所有私有仓）
+- 注册用 PAT：`${GITHUB_RUNNER_PAT}` —— 仅用于经 GitHub API 换取短生命周期
+  的 runner *注册* token；不是 runner 长期凭据，不会被打印到日志。
+  **留空 = 跳过 runner 安装/校验并打印醒目 WARN**（这是 CI/e2e 场景下的
+  合法状态，不是配置错误）。
+- Labels：`${GITHUB_RUNNER_LABELS}`（默认 `outpost`）
+- Runner 名称：`${GITHUB_RUNNER_NAME}`（留空 → `outpost-<hostname>`）
+- 已注册的 app 仓库：`${OUTPOST_REPOS}` —— 逗号分隔的 `<clone-url>[#branch]`
+  列表。这是 `verify.sh` 对账的基准；用 `outpost onboard <url>` 注册新仓库。
+- 纯出站长轮询（50s）访问 `api.github.com` —— **没有入站端口，没有
+  webhook secret，防火墙不需要开任何口子。**
 
-## 7. Tekton CI（webhook + pipeline + dashboard）
-
-- Webhook URL：`https://hooks.${ROOT_DOMAIN}`
-- Webhook Secret：`${GIT_WEBHOOK_SECRET}`(每次 push,Tekton EventListener 用此 secret 校验)
-- Dashboard UI：`https://tekton.${ROOT_DOMAIN}`(看 PipelineRun / TaskRun / 日志,可在界面里 cancel / 删 run)
-  - **BasicAuth 用户:**`${OUTPOST_DASHBOARD_USER}`
-  - **BasicAuth 密码:**`${OUTPOST_DASHBOARD_PASSWORD}`
-  - 加固路径:在 Cloudflare Zero Trust 那里给该 hostname 配 Access(邮箱 OTP / IdP)。BasicAuth 中间件可保留作为深度防御。
-- 当前 git-provider plugin:`${GIT_PROVIDER_PLUGIN}`
-- 在每个应用仓库的 webhook 设置中配上面的 URL 与 secret,仅勾选 Push 事件。
-
-Pipeline 行为：
-
-```
-1. push        → EventListener → 创建 PipelineRun
-2. git-clone     拉取应用代码
-3. kaniko-build  构建 Docker image
-4. push-image    推到 <REGISTRY_HOST>/<repo>:<short-sha>
-5. update-manifest 改 manifest 仓库 image tag → commit → push
-6. ArgoCD sync   → kubectl apply → 滚动发布
-```
-
-查看：
+查状态：
 
 ```bash
-kubectl get pipelinerun -n tekton-pipelines
-kubectl logs -n tekton-pipelines -l tekton.dev/pipelineRun=<run> \
-  --all-containers --tail=200
+systemctl status 'actions.runner.*'
+journalctl -u 'actions.runner.*' -n 200
 ```
 
-PipelineRun 自动清理(防 kaniko 堆积压垮节点 ephemeral-storage):
+Pipeline 行为（`templates/github/outpost-build.yml`，push 到部署分支触发）：
 
-- CronJob `tekton-pruner` 每小时跑一次,删 `${OUTPOST_TEKTON_RETENTION_HOURS}` 小时前完成的 PR(级联清掉它们的 TaskRun + pod)
-- Schedule:`${OUTPOST_TEKTON_PRUNE_SCHEDULE}`(cron 表达式,可在 `.env` 改)
-- Image:`${OUTPOST_TEKTON_PRUNER_IMAGE}`
-- 手动应急(立即清一次):`kubectl create job --from=cronjob/tekton-pruner -n tekton-pipelines tekton-pruner-manual-$(date +%s)`
-- 详见 [`06-troubleshooting.md` "Build pod 报 Evicted"](docs/06-troubleshooting.md)
+```
+1. push（gitee 为主；双推或 gitee→github 镜像保持 github 同步）
+2. github.com 派发 workflow → runner 接单（长轮询）
+3. checkout       浅克隆到被 push 的 commit
+4. build-image.sh  buildctl → 127.0.0.1:30750（buildkitd NodePort）
+                    push → 集群内 registry，tag = 7 位 commit SHA
+5. run-tests.sh    Gate A：outpost.test.yaml / Dockerfile.test（可选）
+6. update-manifest.sh 克隆 gitee manifest 仓，改 tag，push
+                       （6 次抖动重试）
+7. 任一步失败 → notify-fanout.sh build-failed
+```
+
+## 7. CD —— manifest-sync CronJob
+
+- 命名空间：`outpost-ci`
+- 间隔：`${MANIFEST_SYNC_INTERVAL}` 分钟（`concurrencyPolicy: Forbid` ——
+  单写者，绝不与自己重叠）
+- Manifest 仓库：`${MANIFEST_REPO_URL}`（branch `${MANIFEST_REPO_BRANCH}`）
+- 对账滞后阈值：`${OUTPOST_STALENESS_THRESHOLD}` 秒 —— live HEAD 与已部署
+  tag 不一致最多能拖多久，超过 `verify.sh` 判 FAIL 并点名仓库
+- Registry tag 保留数（= 回滚可达深度）：`${OUTPOST_REGISTRY_KEEP_TAGS}`
+
+查状态：
+
+```bash
+outpost status                    # sync-heartbeat 摘要
+outpost logs sync                 # 最近一次 manifest-sync Job 日志
+kubectl get configmap sync-heartbeat -n outpost-ci -o yaml
+```
+
+回滚：
+
+```bash
+outpost rollback <app> [sha]      # 纯国内路径 —— github 挂了也能用
+```
+
+**破玻璃逃生门：** `kubectl rollout undo` 依然可直接生效，但必须配合
+manifest revert（`outpost rollback`）—— manifest 仓库是强制执行的真相源，
+不配合 revert 的 `rollout undo` 会被下一次 sync 顶回去。
 
 ## 8. Docker Registry
 
@@ -174,7 +190,8 @@ PipelineRun 自动清理(防 kaniko 堆积压垮节点 ephemeral-storage):
 - 用户：`${GIT_USER}`
 - Personal Access Token：`${GIT_TOKEN}`
 - Manifest 仓库：`${MANIFEST_REPO_URL}` (branch `${MANIFEST_REPO_BRANCH}`)
-- Token 用途：ArgoCD HTTPS 拉、Tekton clone 应用代码、update-manifest push
+- Token 用途：manifest-sync HTTPS 拉、`update-manifest.sh` push
+  （workflow 侧，跑在 runner 上）
 
 ## 10. 主机 / 系统
 
@@ -206,16 +223,21 @@ PipelineRun 自动清理(防 kaniko 堆积压垮节点 ephemeral-storage):
 
 ### 端点
 
-- Argo Rollouts Dashboard:`https://${ROLLOUTS_DASHBOARD_HOST}` — 看金丝雀进度,可中止/提升
-  - **BasicAuth 用户:**`${OUTPOST_DASHBOARD_USER}` / **密码:**`${OUTPOST_DASHBOARD_PASSWORD}`(与 Tekton Dashboard 共用同一 Traefik 中间件)
+- 没有 dashboard —— v0.3.0 里 `ROLLOUT_PLUGIN` 仅装 controller，没有
+  Argo Rollouts dashboard 这一层。金丝雀状态看
+  `kubectl argo rollouts get rollout <name> -n apps`（kubectl 插件）
+  或 `kubectl get rollout -n apps`。
 - Testkube agent:命名空间 `testkube`(`kubectl get pods -n testkube`)
-- Argo Rollouts controller:命名空间 `argo-rollouts`
+- Argo Rollouts controller（仅当 `ROLLOUT_PLUGIN=argo-rollouts`）:
+  命名空间 `argo-rollouts`
 
 ### 告警 fan-out
 
-每次 PipelineRun 失败 / ArgoCD sync 失败 / Argo Rollouts 自动回滚都会
-fan-out 到所有启用的通道。改 `.env` 里 `NOTIFICATION_PROVIDERS`(逗号分隔)
-后重跑 `bash bootstrap.sh` 即可调整。
+三个事件会 fan-out 到所有启用的通道，经由 `scripts/notify-fanout.sh`：
+`build-failed`（GitHub Actions workflow）、`deploy-succeeded`/
+`deploy-failed`（manifest-sync CronJob）、`verify-failed`
+（`outpost-verify.timer` systemd 定时器）。改 `.env` 里
+`NOTIFICATION_PROVIDERS`(逗号分隔) 后重跑 `bash bootstrap.sh` 即可调整。
 
 | 通道              | webhook URL 变量          | 加签 secret(可选)         |
 |-------------------|---------------------------|----------------------------|
@@ -249,10 +271,14 @@ pipeline 照常跑。
 
 ## 12. 安全加固清单（建议但不强制）
 
-- [ ] 给 `argocd.${ROOT_DOMAIN}` / `mq.${ROOT_DOMAIN}` / `tekton.${ROOT_DOMAIN}` / `${ROLLOUTS_DASHBOARD_HOST}` 加 Cloudflare Access(邮箱 OTP / IdP)— 取代或叠加 BasicAuth
-- [ ] 轮换 `OUTPOST_DASHBOARD_PASSWORD`(.env 里改成空,重跑 `bash bootstrap.sh` 自动重新生成)
+- [ ] 给 `mq.${ROOT_DOMAIN}` / `search.${ROOT_DOMAIN}` 加 Cloudflare
+      Access(邮箱 OTP / IdP)—— v0.3.0 已没有 BasicAuth dashboard 可叠加，
+      这是目前唯一的边缘鉴权面
 - [ ] 给 `registry.${ROOT_DOMAIN}` 加 Basic Auth 或 Cloudflare Access(默认匿名)
-- [ ] ArgoCD admin 改密(`argocd account update-password`)
+- [ ] `${GITHUB_RUNNER_PAT}` 只给最小权限（仅换取注册 token），runner
+      注册完成后尽快撤销/轮换 —— 日常运行不需要它
+- [ ] GitHub Actions runner group 保持仅私有仓可见（GitHub 默认）——
+      永远不要让自托管 runner 跑公开仓库的 PR
 - [ ] sealed-secrets 公钥备份至密码管理器
 
 ## 13. 复用清单（新项目接入流程）
@@ -260,9 +286,17 @@ pipeline 照常跑。
 详见 `i18n/zh-CN/docs/05-onboard-project.md`。简略：
 
 1. 在 Gitee/GitHub/GitLab 建仓库，根目录加 `Dockerfile`
-2. manifest 仓库加 `apps/<name>/{deployment,service,ingress}.yaml`
-3. manifest 仓库加 `argocd-apps/<name>.yaml`
-4. 应用仓库 webhook → `https://hooks.${ROOT_DOMAIN}`，secret `${GIT_WEBHOOK_SECRET}`
-5. `git push origin main`，看 ArgoCD 同步上线
+2. `outpost onboard <repo-url>` —— 注册进 `OUTPOST_REPOS`（`verify.sh`
+   对账的基准），打印 CI workflow + 双推设置步骤
+3. 把 `templates/github/outpost-build.yml` 拷进应用仓库的
+   `.github/workflows/`（onboard 命令会主动提议帮你拷）
+4. 配置双推（`git remote set-url --add --push origin <url>` 对 gitee 和
+   github 各配一次）或 gitee→github 单向镜像 —— **全程不需要在任何地方
+   注册 webhook**
+5. manifest 仓库加 `apps/<name>/{deployment,service,ingress,
+   kustomization}.yaml`（`outpost onboard --manifests-dir <path>
+   --lang <lang>` 会帮你 scaffold）
+6. `git push`（双推配好后一次 push 两边都到），看 `outpost logs sync` ——
+   `manifest-sync` 会在 `${MANIFEST_SYNC_INTERVAL}` 分钟内收敛
 
 应用代码里要用的连接串直接从本文件 §0 速查表复制。

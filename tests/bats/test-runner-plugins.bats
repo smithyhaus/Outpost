@@ -18,13 +18,17 @@ teardown() {
 }
 
 @test "every test-runner plugin has the expected file shape" {
-  for p in testkube catalog-tasks; do
+  for p in testkube; do
     [ -f "${PLUGIN_DIR}/${p}/plugin.yaml" ] || fail "${p}: plugin.yaml missing"
     [ -f "${PLUGIN_DIR}/${p}/manifest.yaml" ] || fail "${p}: manifest.yaml missing"
     [ -x "${PLUGIN_DIR}/${p}/preflight.sh" ] || fail "${p}: preflight.sh missing/not executable"
     [ -f "${PLUGIN_DIR}/${p}/README.md" ] || fail "${p}: README.md missing"
     grep -q '^kind: test-runner' "${PLUGIN_DIR}/${p}/plugin.yaml" || fail "${p}: kind is not 'test-runner'"
   done
+}
+
+@test "catalog-tasks plugin was removed (v0.3 — testkube is the only test-runner)" {
+  [ ! -d "${PLUGIN_DIR}/catalog-tasks" ]
 }
 
 @test "testkube preflight passes in oss mode without env" {
@@ -49,11 +53,6 @@ teardown() {
   [ "$status" -ne 0 ]
 }
 
-@test "catalog-tasks preflight passes with no env" {
-  run env -i bash "${PLUGIN_DIR}/catalog-tasks/preflight.sh"
-  [ "$status" -eq 0 ]
-}
-
 @test "testkube manifest renders cleanly" {
   export TESTKUBE_MODE="oss"
   out="${TMP}/testkube.yaml"
@@ -61,8 +60,7 @@ teardown() {
   ! grep -qE '\$\{[A-Za-z_][A-Za-z0-9_]*\}' "$out"
 }
 
-@test "catalog-tasks manifest renders cleanly (no env required)" {
-  out="${TMP}/catalog-tasks.yaml"
-  render_template "${PLUGIN_DIR}/catalog-tasks/manifest.yaml" "$out"
-  ! grep -qE '\$\{[A-Za-z_][A-Za-z0-9_]*\}' "$out"
+@test "testkube manifest targets the testkube namespace (tekton-pipelines is gone in v0.3)" {
+  grep -q 'namespace: testkube' "${PLUGIN_DIR}/testkube/manifest.yaml"
+  ! grep -q 'tekton-pipelines' "${PLUGIN_DIR}/testkube/manifest.yaml"
 }

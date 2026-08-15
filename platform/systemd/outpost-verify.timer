@@ -1,0 +1,22 @@
+# =============================================================================
+# outpost-verify.timer — the dead-man switch (anti-silence layer 3).
+# -----------------------------------------------------------------------------
+# Runs verify.sh --quiet every 30 minutes from the HOST's systemd — outside
+# the cluster AND outside GitHub, so it keeps firing when either of those is
+# the thing that broke. Persistent=true replays a missed tick after suspend /
+# WSL restart instead of silently skipping it (the 9-day gitee-webhook
+# incident was exactly a "nothing fired, nobody noticed" failure).
+#
+# Installed + enabled by bootstrap.d/08-ci.sh (linux/wsl2, full mode).
+# Companion unit: outpost-verify.service (rendered — carries ${OUTPOST_ROOT}).
+# =============================================================================
+[Unit]
+Description=Outpost periodic health verification (dead-man switch)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

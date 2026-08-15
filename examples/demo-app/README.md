@@ -14,7 +14,6 @@ This directory shows the **canonical Outpost pattern** for app secrets:
 |-------------------------------|------------------------------------------------|-------------------------|
 | `deployment.yaml`             | manifest repo (`apps/demo-app/`)              | Pod spec + envFrom      |
 | `service.yaml`, `ingress.yaml`| manifest repo                                  | usual K8s plumbing      |
-| `argocd-application.yaml`     | manifest repo (`argocd-apps/demo-app.yaml`)    | ArgoCD Application      |
 | `secret.example.yaml`         | **NEVER commit with real values** — workspace | Plaintext Secret source |
 | `sealed-secret.example.yaml`  | manifest repo (after `kubeseal`)              | Encrypted SealedSecret  |
 
@@ -45,7 +44,8 @@ git add apps/demo-app/sealed-secret.yaml
 git commit -m "feat(demo-app): seal app secrets"
 git push
 
-# 5. ArgoCD picks up the change → sealed-secrets-controller decrypts →
+# 5. The manifest-sync CronJob applies the change (within
+#    MANIFEST_SYNC_INTERVAL minutes) → sealed-secrets-controller decrypts →
 #    Deployment's envFrom finds demo-app-secrets → Pod restarts with envs
 
 # 6. delete the plaintext file
@@ -67,6 +67,17 @@ bash reset.sh --hard         # also wipes secrets-backup/
 bash bootstrap.sh             # generates a fresh key
 # Re-seal every SealedSecret in every manifest repo against the new key.
 ```
+
+## Note: no more `argocd-application.yaml` (v0.3.0)
+
+ArgoCD is removed in v0.3.0 ([ADR-0003](../../docs/decisions/0003-github-actions-engine-swap.md))
+— deploys are driven by the `manifest-sync` CronJob reading `apps/<name>/`
+directly via `kubectl apply -k`, with no ArgoCD Application CRD in the
+loop. The example file and the `outpost manifest scaffold` step that used
+to generate it are both gone; the files to commit are the four under
+`apps/<name>/` (`deployment.yaml` / `service.yaml` / `ingress.yaml` /
+`kustomization.yaml`). A legacy `argocd-apps/` dir in an existing manifest
+repo is simply ignored by manifest-sync — delete it at leisure.
 
 ## Anti-pattern (what `deployment.yaml` used to do — fixed)
 

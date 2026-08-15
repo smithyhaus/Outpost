@@ -1,8 +1,16 @@
 # 0001 — Two-layer split: Compose for data, k3s for apps
 
+> **Amended by [ADR-0004](0004-data-layer-in-k3s.md)** (2026-08-15): in
+> `full` mode, the stateful services described below move from Compose
+> into k3s `StatefulSet`s (Service names unchanged). The two-layer
+> Compose/k3s *split* itself — the subject of this ADR — is unaffected;
+> only which layer hosts the data services in `full` mode changes. `local`
+> mode still runs the data layer as pure Compose exactly as decided here.
+
 ## Status
 
-`Accepted` (2026-05-06; carried through every release since).
+`Accepted` (2026-05-06; carried through every release since). Amended by
+ADR-0004 (2026-08-15) — see note above.
 
 ## Context
 

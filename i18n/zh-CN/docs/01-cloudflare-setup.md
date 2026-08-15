@@ -19,21 +19,20 @@
 
 ## 步骤三:配置 Public Hostname
 
-进入 tunnel 详情页 → **Public Hostname** tab → 逐条添加(**Type 列注意区分 HTTP / TCP**):
+进入 tunnel 详情页 → **Public Hostname** tab → 逐条添加。内置入口一共就 4 条:
 
-| Subdomain | Domain | Type | URL |
-|-----------|--------|------|-----|
-| `search` | `<你的根域名>` | HTTP | `caddy:80` |
-| `mq` | `<你的根域名>` | HTTP | `caddy:80` |
-| `argocd` | `<你的根域名>` | HTTP | `host.docker.internal:30080` |
-| `tekton` | `<你的根域名>` | HTTP | `host.docker.internal:30080` |
-| `rollouts` | `<你的根域名>` | HTTP | `host.docker.internal:30080` |
-| `hooks` | `<你的根域名>` | HTTP | `host.docker.internal:30080` |
-| `registry` | `<你的根域名>` | HTTP | `host.docker.internal:30080` |
-| `*` | `<你的根域名>` | HTTP | `host.docker.internal:30080` |
-| `pg` | `<你的根域名>` | TCP | `postgres:5432` |
-| `redis` | `<你的根域名>` | TCP | `redis:6379` |
-| `rabbitmq` | `<你的根域名>` | TCP | `rabbitmq:5672` |
+| Subdomain | Domain | Type | URL | 背后是谁 |
+|-----------|--------|------|-----|---------|
+| `search` | `<你的根域名>` | HTTP | `host.docker.internal:30080` | Traefik → `manticore.infra-bridges:9308` |
+| `mq` | `<你的根域名>` | HTTP | `host.docker.internal:30080` | Traefik → `rabbitmq.infra-bridges:15672` |
+| `registry` | `<你的根域名>` | HTTP | `host.docker.internal:30080` | Traefik → 集群内 Docker Registry |
+| `*` | `<你的根域名>` | HTTP | `host.docker.internal:30080` | Traefik → `apps` 命名空间里你的应用 |
+
+**没有 `hooks` 行,没有 `argocd` / `tekton` / `rollouts` 行。** v0.3.0 删掉了整条
+入站 webhook 路径和所有集群内 CI/CD 面板:GitHub Actions runner 只做出站长轮询,
+`manifest-sync` 只做 CronJob 定时拉取,**没有任何东西需要从公网连进来**。构建状态看
+GitHub Actions UI,部署状态看 `outpost status`。见
+[ADR-0003](../../../docs/decisions/0003-github-actions-engine-swap.md)。
 
 > **关于通配符那一行**:Subdomain 填 `*`(不是 `*.apps`)。应用走命名约定
 > `<name>-apps.<root>`,被这条 `*.<root>` 兜底通配捕获,转给 k3s Traefik,
@@ -42,18 +41,25 @@
 > Advanced Certificate Manager ~$10/月)。CF Tunnel 也不支持 partial-label
 > 通配 `*-apps`,所以 `-apps` 是 k3s 端的命名约定,不是 CF 路由模式。
 
-**为什么 URL 看起来重复**:cloudflared 自己不路由,只是把流量交给下一跳;再由 Caddy(`caddy:80`,按 Host 头分流给 manticore HTTP / rabbitmq UI)和 k3s Traefik(`host.docker.internal:30080`,按 Ingress 分流给 ArgoCD / Tekton EL / Registry / 用户应用)做二次路由。
+**为什么 URL 全都一样**:cloudflared 自己不路由,只是把流量交给下一跳;`full` 模式下
+这个下一跳永远是 k3s Traefik 的 NodePort,再由 Traefik 按 Host 头做二次路由。
+唯一的例外是用 `outpost onboard` 接入的 Compose 层应用(`tier=compose`):它会生成
+`Caddyfile.d/<app>.caddy` 片段,对应的 Public Hostname 行填 `caddy:80`。
 
-**HTTPS 怎么没有**:TLS 在 Cloudflare 边缘终结,隧道内部全是明文 HTTP。Public Hostname 的 `Type` 没有 HTTPS 选项是有意的;用户访问的 `https://argocd.<域名>` 由 CF 自动签发证书。
+**HTTPS 怎么没有**:TLS 在 Cloudflare 边缘终结,隧道内部全是明文 HTTP。Public Hostname 的 `Type` 没有 HTTPS 选项是有意的;用户访问的 `https://registry.<域名>` 由 CF 自动签发证书。
 
 ### 重要细节
 
-- HTTP 行用容器名(`caddy:80`):cloudflared 容器在 Compose 网络里能解析
-- 走 k3s 的 4 行用 `host.docker.internal:30080`:cloudflared 容器已配置 `extra_hosts: host-gateway`(见 `core/compose/docker-compose.yml`)
-- TCP 行的 URL 字段填 `service:port`,Cloudflare 会建 L4 通道
-- 那条 `*` 兜底通配会接住所有没单独列出的子域。更具体的条目(比如 `argocd.<域名>`)
+- HTTP 行都填 `host.docker.internal:30080`:cloudflared 容器已配置 `extra_hosts: host-gateway`(见 `core/compose/docker-compose.yml`)
+- 那条 `*` 兜底通配会接住所有没单独列出的子域。更具体的条目(比如 `registry.<域名>`)
   自动覆盖通配 — CF Tunnel 是 most-specific-wins 匹配,顺序无关
 - **`registry` 行额外配置**:展开 *Additional application settings → HTTP Settings → HTTP Host Header*,填 `registry.<你的根域名>`。Docker Registry 对 Host 头敏感,不写会拉镜像 401
+- **TCP 行(`pg` / `redis` / `rabbitmq`)是可选的,而且要自己搭桥**:`full` 模式下
+  数据服务是 k3s 里 `infra-bridges` 的 StatefulSet,只有 ClusterIP Service,
+  Compose 里没有容器可供 TCP 行指向。真要用,先在 Outpost 主机上把端口暴露出来
+  (`kubectl -n infra-bridges port-forward --address 0.0.0.0 svc/postgres 5432:5432`),
+  再把那一行填 `host.docker.internal:5432`。开发机侧的用法和
+  `CF_TUNNEL_PROTOCOL=http2` 的坑见 `04-client-access.md`。
 
 每条添加完点 Save。
 
@@ -61,23 +67,28 @@
 
 此时主机还没跑 cloudflared,这里**只做 Cloudflare 仪表盘端的检查**:
 
-- [ ] Tunnel 详情页能看到刚才创建的 9 条 Public Hostname
+- [ ] Tunnel 详情页能看到刚才创建的 4 条 Public Hostname
 - [ ] Tunnel 状态显示 *Inactive* 或 *Down* —— **正常**,因为本地 cloudflared 还没起
-- [ ] DNS 检查:`dig argocd.<root>` 返回 Cloudflare 的 IP 段(说明 NS 已生效 + Public Hostname 已自动写 DNS 记录)。如返回 NXDOMAIN → NS 未生效或 Public Hostname 没保存
+- [ ] DNS 检查:`dig registry.<root>` 返回 Cloudflare 的 IP 段(说明 NS 已生效 + Public Hostname 已自动写 DNS 记录)。如返回 NXDOMAIN → NS 未生效或 Public Hostname 没保存
 
-> 真正的"打开浏览器看到 ArgoCD 登录页"属于**连通性验证**,需要先在 Outpost 主机跑完 `bash bootstrap.sh`。流程见 `00-quickstart.md` Phase F。
+> 真正的"打开浏览器看到页面"属于**连通性验证**,需要先在 Outpost 主机跑完 `bash bootstrap.sh`。流程见 `00-quickstart.md` Phase F。
 
 ## 进阶:给 UI 加 Cloudflare Access(推荐)
 
-ArgoCD UI 默认密码强 + HTTPS 已经不错,但暴露公网仍建议加一层 Zero Trust:
+强密码 + HTTPS 已经不错,但暴露公网仍建议加一层 Zero Trust:
 
 1. Zero Trust → **Access** → **Applications** → Add
 2. Type:Self-hosted
-3. Application name:`ArgoCD`
-4. Application domain:`argocd.<root>`
+3. Application name:`RabbitMQ`
+4. Application domain:`mq.<root>`
 5. Identity providers:默认 One-time PIN(邮箱 OTP)够用,也可加 GitHub OAuth
 6. Policy → Allow → 邮箱白名单写你的邮箱
 
-之后访问 `argocd.<root>` 会先弹邮箱验证页,验证通过才能见到 ArgoCD 登录。同样建议给 `mq.<root>` 和 `registry.<root>` 加。
+`search.<root>` 同理。v0.3.0 之后公网已经没有任何入站 webhook 端点,
+所以**不再有"某一行必须裸奔"的例外** —— 原来那条"别给 `hooks.<root>` 加 Access"
+的告诫随路由一起消失了。
 
-`hooks.<root>`(webhook 端点)**不要加 Access**,否则 Git 提供商调不通。Webhook 的安全靠 `X-Gitee-Token` / `X-Hub-Signature-256` / `X-Gitlab-Token` 校验。
+只有 `registry.<root>` 要斟酌:加了 Access,任何完不成浏览器登录的客户端
+(`docker pull` / `buildctl`)都会被挡。集群内的构建链路不走公网边缘
+(用的是 `127.0.0.1:30500` NodePort),所以这只影响从主机外面拉镜像 ——
+按你实际有没有这种用法决定。

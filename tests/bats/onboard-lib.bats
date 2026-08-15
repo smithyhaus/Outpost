@@ -103,3 +103,71 @@ teardown() {
   onboard_render_subst "$TMP/src" "$TMP/dst"
   [ "$(cat "$TMP/dst")" = "untouched" ]
 }
+
+# ---- onboard_repos_add -------------------------------------------------------
+
+@test "onboard_repos_add: empty current value → single entry, no branch" {
+  [ "$(onboard_repos_add "" "https://gitee.com/org/a.git")" = "https://gitee.com/org/a.git" ]
+}
+
+@test "onboard_repos_add: empty current value → single entry WITH branch" {
+  out=$(onboard_repos_add "" "https://gitee.com/org/a.git" "release")
+  [ "$out" = "https://gitee.com/org/a.git#release" ]
+}
+
+@test "onboard_repos_add: appends to a non-empty list" {
+  out=$(onboard_repos_add "https://gitee.com/org/a.git" "https://gitee.com/org/b.git")
+  [ "$out" = "https://gitee.com/org/a.git,https://gitee.com/org/b.git" ]
+}
+
+@test "onboard_repos_add: idempotent — same URL already present (no branch) is unchanged" {
+  cur="https://gitee.com/org/a.git,https://gitee.com/org/b.git"
+  out=$(onboard_repos_add "$cur" "https://gitee.com/org/a.git")
+  [ "$out" = "$cur" ]
+}
+
+@test "onboard_repos_add: idempotent — same URL already present WITH a branch is unchanged (no dupe, no branch drop)" {
+  cur="https://gitee.com/org/a.git#release"
+  out=$(onboard_repos_add "$cur" "https://gitee.com/org/a.git")
+  [ "$out" = "$cur" ]
+}
+
+# ---- onboard_repos_remove ----------------------------------------------------
+
+@test "onboard_repos_remove: removes the matching entry, keeps the rest" {
+  cur="https://gitee.com/org/a.git,https://gitee.com/org/b.git"
+  out=$(onboard_repos_remove "$cur" "https://gitee.com/org/a.git")
+  [ "$out" = "https://gitee.com/org/b.git" ]
+}
+
+@test "onboard_repos_remove: matches regardless of the entry's branch suffix" {
+  cur="https://gitee.com/org/a.git#release,https://gitee.com/org/b.git"
+  out=$(onboard_repos_remove "$cur" "https://gitee.com/org/a.git")
+  [ "$out" = "https://gitee.com/org/b.git" ]
+}
+
+@test "onboard_repos_remove: removing the only entry yields an empty string" {
+  out=$(onboard_repos_remove "https://gitee.com/org/a.git" "https://gitee.com/org/a.git")
+  [ "$out" = "" ]
+}
+
+@test "onboard_repos_remove: no match → list returned unchanged" {
+  cur="https://gitee.com/org/a.git,https://gitee.com/org/b.git"
+  out=$(onboard_repos_remove "$cur" "https://gitee.com/org/nope.git")
+  [ "$out" = "$cur" ]
+}
+
+# ---- onboard_ci_instructions / onboard_ci_offboard_instructions -------------
+
+@test "onboard_ci_instructions: mentions the workflow template copy + dual-push" {
+  out=$(onboard_ci_instructions "https://gitee.com/org/a.git" "/opt/infras")
+  [[ "$out" == *"templates/github/outpost-build.yml"* ]]
+  [[ "$out" == *"dual-push"* ]]
+  [[ "$out" == *"push-mirror"* ]]
+}
+
+@test "onboard_ci_offboard_instructions: mentions OUTPOST_REPOS + workflow cleanup" {
+  out=$(onboard_ci_offboard_instructions "https://gitee.com/org/a.git")
+  [[ "$out" == *"OUTPOST_REPOS"* ]]
+  [[ "$out" == *"outpost-build.yml"* ]]
+}

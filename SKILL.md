@@ -2,10 +2,11 @@
 name: outpost
 description: |
   Operating skill for the Outpost dev backend project. Two-layer
-  architecture: Docker Compose for stateful data services + k3s for
-  applications and GitOps CI/CD, fronted by a single Cloudflare Tunnel.
-  Plugin-driven (registry, git-provider, test-runner, rollout, notification).
-  Targets macOS / Linux / WSL2.
+  architecture: Docker Compose for the public-ingress edge + k3s for
+  stateful data services, applications, and CI/CD (GitHub Actions
+  self-hosted runner + manifest-sync CronJob), fronted by a single
+  Cloudflare Tunnel. Plugin-driven (registry, git-provider, test-runner,
+  rollout, notification). Targets macOS / Linux / WSL2.
 when_to_use: |
   Any operation inside an Outpost checkout — verifying health,
   diagnosing failures, onboarding a new project, modifying configuration,
@@ -17,17 +18,25 @@ when_to_use: |
 ## 1. Identity
 
 - **Type:** single-machine self-hosted dev backend.
-- **Carriers:** Docker Compose (stateful data) + k3s (apps + CI/CD).
+- **Carriers:** Docker Compose (edge: cloudflared + caddy; `local` mode
+  also carries the data layer) + k3s (`full`-mode data layer, apps,
+  CI/CD glue).
+- **CI:** GitHub Actions self-hosted runner (host systemd service, pure
+  outbound long-poll — no inbound webhook anywhere).
+- **CD:** `manifest-sync` CronJob (ns `outpost-ci`) — pulls the manifest
+  repo, applies changed apps, waits for rollout, writes a heartbeat.
 - **Public ingress:** Cloudflare Tunnel only — no public IP / port forward.
 - **Plugin model:** directory-based, one plugin per kind, swap via `.env`.
 - **Platforms:** macOS, Linux, Windows 11 + WSL2. OS-specific bits live in
-  `platform/<os>.sh`; everything else is portable.
+  `platform/<os>.sh`; everything else is portable. The runner and
+  `outpost-verify.timer` require `systemd` (Linux/WSL2 only).
 - **Two modes** (`OUTPOST_MODE` in `.env`):
   - `local` *(default)* — Compose data services on `localhost` only. No CF
-    Tunnel, no k3s, no GitOps. Zero required input.
-  - `full` — `local` + Cloudflare Tunnel + k3s + ArgoCD + Tekton.
-    Requires `ROOT_DOMAIN`, `CF_TUNNEL_TOKEN`, `GIT_USER`, `GIT_TOKEN`,
-    `MANIFEST_REPO_URL`.
+    Tunnel, no k3s, no CI/CD. Zero required input.
+  - `full` — k3s data layer + Cloudflare Tunnel + GitHub Actions
+    self-hosted runner + manifest-sync CD. Requires `ROOT_DOMAIN`,
+    `CF_TUNNEL_TOKEN`, `GIT_USER`, `GIT_TOKEN`, `MANIFEST_REPO_URL`,
+    `GITHUB_RUNNER_URL`, `GITHUB_RUNNER_PAT`, `OUTPOST_REPOS`.
 
 ## 2. Architecture
 
@@ -35,35 +44,44 @@ when_to_use: |
 Cloudflare edge (HTTPS / TLS)
     │
     ▼
-cloudflared (Compose container)
-    ├─→ caddy:80 ─→ search.* / mq.* (HTTP UIs for stateful infra)
-    ├─→ postgres:5432 (TCP)
-    ├─→ redis:6379 (TCP)
-    ├─→ rabbitmq:5672 (TCP)
+cloudflared (Compose container, `edge` profile)
+    ├─→ caddy:80 ─→ per-app routes (tier=compose apps, via `outpost onboard`)
     └─→ host.docker.internal:30080 ─→ k3s Traefik
-                                         ├─ argocd.*       → argocd-server
-                                         ├─ hooks.*        → tekton EventListener
+                                         ├─ search.*       → manticore (IngressRoute)
+                                         ├─ mq.*           → rabbitmq mgmt (IngressRoute)
                                          ├─ registry.*     → docker-registry
                                          └─ *.<root>       → user apps (catch-all)
                                             (apps named `<x>-apps.<root>`,
                                              one-level FQDN → free Universal SSL)
+
+Host (outside both Compose and k3s):
+  GitHub Actions self-hosted runner (systemd) → long-polls api.github.com
+    → scripts/ci/build-image.sh (buildctl via 127.0.0.1:30750 buildkitd
+      NodePort) → scripts/ci/run-tests.sh → scripts/update-manifest.sh
+  outpost-verify.timer (systemd, 30min) → verify.sh --quiet → notify on FAIL
 ```
 
-**Layer boundaries are strict:**
-- Layer 1 (Compose) is for stateful infrastructure + ingress only.
-- Layer 2 (k3s) is for stateless apps + CI/CD.
-- They communicate via ExternalName Services in the `infra-bridges` namespace:
+**Layer boundaries in v0.3.0:**
+- Compose (`edge` profile) is ingress-only in `full` mode: `cloudflared` +
+  `caddy`. `local` mode additionally carries the whole data layer in
+  Compose (`local-data` profile) — no k3s at all.
+- k3s carries the `full`-mode data layer (`infra-bridges` StatefulSets),
+  stateless apps, and the CI/CD glue (`outpost-ci` namespace).
+- Apps reach the data layer via ordinary in-cluster Service DNS in
+  `infra-bridges` — no bridge/`ExternalName` indirection anymore
+  ([ADR-0004](docs/decisions/0004-data-layer-in-k3s.md)):
 
 ```
-postgres.infra-bridges.svc.cluster.local       → host.docker.internal:5432
-redis.infra-bridges.svc.cluster.local          → host.docker.internal:6379
-rabbitmq.infra-bridges.svc.cluster.local       → host.docker.internal:5672
-manticore.infra-bridges.svc.cluster.local      → host.docker.internal:9308 (HTTP)
-manticore.infra-bridges.svc.cluster.local      → host.docker.internal:9306 (SQL)
+postgres.infra-bridges.svc.cluster.local       → StatefulSet postgres:5432
+redis.infra-bridges.svc.cluster.local          → StatefulSet redis:6379
+rabbitmq.infra-bridges.svc.cluster.local       → StatefulSet rabbitmq:5672
+manticore.infra-bridges.svc.cluster.local      → StatefulSet manticore:9308 (HTTP)
+manticore.infra-bridges.svc.cluster.local      → StatefulSet manticore:9306 (SQL)
 ```
 
-Apps reference these bridge DNS names. To migrate to managed cloud services
-in production, change only the ExternalName — application code stays unchanged.
+Apps reference these DNS names. To migrate to managed cloud services in
+production, swap the Service to `ExternalName` — application code stays
+unchanged either way.
 
 ## 3. File pointer map
 
@@ -79,9 +97,14 @@ in production, change only the ExternalName — application code stays unchanged
 | Cloudflared ingress reference | `core/compose/cloudflared/config.template.yml` |
 | Namespaces | `core/k8s/00-namespaces.yaml` |
 | Traefik NodePort config | `core/k8s/01-traefik-config.yaml` |
-| ArgoCD pieces | `core/k8s/04-argocd/` |
-| Tekton pieces | `core/k8s/05-tekton/` |
-| Bridge services | `core/k8s/06-bridges/` |
+| CI/CD engine (RBAC, PVC, sync CronJob, NodePorts) | `core/k8s/03-ci/` |
+| Buildkitd (do-not-modify, quenched) | `core/k8s/08-buildkit/` |
+| Bridge services (data layer StatefulSets, `full` mode) | `core/k8s/06-bridges/` |
+| GitHub Actions workflow template | `templates/github/outpost-build.yml` |
+| Host-run CI scripts (build/test/publish) | `scripts/ci/` |
+| In-cluster manifest-sync script | `scripts/sync/manifest-sync.sh` |
+| Repo-name → `apps/<dir>` mapping (shared by verify.sh + sync) | `scripts/lib/manifest-map.sh` |
+| Runner + verify-timer systemd units | `platform/systemd/` |
 | Demo app (manifest-only template) | `examples/demo-app/` |
 | Hello-World pipeline smoke tests (6 languages) | `examples/hello-world/` |
 | Cross-platform shell helpers | `platform/lib/portable.sh` |
@@ -103,23 +126,31 @@ in production, change only the ExternalName — application code stays unchanged
 
 ## 4. Critical invariants — DO NOT BREAK
 
-1. **Compose data services bind 0.0.0.0:<port>**. Removing this disconnects
-   k3s pods from the data layer (bridge services lose reachability).
-2. **Traefik exposes NodePort 30080**. cloudflared depends on it.
-3. **TLS is terminated at the Cloudflare edge.** Internal traffic is plain
+1. **Traefik exposes NodePort 30080**. cloudflared depends on it.
+2. **TLS is terminated at the Cloudflare edge.** Internal traffic is plain
    HTTP. Do not introduce cert-manager / ACME unless you also rip out the
    Cloudflare Tunnel pattern.
-4. **`argocd-cmd-params-cm.server.insecure=true`** is required for the
-   Traefik IngressRoute to talk to argocd-server over HTTP.
-5. **Bridge services live in `infra-bridges` namespace.** App connection
+3. **Bridge services live in `infra-bridges` namespace.** App connection
    strings depend on this DNS name; renaming pollutes every app config.
-6. **`apps` namespace is owned by ArgoCD**. Do NOT `kubectl apply` directly
-   to it — ArgoCD self-heal will revert the change. Modify the manifest
-   repository instead.
-7. **EventListener CEL filter contains the webhook secret**. Rotating
-   `GIT_WEBHOOK_SECRET` requires re-rendering and `kubectl apply`.
+4. **The manifest repo is the enforced source of truth for `apps`, via
+   `manifest-sync`.** There is no self-heal loop — `kubectl apply` outside
+   this flow doesn't get reverted automatically, but it silently drifts
+   from the declared source and gets clobbered the next time that app's
+   manifest changes. Modify the manifest repository, not the live cluster.
+5. **`sync-heartbeat` (ConfigMap, ns `outpost-ci`) freshness is a hard
+   signal.** `last_sync_ts` older than 3× `MANIFEST_SYNC_INTERVAL` means
+   deploys have stopped — treat as FAIL, not a warning.
+6. **The GitHub Actions runner is outbound-only.** No inbound port, no
+   webhook secret, nothing to open in a firewall. Never reintroduce an
+   inbound webhook path without a very deliberate ADR-level decision (see
+   [ADR-0003](docs/decisions/0003-github-actions-engine-swap.md)).
+7. **The deploy/rollback hot path must stay fully domestic** (gitee +
+   local cluster) — it must keep working when github.com or the outbound
+   proxy is down. Never make `outpost rollback`, `manifest-sync`, or
+   `update-manifest.sh` depend on GitHub reachability.
 8. **`.env` and `INFRA*.md` must never be committed.** Listed in .gitignore;
-   plaintext secrets leaking equals total compromise.
+   plaintext secrets leaking equals total compromise. `GITHUB_RUNNER_PAT`
+   is never echoed/logged — mask it in any diagnostic output.
 9. **Self-hosted registry traffic is plain HTTP** at the cluster level
    (containerd is configured with `insecure_skip_verify`). Do not add a
    registry-side TLS cert — public TLS is at the CF edge.
@@ -127,10 +158,18 @@ in production, change only the ExternalName — application code stays unchanged
     unresolved `${VAR}` placeholders and abort.** This is the central
     anti-silent-failure guardrail. Bypassing it (e.g. with raw envsubst)
     risks deploying manifests with empty hostnames or missing secrets.
-11. **`OUTPOST_MODE` gates k3s phases.** When `local`, bootstrap.sh exits
-    after Phase 4 (Compose); verify.sh skips k8s/ArgoCD/Tekton/edge
-    sections and emits `summary.mode="local"`. Don't `kubectl apply` from
-    bootstrap or expect bridge services in local mode.
+11. **`OUTPOST_MODE` gates k3s/CI phases.** When `local`, bootstrap.sh
+    exits after the Compose phase; verify.sh skips k8s/CI/edge sections
+    and emits `summary.mode="local"`. Don't `kubectl apply` from bootstrap
+    or expect bridge services / the runner in local mode.
+12. **`OUTPOST_REPOS` is the reconciliation basis.** An app repo that
+    builds and deploys but isn't registered in `OUTPOST_REPOS` is
+    invisible to `verify.sh`'s anti-silence reconciliation layer — always
+    register via `outpost onboard`, never hand-edit around it.
+13. **`08-buildkit/`, `07-verdaccio/` and `update-manifest.sh`'s retry
+    logic are quenched — do not modify.** They carry hard-won hardening
+    (ACR-safe push, path-traversal guards, the 6-attempt jittered push
+    retry) ported forward unchanged across the v0.3.0 engine swap.
 
 ## 5. Operating principles
 
@@ -141,17 +180,22 @@ in production, change only the ExternalName — application code stays unchanged
 - Mutating operations (`kubectl apply`, `docker compose down`, edits to
   `.env`) require explicit user assent unless instructed otherwise.
 - **Never** run `reset.sh` unless the user said "reset" or "wipe everything".
-- **Never** delete the namespaces `argocd`, `tekton-pipelines`,
-  `infra-bridges`, `registry`, `kube-system`. They are load-bearing.
+  In `full` mode this now touches live application data (data layer moved
+  into k3s, ADR-0004) — dump-first discipline applies; see
+  `docs/prp/runbooks/wsl2-redeploy-0.3.md`.
+- **Never** delete the namespaces `infra-bridges`, `outpost-ci`, `buildkit`,
+  `registry`, `kube-system`. They are load-bearing.
 
 ### Diagnosis order (cheap → expensive)
-1. `bash verify.sh --json` (whole stack, ~5–10s)
+1. `bash verify.sh --json` (whole stack, ~5–10s — the reconciliation +
+   liveness checks that catch a dead CI/CD chain from outside it)
 2. `kubectl get pods -A | grep -v Running` (find sick pods)
 3. `kubectl describe pod -n <ns> <pod>` (event log)
 4. `kubectl logs -n <ns> <pod> --tail 100`
-5. `docker logs <container> --tail 100` (Compose layer)
-6. Consult `i18n/en/docs/06-troubleshooting.md`
-7. Ask the user, with a specific question and what you've tried.
+5. `docker logs <container> --tail 100` (Compose edge layer)
+6. `journalctl -u actions.runner.* -n 200` (runner-side build issues)
+7. Consult `i18n/en/docs/06-troubleshooting.md`
+8. Ask the user, with a specific question and what you've tried.
 
 ### Modification flow
 ```
@@ -173,17 +217,19 @@ in production, change only the ExternalName — application code stays unchanged
 +-----+--------------------------+--------------------------+
       |                          |                          |
       v                          v                          v
-*.<ROOT_DOMAIN>           <prefix>.<ROOT_DOMAIN>      <built-in>.<ROOT_DOMAIN>
-broad CF wildcard         top-level (per-svc CF rule) argocd/hooks/search/mq/registry
+*.<ROOT_DOMAIN>           <prefix>.<ROOT_DOMAIN>      search/mq/registry.<ROOT_DOMAIN>
+broad CF wildcard         top-level (per-svc CF rule) top-level (per-svc CF rule)
 (catches everything)
       |                          |                          |
       v                          v                          v
-  k3s Traefik                Caddy :80                  Caddy :80
+  k3s Traefik                Caddy :80                  k3s Traefik
       |                          |                          |
       v                          v                          v
   STATELESS APPS             STATEFUL INFRA            BUILT-IN SERVICES
-  named `<x>-apps.<root>`    SIDECARS (tier=compose)   (postgres / redis / ...)
-  (tier=k3s)
+  named `<x>-apps.<root>`    SIDECARS (tier=compose)   (manticore / rabbitmq /
+  (tier=k3s)                 (app-onboarded services)   registry — IngressRoute,
+                                                          core/k8s/06-bridges/,
+                                                          NOT Caddy)
 ```
 
 **SSL constraint behind the naming convention:** Cloudflare Universal SSL
@@ -235,8 +281,8 @@ When the user says "onboard X" / "add new project X":
      sees it)
 
 5. **For k3s-tier apps**, also follow `i18n/en/docs/05-onboard-project.md`
-   end-to-end (manifest repo files, SealedSecret, ArgoCD Application).
-   Reuse `examples/demo-app/` as the manifest template.
+   end-to-end (manifest repo files, SealedSecret, `outpost.build.yaml` /
+   CI workflow). Reuse `examples/demo-app/` as the manifest template.
 
 6. **Anti-patterns to refuse:**
    - Adding per-app routes to `core/compose/Caddyfile` directly (the
@@ -256,9 +302,13 @@ listed in `TODOS.md`.
 - Copy the closest existing plugin under `plugins/<kind>/<name>/` and adapt.
 - Required files per `plugins/README.md` contract: `plugin.yaml`,
   `manifest.yaml` (or `compose.yaml`), `preflight.sh`, `README.md`.
-- Notification plugins additionally contribute
-  `argocd-cm-fragment.yaml` + `argocd-secret-fragment.yaml` (concatenated
-  by bootstrap into `argocd-notifications-cm` / `-secret`).
+- `git-provider` plugins are a **credential + `git ls-remote` preflight**
+  contract in v0.3.0 — no `trigger.yaml`, no webhook wiring. `preflight.sh`
+  must run a real authenticated `git ls-remote` against matching
+  `OUTPOST_REPOS` hosts and fail loudly on bad credentials.
+- `notification` plugins feed `scripts/notify-fanout.sh` events
+  (`build-failed`, `deploy-succeeded`, `deploy-failed`, `verify-failed`) —
+  no ArgoCD notification fragments anymore.
 - Add a smoke test in `tests/bats/<kind>-plugins.bats`.
 - Update the matrix in the project root `README.md` AND `README.zh-CN.md`.
 
@@ -277,16 +327,21 @@ docker logs cloudflared --tail 30 | grep -i "Registered tunnel"
 # k3s
 kubectl get nodes
 kubectl get pods -A | grep -v Running | grep -v Completed
-kubectl get application -n argocd
-kubectl get pipelinerun -n tekton-pipelines --sort-by=.metadata.creationTimestamp | tail -5
+kubectl get cronjob -n outpost-ci manifest-sync
+kubectl get configmap sync-heartbeat -n outpost-ci -o yaml
+kubectl get jobs -n outpost-ci -l app=manifest-sync --sort-by=.metadata.creationTimestamp | tail -5
 
-# Bridges
+# Bridges (data layer, full mode — real in-cluster pods now)
+kubectl get pods -n infra-bridges
 kubectl get svc -n infra-bridges
-kubectl run -it --rm test --image=alpine --restart=Never -- \
-  sh -c "apk add busybox-extras >/dev/null && nc -zv host.docker.internal 5432"
+
+# CI (host side)
+systemctl status 'actions.runner.*'
+journalctl -u 'actions.runner.*' -n 100
+systemctl status outpost-verify.timer
 
 # Public ingress (when ROOT_DOMAIN is real)
-curl -sS -o /dev/null -w "%{http_code}\n" "https://argocd.${ROOT_DOMAIN}"
+curl -sS -o /dev/null -w "%{http_code}\n" "https://registry.${ROOT_DOMAIN}"
 ```
 
 Detailed pass/fail criteria + diagnosis: `i18n/en/docs/07-ai-verification.md`.
@@ -302,10 +357,19 @@ Read from `INFRA.md` (or `INFRA.zh-CN.md`). Do not synthesize on the fly —
 the rendered file is the source of truth.
 
 ### "Why didn't my push deploy?"
-1. Git provider → repo → Webhooks → most recent delivery (status code)
-2. `kubectl logs -n tekton-pipelines deploy/el-<provider>-listener --tail 100`
-3. `kubectl get pipelinerun -n tekton-pipelines --sort-by=.metadata.creationTimestamp | tail -3`
-4. ArgoCD UI → the Application → look at the commit it last synced
+There's no webhook to check anymore — walk the actual chain instead:
+1. Is the repo in `OUTPOST_REPOS`? (`outpost onboard` registers it; a
+   push from an unregistered repo is invisible to reconciliation.)
+2. Did it reach github.com? Both remotes need the commit — check dual-push
+   output in the dev terminal, or the gitee→github mirror status.
+3. GitHub Actions UI on the app repo → did the workflow run, and what step
+   failed? Or: `journalctl -u actions.runner.* -n 200` on the runner host.
+4. Did `update-manifest.sh` land the commit in the manifest repo? Check the
+   manifest repo's recent commits.
+5. `outpost logs sync` — did `manifest-sync` pick it up and apply it?
+6. `bash verify.sh --json` — the reconciliation check (`reconcile.*`) will
+   name the repo if live HEAD and deployed tag disagree past
+   `OUTPOST_STALENESS_THRESHOLD`.
 
 ### "Add a Postgres extension"
 - Postgres lives in Compose, not in any manifest.
@@ -345,6 +409,23 @@ the rendered file is the source of truth.
 set `tier=compose` for a stateless application to get the caddy ingress.
 Those bypass the contract. See SKILL.md §5 for the why.
 
+### "Roll back a bad deploy"
+`outpost rollback <app> [sha]` — lists the registry tags for `<app>` (last
+`OUTPOST_REGISTRY_KEEP_TAGS`, default 10), then rewrites the manifest repo
+to the chosen `sha` through the same `update-manifest.sh` code path
+`scripts/ci` uses, and waits for `manifest-sync` to converge (≤2 sync
+intervals). Fully domestic — works even when github.com is unreachable.
+
+**Break-glass warning:** `kubectl rollout undo` still works directly
+against the cluster, but it is a break-glass escape hatch, not a normal
+rollback path. Because the manifest repo is the enforced source of truth
+and there is no self-heal loop, a `rollout undo` NOT paired with a
+manifest-repo revert will be silently overwritten on the next
+`manifest-sync` tick that touches that app — the sync putting the "wrong"
+(but manifest-declared) image back is the system working as designed, not
+a bug. Always pair a `rollout undo` with `outpost rollback` (or a manual
+manifest revert) in the same incident.
+
 ### "View an application's logs"
 ```bash
 kubectl logs -n apps -l app=<app-name> --tail 200 --all-containers
@@ -367,21 +448,25 @@ docker compose -f core/compose/docker-compose.yml restart cloudflared
 
 ### "Add a new git provider plugin (beyond Gitee/GitHub/GitLab)"
 1. `cp -r plugins/git-provider/gitee plugins/git-provider/<new-name>`
-2. Edit `manifest.yaml` to map the new provider's payload into the
-   pipeline's expected params (`repo-url`, `repo-name`, `branch`, etc.)
-3. Implement signature verification in the EventListener interceptor —
-   Tekton has built-ins for `github`; for plain-token providers, follow
-   the `gitee` CEL pattern; for HMAC providers, use the `bitbucket-server`
-   pattern.
+2. Edit `preflight.sh` to run an authenticated `git ls-remote` against the
+   new provider's host, using its credential shape (token-in-URL, SSH key,
+   etc.) — this is the entire "wiring" a git-provider plugin does in
+   v0.3.0, no webhook signature verification needed anywhere.
+3. Document the clone-URL shape the plugin expects in `README.md` (it must
+   match what operators will put in `OUTPOST_REPOS`).
 4. Update `preflight.sh` and `README.md`. Add `tests/plugins/<name>.bats`.
 
 ## 8. Out of scope (don't propose)
 
 - Production HA / multi-node / backup-restore (intentionally not the goal)
-- GPU pass-through (out of scope for v0.1)
+- GPU pass-through
 - cert-manager / ACME (TLS lives at Cloudflare edge)
-- In-cluster stateful services (Postgres etc. stay in Compose)
-- New top-level languages beyond `en` and `zh-CN` for v0.1 (deferred to v0.2 — see TODOS)
+- Automated StatefulSet volume snapshots / backups for the data layer
+  (single-node/single-operator scope — see ADR-0004; manual dump-first
+  discipline is the current answer)
+- Reintroducing an inbound webhook path (see ADR-0003 — this was tried,
+  and repeatedly failed silently)
+- New top-level languages beyond `en` and `zh-CN` (see TODOS)
 - Modifying k3s control plane args (e.g. `--disable=traefik`) without
   explicit user approval
 

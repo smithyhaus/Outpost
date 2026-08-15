@@ -40,44 +40,33 @@ credentials-file: /etc/cloudflared/<TUNNEL_ID>.json
 
 ingress:
   # -------------------------------------------------------------------------
-  # 有状态基础设施 HTTP UI(经 caddy 内部反向代理)
-  # 子域前缀来自 .env 的 SEARCH_HOST / MQ_HOST(默认 search / mq)
+  # 有状态基础设施 HTTP UI + k3s 控制面 / 平台服务
+  # 均经 k3s Traefik NodePort 30080 —— search/mq 不再经 caddy:数据服务本身
+  # 已搬进集群(core/k8s/06-bridges/),UI 由 Traefik IngressRoute 暴露,见
+  # core/k8s/06-bridges/ingressroutes.template.yaml。
+  # 子域前缀来自 .env(SEARCH_HOST / MQ_HOST / ARGOCD_HOST / HOOKS_HOST /
+  # REGISTRY_SUBDOMAIN,默认 search / mq / registry)
   # -------------------------------------------------------------------------
   - hostname: ${SEARCH_HOST}.${ROOT_DOMAIN}
-    service: http://caddy:80
+    service: http://host.docker.internal:30080
   - hostname: ${MQ_HOST}.${ROOT_DOMAIN}
-    service: http://caddy:80
-
-  # -------------------------------------------------------------------------
-  # k3s 控制面 / 平台服务(经 k3s Traefik NodePort 30080)
-  # 前缀来自 .env(ARGOCD_HOST / HOOKS_HOST / REGISTRY_SUBDOMAIN,
-  # 默认 argocd / hooks / registry)
-  # -------------------------------------------------------------------------
-  - hostname: ${ARGOCD_HOST}.${ROOT_DOMAIN}
     service: http://host.docker.internal:30080
-  - hostname: ${HOOKS_HOST}.${ROOT_DOMAIN}
-    service: http://host.docker.internal:30080
-  - hostname: tekton.${ROOT_DOMAIN}
-    service: http://host.docker.internal:30080
-  - hostname: rollouts.${ROOT_DOMAIN}
-    service: http://host.docker.internal:30080
+  # v0.3: argocd.* / hooks.* / tekton.* / rollouts.* routes are RETIRED
+  # (ArgoCD, the webhook receiver and both dashboards no longer exist).
+  # Delete them from the Cloudflare Dashboard when upgrading — see
+  # docs/prp/runbooks/wsl2-redeploy-0.3.md.
   - hostname: ${REGISTRY_HOST}
     service: http://host.docker.internal:30080
     originRequest:
       httpHostHeader: ${REGISTRY_HOST}
 
   # -------------------------------------------------------------------------
-  # 有状态数据服务(TCP — 不经 caddy,caddy 仅 HTTP)
-  # 客户端用 `cloudflared access tcp --hostname pg.<ROOT_DOMAIN> --url localhost:5432`
-  # -------------------------------------------------------------------------
-  - hostname: pg.${ROOT_DOMAIN}
-    service: tcp://postgres:5432
-  - hostname: redis.${ROOT_DOMAIN}
-    service: tcp://redis:6379
-  - hostname: rabbitmq.${ROOT_DOMAIN}
-    service: tcp://rabbitmq:5672
-
-  # -------------------------------------------------------------------------
+  # 有状态数据服务的原始协议(TCP)直连已下线:postgres/redis/rabbitmq 不再是
+  # Compose 容器,没有 host.docker.internal:<port> 可转发。全模式下如需远程
+  # TCP 直连(非 HTTP UI),用 `kubectl port-forward` 或给对应 Service 加
+  # NodePort(core/k8s/06-bridges/ 未提供 —— 需要就按 ingressroutes.template.yaml
+  # 的模式自行加一个 NodePort/IngressRouteTCP)。
+  #
   # k8s API(原生 k3s,经 host-gateway 到宿主 6443 — TCP 透传,不经 caddy)
   # 远程 k9s / kubectl(开发机跨网络):
   #   cloudflared access tcp --hostname k8s.<ROOT_DOMAIN> --url localhost:6443

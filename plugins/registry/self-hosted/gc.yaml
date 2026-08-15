@@ -27,7 +27,14 @@
 #
 # Tunables (.env):
 #   OUTPOST_REGISTRY_GC_SCHEDULE          default "0 */6 * * *" — every 6h
-#   OUTPOST_REGISTRY_KEEP_TAGS_PER_REPO   default 5 — most-recent per repo
+#   OUTPOST_REGISTRY_KEEP_TAGS_PER_REPO   default 5 — most-recent per repo.
+#     v0.3 note: the DOCUMENTED/recommended default moved to 10 (bumped
+#     alongside the new OUTPOST_REGISTRY_KEEP_TAGS var in .env.example — GHA
+#     builds are cheap to re-run but a lost rollback target isn't) — the
+#     `:-5` bash fallback baked into bootstrap.d/02-config.sh and
+#     scripts/registry-gc.sh still needs updating by whoever owns those
+#     files to actually apply the new default; see .env.example's
+#     OUTPOST_REGISTRY_KEEP_TAGS comment for the full rationale.
 #   OUTPOST_TEKTON_PRUNER_IMAGE           shared image (alpine/k8s) — reused
 # =============================================================================
 apiVersion: v1

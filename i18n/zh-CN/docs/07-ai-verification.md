@@ -5,12 +5,18 @@
 >
 > 所有命令在 WSL2 Ubuntu 内执行。
 
+标准上手顺序:
+
+1. 读 `SKILL.md`(项目定位、不变量、文件索引)
+2. 读本文(验证操作 + 诊断手册)
+3. 跑 `bash verify.sh --json`,基于结构化输出推理
+
 ## 0. 一键全栈验证（首选）
 
 ```bash
 bash verify.sh           # 人类视角（带颜色）
 bash verify.sh --json    # 机器解析（推荐 AI 用这个）
-bash verify.sh --quiet   # 仅汇总
+bash verify.sh --quiet   # 仅汇总（systemd 定时器跑的就是这个）
 ```
 
 **退出码语义**：
@@ -21,319 +27,257 @@ bash verify.sh --quiet   # 仅汇总
 **JSON 输出格式**（AI 解析示例）：
 ```json
 {
-  "summary": {"pass": 28, "warn": 2, "fail": 0},
+  "schema_version": "1",
+  "summary": {"pass": 28, "warn": 2, "fail": 0, "os": "linux", "mode": "full"},
   "checks": [
     {"status": "PASS", "id": "tool.docker", "detail": "found at /usr/bin/docker"},
-    {"status": "WARN", "id": "edge.skipped", "detail": "ROOT_DOMAIN unset, ..."}
+    {"status": "WARN", "id": "edge.skipped", "detail": "ROOT_DOMAIN unset"}
   ]
 }
 ```
 
-**AI 工作流**：
-1. 跑 `bash verify.sh --json`
-2. 解析 summary，若 FAIL > 0 直接报告失败项
-3. 对每个 FAIL，按本文档对应章节诊断
-4. 整理简短结论（PASS 不展开，FAIL 给出修复建议）
+schema 锁定在 `tests/schema/verify-output.schema.json`。字段形状跨版本稳定,
+破坏性变更会提升 `schema_version`。
 
----
+**verify.sh 输出的小节顺序**:工具 → Compose → K8s 核心 → CI 触发 → CD →
+对账 → 数据层 → 公网入口 → 凭据卫生。第 3–8 节在 `local` 模式下整体跳过。
 
-## 1. 单项验证 checklist
+**推荐的 AI 工作流**:
 
-每个检查项格式：
-- **id**：与 verify.sh 输出对齐
-- **命令**：手动复现
-- **预期**：通过标准
-- **失败时**：诊断步骤
+1. `bash verify.sh --json`
+2. 解析 JSON
+3. `summary.fail > 0` → 逐个 FAIL 按 §1 定位
+4. `summary.warn > 0` → 列出 WARN 的 id 并简述影响
+5. 都没有 → "基础设施健康"
+6. 输出简短的结构化报告,不要把 PASS 细节全倒给用户
 
-### 1.1 工具链
+> **多项同时报红时,先看 `reconcile.*`。** 它是唯一从链条外部审判整条
+> push→build→deploy 的检查,所以那里的 FAIL 往往是其他红项的**解释**,
+> 而不是另一个独立问题。
 
-| id | 命令 | 预期 | 失败时 |
-|----|------|------|--------|
-| `tool.docker` | `command -v docker` | 路径输出 | `apt install docker.io` 或重装 Docker Desktop |
-| `tool.kubectl` | `command -v kubectl` | 路径输出 | `sudo ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl` |
-| `tool.helm` | `command -v helm` | 路径输出 | `curl get-helm-3 \| bash` |
-| `docker.daemon` | `docker info` | 无错误 | `sudo service docker start` |
-| `kubectl.cluster` | `kubectl version --short` | server version 显示 | `sudo systemctl status k3s` |
+## 1. 逐项诊断
 
-### 1.2 Compose 服务
+每个 id 对应一条诊断路径。id 形如 `<area>.<subject>`。
+
+### `tool.<name>`
+
+探测集合:`local` 模式是 `docker openssl envsubst curl`;
+`full` 模式再加 `kubectl helm git`。
+
+| id | 恢复办法 |
+|----|----------|
+| `tool.docker` | 装 Docker(macOS 用 Desktop;Linux 用官方便捷脚本) |
+| `tool.kubectl` | `sudo ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl` |
+| `tool.helm` | `curl get-helm-3 \| bash` |
+| `tool.envsubst` | 装 `gettext` / `gettext-base` —— 否则模板渲染不了 |
+| `tool.git` | 装 git —— 没有它对账根本跑不起来 |
+
+> `yq`(mikefarah v4+)和 `buildctl` **不在**这个探测集合里,但 runner 主机
+> 必须有 —— `scripts/ci/build-image.sh`、`run-tests.sh`、`outpost rollback`
+> 缺了都会失败。`tool.*` 全绿**不能**证明构建主机是完整的。
+
+### `docker.daemon`
+```bash
+sudo service docker start    # Linux/WSL2
+open -a Docker               # macOS
+```
+
+### `kubectl.cluster`
+```bash
+sudo systemctl status k3s
+sudo journalctl -u k3s -n 200
+```
+
+### `compose.<service>`
+
+`full` 模式只应有 `cloudflared` + `caddy`;`local` 模式是四个数据服务。
 
 ```bash
 docker compose -f core/compose/docker-compose.yml ps
+docker logs <service> --tail 100
+docker inspect --format '{{json .State.Health}}' <service>
 ```
-**预期**：6 个容器全部 `running`，healthy 状态：
-- cloudflared
-- caddy
-- postgres (healthy)
-- redis (healthy)
-- rabbitmq (healthy)
-- manticore (healthy)
 
-**单项失败诊断**：
+### `cloudflared.tunnel`
 ```bash
-docker logs <name> --tail 100
-docker inspect --format '{{json .State.Health}}' <name>
+docker logs cloudflared --tail 100
 ```
+应至少有一行含 `Registered tunnel connection`。没有的话:`.env` 里 token
+错了/过期、到 api.cloudflare.com 的 DNS 断了,或 QUIC(UDP/7844)被封 ——
+试试 `CF_TUNNEL_PROTOCOL=http2`。
 
-### 1.3 cloudflared 隧道
-
+### `k8s.nodes`
 ```bash
-docker logs cloudflared --tail 30 | grep "Registered tunnel connection"
+kubectl get nodes
+kubectl describe node $(kubectl get node -o jsonpath='{.items[0].metadata.name}')
 ```
-**预期**：至少 4 行（CF 一般连 4 个 region）。
 
-**失败时**：
-- token 错 → 查 `.env` 的 `CF_TUNNEL_TOKEN`，与 CF Dashboard 对比
-- 网络不通 → `docker exec cloudflared cloudflared --version` 看是否能进容器
-- DNS → `docker exec cloudflared nslookup api.cloudflare.com`
-
-### 1.4 PostgreSQL pgvector
-
+### `k8s.<ns>.<deploy>` / `k8s.<ns>.<name>` / `k8s.no_crashloop`
 ```bash
-source .env
-docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
-  psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
-  -c "SELECT extname, extversion FROM pg_extension;"
+kubectl describe deploy -n <ns> <deploy>
+kubectl get pods -n <ns> -l app=<deploy>
+kubectl logs -n <ns> -l app=<deploy> --tail 200
+kubectl describe pod -n <ns> <pod>
+kubectl logs -n <ns> <pod> -p          # 上一次运行
 ```
-**预期**：含 `vector`、`uuid-ossp`、`pg_trgm`。
+`k8s.<ns>.<name>` WARN 表示某个 plugin 提供的对象不见了 —— 如果你确实启用了
+那个 plugin,重跑 bootstrap。
 
-**失败时**：扩展未装 → 直接 `CREATE EXTENSION IF NOT EXISTS vector;`。`core/compose/postgres-init/01-pgvector.sql` 仅在 volume 全新时执行。
-
-### 1.5 k3s 节点
-
+### `buildkit.daemon` —— FAIL 意味着所有构建都会失败
 ```bash
-kubectl get nodes -o wide
+kubectl -n buildkit get pods
+kubectl -n buildkit logs deploy/buildkitd --tail 200
 ```
-**预期**：1 个节点，STATUS=Ready，Kubernetes 版本 v1.28+。
+startupProbe 在脏缓存恢复时容忍约 6 分钟,所以刚重启后的 FAIL 应当按
+"等一会儿再查一次"处理。
 
-**NotReady 诊断**：
+### `ci.runner` / `ci.runner.unit` / `ci.runner.online`
 ```bash
-sudo systemctl status k3s
-sudo journalctl -u k3s -n 200 --no-pager
-kubectl describe node $(hostname)
+systemctl status 'actions.runner.*'
+journalctl -u 'actions.runner.*' -n 200
+cd ~/actions-runner && sudo ./svc.sh status
 ```
-常见原因：cgroup v2 缺失、iptables 模块、内存不足。
+- `ci.runner` WARN → `GITHUB_RUNNER_PAT` 为空,runner 从未安装。
+  **任何构建都不会触发。** 只有跑本仓库自己的 CI/e2e 时才算合法
+- `ci.runner.unit` FAIL → systemd 服务没在跑。push 会在 GitHub 排队而不是
+  报错,所以别处看起来一切正常
+- `ci.runner.online` FAIL → GitHub 说没有在线 runner,或 api.github.com
+  连不上(代理/出网,或 PAT 权限被收回)
 
-### 1.6 关键 namespace 的 pod
+### `ci.workflow.<app>`
+通过 GitHub API 查该应用仓库最近一次工作流运行。
+- WARN `no workflow runs yet` → 仓库里没有
+  `.github/workflows/outpost-build.yml`
+- FAIL `last run: failure` → 去 GitHub Actions UI 看那次运行
 
+### `sync.cronjob` / `sync.heartbeat` / `sync.result`
 ```bash
-kubectl get pods -n argocd
-kubectl get pods -n tekton-pipelines
-kubectl get pods -n registry
-kubectl get pods -n kube-system
+kubectl -n outpost-ci get cronjob manifest-sync
+kubectl -n outpost-ci get cm sync-heartbeat -o yaml
+kubectl -n outpost-ci get jobs
+bash scripts/outpost logs sync
 ```
-**预期所有**：`STATUS=Running`，`READY=1/1`（或对应数量）。
+- `sync.cronjob` FAIL → 什么都不会部署;重跑 bootstrap
+- `sync.heartbeat` FAIL → 心跳超过 3× `MANIFEST_SYNC_INTERVAL`,sync 停了。
+  卡住的 job 会挡掉后续 tick(`concurrencyPolicy: Forbid`)—— 删掉它
+- `sync.result` FAIL → 上一次运行出错;`last_result` 自带说明
+  (`error:git-clone`、`error:git-fetch`、`error:unexpected-rc=<n>` 等)
 
-**异常 pod 通用诊断**：
-```bash
-kubectl describe pod -n <ns> <pod>     # 重点看 Events 段
-kubectl logs -n <ns> <pod> --tail 100 --all-containers
-kubectl logs -n <ns> <pod> -p          # 上一次 crash 的日志
-```
-
-### 1.7 桥接 Service
-
-```bash
-kubectl get svc -n infra-bridges
-```
-**预期**：4 个 ExternalName Service，externalName 都是 `host.docker.internal`。
-
-**连通性测试**：
-```bash
-kubectl run -it --rm test-bridge --image=alpine --restart=Never -- \
-  sh -c "apk add --no-cache busybox-extras >/dev/null && \
-         nc -zv postgres.infra-bridges.svc.cluster.local 5432 && \
-         nc -zv redis.infra-bridges.svc.cluster.local 6379"
-```
-**预期**：两条 `open`。
-
-**失败时**：
-- DNS 解析失败 → coredns 异常：`kubectl logs -n kube-system -l k8s-app=kube-dns`
-- 解析到但连不上 → mirrored networking 没生效或 Compose 端口未绑 0.0.0.0；检查 `core/compose/docker-compose.yml` 的 `ports` 段
-
-### 1.8 ArgoCD Application
+### `reconcile.<app>` —— 最终裁判
+该仓库的 live 分支头在 `OUTPOST_STALENESS_THRESHOLD`(默认 1800 秒)内没有
+变成已部署的镜像 tag。这一条检查同时覆盖:gitee→github 镜像死了、GitHub
+连不上、runner 离线、工作流红了、buildkitd 挂了、sync 停摆 —— 因为它们
+表现出来都是同一个症状。按链条顺序诊断:
 
 ```bash
-kubectl get application -n argocd
+git ls-remote <github-url> refs/heads/main   # 1. push 镜像过去了吗?
+systemctl status 'actions.runner.*'          # 2. runner 活着吗?
+# 3. GitHub Actions UI → 工作流红了吗?
+# 4. manifest 仓库 → 有 `chore(<app>): bump image to <sha>` 这条提交吗?
+bash scripts/outpost status                  # 5. sync 新鲜且 ok 吗?
 ```
-**输出列**：`NAME / SYNC STATUS / HEALTH STATUS`。
 
-**预期**：root 应当 `Synced/Healthy`；其他子 Application 视 manifest 仓库内容而定。
+相关 id:`reconcile.git`(没装 git)、`reconcile.manifest`
+(`MANIFEST_REPO_URL` 未设)、`reconcile.repos`(`OUTPOST_REPOS` 为空 ——
+反静默层是瞎的,把应用接进来)。
 
-**OutOfSync 诊断**：
+### `data.<service>`
 ```bash
-kubectl get application -n argocd <name> -o yaml | yq '.status.conditions'
+kubectl -n infra-bridges get pods
+kubectl -n infra-bridges logs sts/<service> --tail 200
+kubectl -n infra-bridges exec sts/postgres -- sh -c 'pg_isready -U "$POSTGRES_USER"'
 ```
-- `ComparisonError`：manifest 仓库 yaml 语法错或不可访问
-- 缺凭据：`kubectl get secret -n argocd git-manifest-repo`
-- 网络：ArgoCD repo-server pod 内 `curl https://gitee.com`
+这些是在 pod 内部执行的真实带认证探测,所以 FAIL 意味着服务真的挂了或在拒绝
+凭据 —— 不是网络层面的猜测。
 
-### 1.9 Tekton EventListener
-
-```bash
-kubectl get eventlistener -n tekton-pipelines
-kubectl get svc -n tekton-pipelines | grep el-
-```
-**预期**：`build-listener` Ready=True，对应 service `el-build-listener` 端口 8080（v0.3 起名字与 git provider 解耦）。
-
-**测试 webhook 入口**（不发实际 push）：
-```bash
-curl -sS -o /dev/null -w "%{http_code}\n" \
-  -X POST https://hooks.${ROOT_DOMAIN}
-```
-**预期**：返回 `400` 或 `412`（缺 header，正常拒绝）。**绝不**应当 `502/000`。
-
-**EventListener pod 异常**：
-```bash
-kubectl logs -n tekton-pipelines deploy/el-build-listener --tail 100
-```
-
-### 1.10 Tekton 最近 PipelineRun
+### `edge.<sub>`
+v0.3 只有 `edge.search` / `edge.mq` / `edge.registry`
+(ArgoCD / Tekton / hooks 那几条路由已经没了)。
+- `000` —— DNS 没解析到 Cloudflare,或完全没响应
+- `502/503/504` —— origin(你的栈)挂了
+- `4xx` —— 探测场景下通常仍算 PASS(裸 GET 返回 401/403 恰恰证明链路是通的)
 
 ```bash
-kubectl get pipelinerun -n tekton-pipelines --sort-by=.metadata.creationTimestamp | tail -5
-```
-**字段含义**：
-- `SUCCEEDED=True` 成功
-- `SUCCEEDED=False` 失败
-- `SUCCEEDED=Unknown` 进行中或 pending
-
-**查看失败原因**：
-```bash
-kubectl describe pipelinerun -n tekton-pipelines <name>
-# 找 Status → Conditions → Message
-# 然后定位失败的 TaskRun
-kubectl logs -n tekton-pipelines -l tekton.dev/pipelineRun=<name> --all-containers --tail=200 --prefix
+dig <sub>.<root>
+curl -v https://<sub>.<root>
 ```
 
-### 1.11 Docker Registry
+### `creds.env_perm` / `creds.env` / `creds.infra_md`
+重跑 bootstrap 即可恢复;`.env` 权限会被自动设成 600。
 
-```bash
-# 集群内访问
-kubectl run -it --rm test-reg --image=alpine --restart=Never -- \
-  sh -c "apk add curl >/dev/null && \
-         curl -sf http://docker-registry.registry.svc.cluster.local:5000/v2/_catalog"
-```
-**预期**：返回 `{"repositories":[...]}` JSON。
-
-```bash
-# 外网访问
-curl -sf https://registry.${ROOT_DOMAIN}/v2/_catalog
-```
-
-### 1.12 公网入口（端到端）
-
-```bash
-for sub in argocd search mq registry hooks; do
-  code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 8 "https://${sub}.${ROOT_DOMAIN}")
-  echo "${sub}.${ROOT_DOMAIN}: ${code}"
-done
-```
-
-**判定**：
-- `argocd / mq / registry`：200/302/401/403 都正常（401/403 因为可能有 CF Access 或登录拦截）
-- `search`：调 `/health` 应当 200
-- `hooks`：直接 GET 应当 405 或 400（不是 200）；POST 缺 header 应当 400/412
-- 任何 `502/503/504/000` = FAIL
-
----
-
-## 2. 故障决策树
+## 2. 决策树
 
 ```
-verify.sh 失败？
-├─ 是 →
-│   ├─ 失败项在 §1（工具）？ → 装/起对应工具
-│   ├─ 失败项在 §2（Compose）？
-│   │   ├─ 容器 missing → docker compose -f core/compose/docker-compose.yml up -d
-│   │   ├─ 容器 unhealthy → docker logs <name> 找根因
-│   │   └─ cloudflared 未连通 → 见 §1.3
-│   ├─ 失败项在 §3（k3s）？
-│   │   ├─ 节点 NotReady → 系统级问题（cgroup/iptables/内存）
-│   │   └─ pod 异常 → kubectl describe + logs
-│   ├─ 失败项在 §4（桥接）？
-│   │   ├─ Service 缺失 → kubectl apply -f core/k8s/06-bridges/
-│   │   └─ 连通失败 → mirrored networking 或端口绑定错
-│   ├─ 失败项在 §5（ArgoCD）？
-│   │   ├─ ComparisonError → manifest 仓库内容或访问
-│   │   └─ Degraded → 应用层问题，看子 Application 详情
-│   ├─ 失败项在 §6（Tekton）？
-│   │   ├─ EventListener Down → kubectl logs
-│   │   └─ webhook 入口 502 → cloudflared 路由 / Traefik NodePort
-│   └─ 失败项在 §7（公网入口）？
-│       ├─ DNS 解析不到 → CF Dashboard 没配 Public Hostname
-│       ├─ 502 → 后端服务死了
-│       └─ 521/522/524 → cloudflared 没起或不可达
-└─ 否（全 PASS）→ 报告"基础设施健康"
+verify.sh --json
+   │
+   ├── 有 FAIL? ──────────────────────────────────────────┐
+   │                                                       │
+   │  先看 reconcile.* —— 它能解释大多数整条链的红          │
+   │  然后按 area 逐个处理:                                │
+   │  · tool.* / docker.* / kubectl.*  → 安装/启动         │
+   │  · compose.* / cloudflared.*      → §1                │
+   │  · k8s.* / buildkit.*             → §1                │
+   │  · ci.*    (构建那半边)           → §1                │
+   │  · sync.*  (部署那半边)           → §1                │
+   │  · data.* / edge.*                → §1                │
+   │                                                       │
+   │  解决后重跑 verify.sh --json                          │
+   │                                                       │
+   └── 只有 WARN? → 列出并继续                             │
+                                                           │
+   全 PASS? ───────────────────────────────────────────────┘
+       └── 报告"基础设施健康"
 ```
 
----
+## 3. 给 AI 的系统提示词片段
 
-## 3. AI 自检脚本（推荐使用模式）
-
-AI 验证基础设施的标准模式：
+可直接放进 system prompt 或 skill 激活消息:
 
 ```
-1. cd ~/outpost
-2. cat SKILL.md  （了解项目）
-3. bash verify.sh --json
-4. 解析 JSON：
-   - 若 fail = 0 且 warn = 0 → 报告"全部健康"
-   - 若 warn > 0 → 列出 WARN 项 + 简短解释
-   - 若 fail > 0 → 对每项查 docs/07-ai-verification.md §1 对应章节
-5. 必要时跑 §1.X 的具体诊断命令
-6. 输出结构化报告：
-   - 健康度（绿/黄/红）
-   - 失败项 + 根因 + 建议修复
-   - 用户可执行的下一步
+你正在一个 Outpost 检出目录中操作。
+1. 任何动作之前,先读 SKILL.md 和 i18n/zh-CN/docs/07-ai-verification.md。
+2. 评估健康度:bash verify.sh --json,解析 JSON。
+3. 回答连接串相关问题一律读 INFRA.zh-CN.md,绝不自己编。
+4. 修改状态时:先读现有文件 → 展示 diff → 取得用户同意 → 应用 → 对受影响的部分重跑 verify.sh。
+5. 除非用户明确说了"reset"或"清空",否则绝不运行 reset.sh。
+6. 绝不删除这些命名空间:infra-bridges、outpost-ci、buildkit、registry、kube-system。
+7. 绝不对 `apps` 命名空间执行 kubectl apply —— 它的事实来源是 manifest 仓库。改 manifest 仓库,让 manifest-sync 收敛。
+8. 绝不回显任何密钥:.env 的值、token、GITHUB_RUNNER_PAT,或任何 Secret 的内容。
 ```
 
----
+## 4. 修改后的验证
 
-## 4. AI 在此项目修改东西时的验证
-
-任何修改应该跟一次 verify：
+Agent 改完配置之后:
 
 ```bash
-# 修改 → apply → 等待 → 验证
-kubectl apply -f <changed.yaml>
-sleep 20  # 等 reconcile
+kubectl apply -f <changed.yaml>     # 或 compose、或 platform 脚本
+sleep 20                            # 等 reconcile 完成
 bash verify.sh --json | jq '.checks[] | select(.status != "PASS")'
 ```
 
-如果出现新的 FAIL/WARN：
-- 是否预期？（比如改 secret 后 ArgoCD 暂时 OutOfSync 是正常的）
-- 不是预期 → 回滚或继续诊断
+如果改动是通过 manifest 仓库落地的,要等一个 `MANIFEST_SYNC_INTERVAL`
+(默认 2 分钟)—— 或者手动催一次:
 
----
-
-## 5. 已知限制（不要误报）
-
-verify.sh 当前**不检查**以下项（避免误报）：
-- 应用层业务逻辑（应该由应用自己的健康端点检查）
-- sealed-secrets 加密功能（仅检查 controller pod 在）
-- Webhook 真实触发流程（只检 endpoint 可达，不模拟 Gitee POST）
-- TLS 证书有效期（CF 边缘自动续）
-- 磁盘空间（应当由系统监控）
-
-需要时由人或 AI 单独跑命令检查。
-
----
-
-## 6. 给 AI 的提示词模板（用户可直接复制）
-
-```
-请进入 ~/outpost 目录，读 SKILL.md，然后执行 bash verify.sh --json，
-解析结果后给我一份基础设施健康报告。
-对所有 FAIL/WARN 项，按 docs/07-ai-verification.md §1 对应章节诊断，
-给出根因与修复建议。不要直接修改任何文件，只输出报告。
+```bash
+kubectl -n outpost-ci create job manifest-sync-now --from=cronjob/manifest-sync
+bash scripts/outpost logs sync
 ```
 
----
+若新增的非 PASS 项都在预期内(比如构建还在跑,`reconcile.<app>` 暂时滞后),
+可以继续;否则回滚并询问用户。
 
-附：本文件与 SKILL.md 的关系
+## 5. `verify.sh` 的已知边界
 
-- `SKILL.md`：AI 入门读物（项目身份、架构、约束、惯例）
-- `docs/07-ai-verification.md`（本文）：验证操作手册（命令 + 判定 + 诊断）
-- `verify.sh`：自动化执行入口
+verify.sh **不**检查:
 
-AI 第一次进入此项目时建议**两份都读**，之后 verify.sh 就够用了。
+- 应用层业务逻辑(应用应自己暴露 /healthz)
+- sealed-secrets 的密码学正确性(只检查 controller pod)
+- 构建结果是否**正确** —— 只看最近一次运行是否绿、live HEAD 最终有没有
+  变成已部署的 tag
+- TLS 证书有效期(Cloudflare 管)
+- 磁盘空间(主机层面的事)
+
+它同样看不见任何**不在 `OUTPOST_REPOS` 里**的仓库。那份清单就是对账的依据;
+没注册的应用照样能构建、能部署,但对反静默层是隐形的。
+
+以上情况请跑针对性的命令,或直接升级给用户处理。

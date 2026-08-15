@@ -1,6 +1,7 @@
 # =============================================================================
-# Argo Rollouts variant of hello-go — uncomment in argocd-application.yaml's
-# directory inclusion (or `cp rollout.yaml deployment.yaml`) to switch.
+# Argo Rollouts variant of hello-go — swap it in for deployment.yaml in your
+# app's kustomization.yaml resources (manifest-sync waits on Rollout status
+# natively; needs ROLLOUT_PLUGIN=argo-rollouts).
 # -----------------------------------------------------------------------------
 # Same Pod spec as deployment.yaml, but wrapped in a Rollout CRD with a
 # 4-step canary strategy + analysis between each step. On analysis failure,

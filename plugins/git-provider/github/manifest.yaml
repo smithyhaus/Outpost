@@ -1,46 +1,33 @@
 # =============================================================================
 # Plugin: git-provider / github
 # -----------------------------------------------------------------------------
-# GitHub Push event:
-#   - body.ref                = "refs/heads/main"
-#   - body.after              = commit SHA
-#   - body.repository.clone_url
-#   - body.repository.name
-#   - body.pusher.name
-#   - X-GitHub-Event: push
-#   - X-Hub-Signature-256: sha256=<HMAC>
-# Tekton's built-in `github` interceptor verifies HMAC for us.
+# v0.3: no cluster objects. The inbound-webhook path (Secret + TriggerBinding
+# + EventListener Trigger, HMAC-SHA256 verified by Tekton's built-in `github`
+# interceptor) retired with Tekton. GitHub is now the CI TRIGGER SURFACE: a
+# self-hosted Actions runner on this host long-polls GitHub outbound (no
+# inbound endpoint, no shared secret) and runs
+# templates/github/outpost-build.yml on push.
+#
+# This file is a plain data contract (no envsubst placeholders, nothing
+# applied via kubectl) consumed by:
+#   - preflight.sh — resolves credentials for OUTPOST_REPOS entries whose
+#     host matches `host` below, probes each with an authenticated
+#     `git ls-remote`, and (when set) validates GITHUB_RUNNER_URL/PAT shape
+#     against the GitHub API.
+#   - verify.sh reconciliation + liveness — same host-matching convention
+#     for the live-HEAD check, plus the runner-online / API-reachable checks.
 # =============================================================================
-apiVersion: v1
-kind: Secret
-metadata:
-  name: github-webhook-secret
-  namespace: tekton-pipelines
-type: Opaque
-stringData:
-  secretToken: ${GIT_WEBHOOK_SECRET}
----
-apiVersion: triggers.tekton.dev/v1beta1
-kind: TriggerBinding
-metadata:
-  name: github-push-binding
-  namespace: tekton-pipelines
-spec:
-  params:
-    - name: repo-url
-      value: $(body.repository.clone_url)
-    - name: repo-name
-      value: $(body.repository.name)
-    - name: branch
-      value: $(body.ref)
-    - name: revision
-      value: $(body.after)
-    - name: short-revision
-      # 7-char short SHA produced by the CEL overlay interceptor in
-      # the assembled EventListener. See sibling `trigger.yaml`.
-      value: $(extensions.short_sha)
-    - name: pusher
-      value: $(body.pusher.name)
-# NOTE: the Trigger spec spliced into the EventListener lives in the
-# sibling file `trigger.yaml`. bootstrap's assemble_eventlistener reads
-# it directly — no ConfigMap is needed in the cluster.
+host: github.com
+role: ci-trigger-surface
+credential-template:
+  # github.com is essentially never the primary (GIT_HOST) — gitee is. Every
+  # OUTPOST_REPOS entry on github.com resolves through a GIT_CREDENTIALS_EXTRA
+  # `host|user|token` entry, unless GIT_HOST itself happens to be github.com.
+  primary-user-env: GIT_USER
+  primary-token-env: GIT_TOKEN
+  extra-env: GIT_CREDENTIALS_EXTRA
+runner:
+  url-env: GITHUB_RUNNER_URL
+  pat-env: GITHUB_RUNNER_PAT
+  labels-env: GITHUB_RUNNER_LABELS
+  name-env: GITHUB_RUNNER_NAME

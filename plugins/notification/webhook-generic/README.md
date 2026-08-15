@@ -4,9 +4,13 @@ Fallback channel: POSTs the raw normalized Outpost payload to your own collector
 
 ## What gets installed
 
-- `Secret/generic-webhook` in `tekton-pipelines`.
-- `ConfigMap/generic-template` in `tekton-pipelines`.
-- Merge fragments into `argocd-notifications-cm` and `argocd-notifications-secret`.
+- `Secret/generic-webhook` in `outpost-ci`, volume-mounted by the manifest-sync CronJob.
+- `ConfigMap/generic-template` in `outpost-ci`.
+
+Host-run callers (the GitHub Actions workflow's `build-failed` step, and the
+`verify.sh` systemd timer's `verify-failed` check) invoke
+`notify-fanout.sh --env-file $OUTPOST_ROOT/.env ...` instead of relying on
+the volume mount.
 
 ## How to enable
 
@@ -20,13 +24,15 @@ Then re-run `bash bootstrap.sh`.
 
 ## Payload shape
 
-See `i18n/en/docs/proposals/cicd-test-gate.md` §4.2. Compact form:
-
 ```json
-{ "event": "tekton.pipelinerun.failed", "level": "error",
+{ "event": "build-failed", "level": "error",
   "app": "my-app", "env": "prod", "commit": "abc1234",
   "ref": "main", "url": "https://...", "text": "..." }
 ```
+
+Event names: `build-failed` (GitHub Actions workflow), `deploy-succeeded` /
+`deploy-failed` (manifest-sync CronJob), `verify-failed` (host verify.sh
+systemd timer).
 
 ## Caveats
 

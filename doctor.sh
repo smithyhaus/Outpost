@@ -4,8 +4,8 @@
 # -----------------------------------------------------------------------------
 # Ex-ante preflight. Surfaces the failure modes that otherwise only appear
 # half-way through bootstrap.sh — port collisions, Docker down, an unresolved
-# domain, a malformed Cloudflare token, an unreachable build image, blocked
-# build egress.
+# domain, a malformed Cloudflare token, blocked egress to the hosts the
+# CI/CD engine depends on (gitee/github/api.github/daocloud).
 #
 # Read-only / idempotent: never writes a file; `docker run --rm` only.
 #
@@ -13,7 +13,10 @@
 #   ./doctor.sh                   coloured human output
 #   ./doctor.sh --json            machine-readable JSON (AI parsable)
 #   ./doctor.sh --quiet           summary line only
-#   ./doctor.sh --egress h1,h2    additionally probe build egress to those hosts
+#   ./doctor.sh --egress [h1,h2]  additionally probe egress; with no host list
+#                                 the v0.3 defaults are probed: gitee.com,
+#                                 github.com, api.github.com, m.daocloud.io
+#                                 (the hosts the CI/CD engine depends on)
 #
 # Exit codes:
 #   0  all PASS
@@ -40,18 +43,33 @@ source "${INFRA_ROOT}/platform/lib/doctor-checks.sh"
 # ---- args -------------------------------------------------------------------
 MODE="human"
 EGRESS_HOSTS=()
+EGRESS_REQUESTED=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --json)   MODE="json";  shift ;;
     --quiet)  MODE="quiet"; shift ;;
-    --egress) IFS=',' read -ra EGRESS_HOSTS <<< "${2:-}"
-              # shift past the flag, then past its value if one was given.
-              # `shift 2` would be a no-op (count out of range) when --egress
-              # is the last arg, leaving $# unchanged → arg-loop never ends.
-              shift; [[ $# -gt 0 ]] && shift ;;
+    --egress) EGRESS_REQUESTED=1
+              # A following token that is NOT another flag is the host list;
+              # `--egress` alone falls back to the v0.3 default host set.
+              if [[ -n "${2:-}" && "${2:0:2}" != "--" ]]; then
+                IFS=',' read -ra EGRESS_HOSTS <<< "$2"
+                # shift past the flag, then past its value. A bare `shift 2`
+                # would be a no-op (count out of range) when --egress is the
+                # last arg, leaving $# unchanged → arg-loop never ends.
+                shift; shift
+              else
+                shift
+              fi ;;
     *)        shift ;;
   esac
 done
+if [[ "$EGRESS_REQUESTED" -eq 1 && "${#EGRESS_HOSTS[@]}" -eq 0 ]]; then
+  # Defaults live in doctor-checks.sh (bats-covered) — one per line.
+  while IFS= read -r _h; do
+    [[ -n "$_h" ]] && EGRESS_HOSTS+=("$_h")
+  done < <(doctor_default_egress_hosts)
+  unset _h
+fi
 
 # Load env best-effort — doctor MUST work before bootstrap (no .env yet).
 if [[ -f .env ]]; then
@@ -202,26 +220,10 @@ else
     "re-copy the tunnel token from the Cloudflare Zero Trust dashboard (Networks -> Tunnels)"
 fi
 
-# ---- 5. Container networking & build image ---------------------------------
-section "5. Container networking & build image"
-if docker_ok; then
-  if docker run --rm --add-host=host.docker.internal:host-gateway alpine:3.20 \
-       getent hosts host.docker.internal >/dev/null 2>&1; then
-    record PASS "net.host_docker_internal" "resolvable from containers" ""
-  else
-    record FAIL "net.host_docker_internal" "not resolvable from containers" \
-      "k3s pods reach the data layer via host.docker.internal — check Docker's host-gateway support"
-  fi
-  if docker manifest inspect gcr.io/kaniko-project/executor:v1.5.1 >/dev/null 2>&1; then
-    record PASS "image.kaniko" "kaniko build image reachable" ""
-  else
-    record FAIL "image.kaniko" "cannot reach the kaniko build image" \
-      "check network / Docker registry mirror — the Tekton build step needs gcr.io/kaniko-project/executor:v1.5.1"
-  fi
-else
-  record WARN "net.host_docker_internal" "skipped — docker not running" ""
-  record WARN "image.kaniko" "skipped — docker not running" ""
-fi
+# (v0.3 removed the host.docker.internal + kaniko/gcr.io gates: the data
+# layer lives in-cluster now — nothing resolves host.docker.internal — and
+# the build engine is the in-cluster buildkitd, not an ephemeral kaniko pod
+# pulled from gcr.io. Egress health is covered by --egress below.)
 
 fi  # end full-mode-only
 

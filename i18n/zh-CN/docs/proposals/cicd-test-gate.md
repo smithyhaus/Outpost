@@ -1,9 +1,20 @@
 # CI/CD 测试网关 + 自动回滚 + 多通道告警
 
-> **状态**:**Approved**(2026-05-10)— Phase 1 MVP 实施中
+> ⚠️ **v0.3.0 已废止** —— 本提案所依赖的 Tekton(CI)+ ArgoCD(CD)引擎已被
+> GitHub Actions self-hosted runner + `manifest-sync` CronJob 取代,因此下文
+> 的 Gate A 接线方式、ArgoCD Notifications 后端、Rollouts Dashboard 都已与代码
+> 不符。见
+> [ADR-0003](../../../../docs/decisions/0003-github-actions-engine-swap.md)。
+> 仍然有效的部分:Gate A 依旧靠 `outpost.test.yaml` 可选启用(改由 runner 主机上的
+> `scripts/ci/run-tests.sh` 执行);告警依旧是 plugin 化的(改走
+> `scripts/notify-fanout.sh`,事件为 `build-failed` / `deploy-succeeded` /
+> `deploy-failed` / `verify-failed`);Argo Rollouts 仍是自动回滚方案 —— 但只装
+> controller,且默认 `ROLLOUT_PLUGIN=none`。以下内容作为设计史保留。
+
+> **状态**:**Approved**(2026-05-10)— 2026-08-15 废止
 > **作者**:Outpost Eng
 > **创建日期**:2026-05-10
-> **关联**:`plugins/git-provider/`、`plugins/registry/`、`core/k8s/05-tekton/`、`core/k8s/06-argocd/`
+> **关联**:`plugins/git-provider/`、`plugins/registry/`、`core/k8s/05-tekton/`、`core/k8s/06-argocd/`*(两个 `core/k8s` 目录已在 v0.3.0 删除)*
 
 ---
 

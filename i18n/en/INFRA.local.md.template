@@ -9,10 +9,13 @@
 Generated: at bootstrap time
 Mode: `local` (Compose data services only — no public hosts, no GitOps)
 
-To upgrade to `full` mode (Cloudflare Tunnel + k3s + ArgoCD + Tekton):
+To upgrade to `full` mode (k3s data layer + Cloudflare Tunnel + GitHub
+Actions self-hosted runner + manifest-sync CD):
 
 1. set `OUTPOST_MODE=full` in `.env`
-2. fill `ROOT_DOMAIN`, `CF_TUNNEL_TOKEN`, `GIT_USER`, `GIT_TOKEN`, `MANIFEST_REPO_URL`
+2. fill `ROOT_DOMAIN`, `CF_TUNNEL_TOKEN`, `GIT_USER`, `GIT_TOKEN`,
+   `MANIFEST_REPO_URL`, `GITHUB_RUNNER_URL`, `GITHUB_RUNNER_PAT`,
+   `OUTPOST_REPOS`
 3. re-run `bash bootstrap.sh`
 
 ---

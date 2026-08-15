@@ -4,10 +4,16 @@ Sends Outpost CI/CD events to a DingTalk group robot.
 
 ## What gets installed
 
-- `Secret/dingtalk-webhook` in `tekton-pipelines` — webhook URL + optional sign secret, read by the shared `outpost-notify` Task.
-- `ConfigMap/dingtalk-template` in `tekton-pipelines` — the DingTalk markdown body template.
-- A merge fragment into `argocd-notifications-cm` (services + per-event templates).
-- A merge fragment into `argocd-notifications-secret` (the URL keys).
+- `Secret/dingtalk-webhook` in `outpost-ci` — webhook URL + optional sign
+  secret, volume-mounted by the manifest-sync CronJob so
+  `scripts/notify-fanout.sh` finds it at `/secrets/dingtalk/webhook-url`.
+- `ConfigMap/dingtalk-template` in `outpost-ci` — the DingTalk markdown body
+  template, mounted at `/templates/dingtalk/body.tmpl`.
+
+Host-run callers (the GitHub Actions workflow's `build-failed` step, and the
+`verify.sh` systemd timer's `verify-failed` check) run outside the cluster —
+they invoke `notify-fanout.sh --env-file $OUTPOST_ROOT/.env ...` instead of
+relying on the volume mount.
 
 ## How to enable
 
@@ -25,10 +31,10 @@ Sends Outpost CI/CD events to a DingTalk group robot.
 
 | Event | Sample title |
 |---|---|
-| Tekton pipeline failed | `[error] my-app tekton.pipelinerun.failed` |
-| ArgoCD sync failed | `[error] my-app sync failed` |
-| ArgoCD app degraded | `[error] my-app degraded` |
-| Rollouts auto-rolled back | `[error] my-app rolled back` |
+| GitHub Actions workflow build failed | `[error] my-app build-failed` |
+| manifest-sync deploy succeeded | `[ok] my-app deploy-succeeded` |
+| manifest-sync deploy failed | `[error] my-app deploy-failed` |
+| verify.sh reconciliation/liveness FAIL | `[error] my-app verify-failed` |
 
 ## Caveats
 

@@ -50,3 +50,14 @@ setup() {
   run doctor_port_holder 49233
   [ "$status" -eq 0 ]
 }
+
+# ---- doctor_default_egress_hosts (v0.3 CI/CD engine dependencies) -----------
+@test "doctor_default_egress_hosts: exactly the 4 engine-critical hosts, one per line" {
+  run doctor_default_egress_hosts
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "gitee.com" ]
+  [ "${lines[1]}" = "github.com" ]
+  [ "${lines[2]}" = "api.github.com" ]
+  [ "${lines[3]}" = "m.daocloud.io" ]
+  [ "${#lines[@]}" -eq 4 ]
+}

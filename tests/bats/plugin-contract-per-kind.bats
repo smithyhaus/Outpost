@@ -3,20 +3,22 @@
 # Per-kind plugin contract: extras every plugin of a given `kind:` MUST ship.
 # -----------------------------------------------------------------------------
 # tests/bats/plugin-contract.bats enforces the universal contract (plugin.yaml
-# + preflight.sh + README.md + manifest-or-compose). This file adds the
-# kind-specific layer:
+# + preflight.sh + README.md + manifest-or-compose). v0.3 (plugin contract v2)
+# retired BOTH per-kind extras that existed pre-v0.3:
 #
 #   notification → argocd-cm-fragment.yaml + argocd-secret-fragment.yaml
-#                  (consumed by bootstrap.d/09 when wiring argocd-notifications)
+#                  (ArgoCD is gone; manifest.yaml alone now describes what
+#                  the manifest-sync CronJob / GitHub Actions workflow /
+#                  verify.sh systemd timer consume)
 #   git-provider → trigger.yaml
-#                  (consumed by platform/lib/eventlistener-assemble.sh to
-#                  splice into the EventListener envelope)
-#   everything else → (no extras)
+#                  (the inbound-webhook/EventListener path retired with
+#                  Tekton; git-provider plugins are credential + host-
+#                  matching contracts consumed by preflight.sh + verify.sh)
 #
-# Why this matters: a contributor copying gitee/ to scaffold a new
-# notification plugin would PASS plugin-contract.bats but produce a
-# silently-broken install because bootstrap.d/09 would cat a missing
-# argocd-cm-fragment.yaml.
+# No kind currently ships extras beyond the universal contract. This file is
+# kept (rather than deleted) so a FUTURE kind that needs extras has a
+# deliberate place to declare them — the dispatch test below fails loudly on
+# an unrecognised kind instead of silently passing.
 # =============================================================================
 
 setup() {
@@ -33,14 +35,8 @@ _plugin_kind() {
 # extras beyond the universal contract.
 _required_extras_for_kind() {
   case "$1" in
-    notification)
-      echo "argocd-cm-fragment.yaml argocd-secret-fragment.yaml"
-      ;;
-    git-provider)
-      echo "trigger.yaml"
-      ;;
-    registry|test-runner|rollout)
-      echo ""   # no extras
+    notification|git-provider|registry|test-runner|rollout)
+      echo ""   # no extras (v0.3 plugin contract v2)
       ;;
     *)
       # Unknown kind. The dispatch test below will flag this so a new
@@ -61,48 +57,42 @@ _required_extras_for_kind() {
   done < <(find "${INFRA_ROOT}/plugins" -name plugin.yaml)
 }
 
-# ---- 2. Per-kind extras: assert presence ------------------------------------
+# ---- 2. Retired per-kind extras stay retired --------------------------------
 
-@test "every notification plugin ships argocd-cm-fragment.yaml + argocd-secret-fragment.yaml" {
+@test "no notification plugin ships the retired argocd-cm-fragment.yaml / argocd-secret-fragment.yaml" {
   while IFS= read -r dir; do
     f="$dir/plugin.yaml"
     [ -f "$f" ] || continue
     kind=$(_plugin_kind "$f")
     [ "$kind" = "notification" ] || continue
-    [ -f "$dir/argocd-cm-fragment.yaml" ] \
-      || fail "notification plugin $(basename "$dir") missing argocd-cm-fragment.yaml"
-    [ -f "$dir/argocd-secret-fragment.yaml" ] \
-      || fail "notification plugin $(basename "$dir") missing argocd-secret-fragment.yaml"
+    [ ! -f "$dir/argocd-cm-fragment.yaml" ] \
+      || fail "notification plugin $(basename "$dir") still ships argocd-cm-fragment.yaml — retired in v0.3 (ArgoCD removed)"
+    [ ! -f "$dir/argocd-secret-fragment.yaml" ] \
+      || fail "notification plugin $(basename "$dir") still ships argocd-secret-fragment.yaml — retired in v0.3 (ArgoCD removed)"
   done < <(find "${INFRA_ROOT}/plugins" -mindepth 2 -maxdepth 2 -type d)
 }
 
-@test "every git-provider plugin ships trigger.yaml" {
+@test "no git-provider plugin ships the retired trigger.yaml" {
   while IFS= read -r dir; do
     f="$dir/plugin.yaml"
     [ -f "$f" ] || continue
     kind=$(_plugin_kind "$f")
     [ "$kind" = "git-provider" ] || continue
-    [ -f "$dir/trigger.yaml" ] \
-      || fail "git-provider plugin $(basename "$dir") missing trigger.yaml — required by assemble_eventlistener since v0.3"
+    [ ! -f "$dir/trigger.yaml" ] \
+      || fail "git-provider plugin $(basename "$dir") still ships trigger.yaml — retired in v0.3 (inbound webhook/EventListener path removed)"
   done < <(find "${INFRA_ROOT}/plugins" -mindepth 2 -maxdepth 2 -type d)
 }
 
-# ---- 3. Negative: kinds without per-kind extras don't sprout surprises -----
+# ---- 3. Negative: no kind ships either retired extra ------------------------
 
-@test "registry / test-runner / rollout plugins don't accidentally ship per-kind extras (would imply new contract)" {
-  # If a plugin of kind X ships a file that's a known extra of some OTHER
-  # kind, that's almost certainly a copy-paste leftover — flag it.
+@test "no plugin of any kind ships argocd-*-fragment.yaml or trigger.yaml (v0.3: no per-kind extras)" {
   while IFS= read -r dir; do
-    f="$dir/plugin.yaml"
-    [ -f "$f" ] || continue
-    kind=$(_plugin_kind "$f")
-    case "$kind" in
-      registry|test-runner|rollout)
-        [ ! -f "$dir/argocd-cm-fragment.yaml" ] \
-          || fail "$(basename "$dir") (kind=$kind) ships argocd-cm-fragment.yaml — only notification plugins should"
-        [ ! -f "$dir/trigger.yaml" ] \
-          || fail "$(basename "$dir") (kind=$kind) ships trigger.yaml — only git-provider plugins should"
-        ;;
-    esac
+    [ -f "$dir/plugin.yaml" ] || continue
+    [ ! -f "$dir/argocd-cm-fragment.yaml" ] \
+      || fail "$(basename "$dir") ships argocd-cm-fragment.yaml — retired in v0.3"
+    [ ! -f "$dir/argocd-secret-fragment.yaml" ] \
+      || fail "$(basename "$dir") ships argocd-secret-fragment.yaml — retired in v0.3"
+    [ ! -f "$dir/trigger.yaml" ] \
+      || fail "$(basename "$dir") ships trigger.yaml — retired in v0.3"
   done < <(find "${INFRA_ROOT}/plugins" -mindepth 2 -maxdepth 2 -type d)
 }

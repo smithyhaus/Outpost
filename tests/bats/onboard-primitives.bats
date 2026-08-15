@@ -58,7 +58,7 @@ teardown() {
 }
 
 # ---- manifest scaffold: file output + idempotency (hermetic) ----------------
-@test "manifest scaffold: fresh run writes the 5 manifest files" {
+@test "manifest scaffold: fresh run writes the 4 manifest files (no argocd-apps)" {
   mkdir -p "$TMP/m"
   run bash "$CLI" manifest scaffold demo --lang go --manifests-dir "$TMP/m"
   [ "$status" -eq 0 ]
@@ -66,7 +66,8 @@ teardown() {
   [ -f "$TMP/m/apps/demo/service.yaml" ]
   [ -f "$TMP/m/apps/demo/ingress.yaml" ]
   [ -f "$TMP/m/apps/demo/kustomization.yaml" ]
-  [ -f "$TMP/m/argocd-apps/demo.yaml" ]
+  # v0.3: manifest-sync ignores argocd-apps/ — the scaffold must not create it.
+  [ ! -e "$TMP/m/argocd-apps/demo.yaml" ]
 }
 
 @test "manifest scaffold: substitutes the app name into the manifests" {

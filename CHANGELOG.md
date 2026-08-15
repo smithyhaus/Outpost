@@ -5,7 +5,82 @@ All notable changes to Outpost are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] — 2026-08-15
+
+CI/CD engine swap: Tekton + ArgoCD are retired in favor of a GitHub Actions
+self-hosted runner (CI) and a manifest-sync CronJob (CD). Rationale, incident
+attribution (72 commits audited), and the three-option adversarial review
+live in [ADR-0003](docs/decisions/0003-github-actions-engine-swap.md). The
+data layer (postgres/redis/rabbitmq/manticore) moves into k3s for `full`
+mode; see [ADR-0004](docs/decisions/0004-data-layer-in-k3s.md) (amends
+ADR-0001). Full redeploy steps:
+[`docs/prp/runbooks/wsl2-redeploy-0.3.md`](docs/prp/runbooks/wsl2-redeploy-0.3.md).
+
+### BREAKING
+
+- **Engine swap: Tekton + ArgoCD → GitHub Actions self-hosted runner +
+  manifest-sync CronJob.** Tekton (16 CRDs / 4 controllers / 5 admission
+  webhooks / dashboard / EventListener / pruner) and ArgoCD (7 processes / 3
+  CRDs / notifications) are fully removed — ~80k LOC of vendored YAML and
+  23+ cluster CRDs down to 1 (sealed-secrets; +4 optional if
+  `ROLLOUT_PLUGIN=argo-rollouts`). CI is now a ~40-line
+  `templates/github/outpost-build.yml` workflow run by the official
+  `actions/runner` on the host, calling this repo's `scripts/ci/*`
+  (`build-image.sh` → buildctl against the in-cluster buildkitd NodePort,
+  `run-tests.sh` → optional Gate A, `publish-npm.sh` for publish-type repos)
+  then `scripts/update-manifest.sh` unchanged (6-attempt jittered push retry
+  kept — cross-repo workflow concurrency still exists). CD is the
+  `manifest-sync` CronJob (ns `outpost-ci`, every `MANIFEST_SYNC_INTERVAL`
+  minutes, `concurrencyPolicy: Forbid`): `git pull` the manifest repo →
+  `kubectl apply -k` changed apps → rollout-wait (Rollout-kind aware) →
+  notify → heartbeat ConfigMap. See `bootstrap.d/08-ci.sh` (replaces
+  `bootstrap.d/08-argocd-tekton.sh`).
+- **Inbound webhook path retired entirely.** No provider push webhook is
+  registered anywhere — the runner is pure outbound long-poll (proxy-aware),
+  the manifest-sync CronJob is pure poll-pull. `scripts/register-webhooks.sh`,
+  `platform/lib/cel-helpers.sh`, `platform/lib/eventlistener-assemble.sh`,
+  every plugin's `trigger.yaml`, and the `hooks.<domain>` route are all
+  deleted. `git-provider` plugins are now a credential + `git ls-remote`
+  preflight contract, not a webhook-wiring contract.
+- **`.env` additions**: `OUTPOST_REPOS` (comma-list of
+  `<canonical-clone-url>[#<branch>]` — the reconciliation basis and
+  onboarding registry; replaces `WEBHOOK_REPO_WHITELIST`'s gating role),
+  `GITHUB_RUNNER_URL`, `GITHUB_RUNNER_PAT`, `GITHUB_RUNNER_LABELS` (default
+  `outpost`), `GITHUB_RUNNER_NAME`, `MANIFEST_SYNC_INTERVAL` (default `2`
+  minutes), `OUTPOST_STALENESS_THRESHOLD` (default `1800` seconds — how long
+  a reconciliation mismatch may persist before `verify.sh` calls it FAIL),
+  `OUTPOST_REGISTRY_KEEP_TAGS` (default `10`, up from `5` — doubles as
+  rollback depth), `ROLLOUT_PLUGIN` (new default `none`; `argo-rollouts` is
+  now opt-in and controller-only, no dashboard).
+- **`.env` removals**: `GIT_WEBHOOK_SECRET`, `WEBHOOK_REPO_WHITELIST`,
+  `ROLLOUTS_DASHBOARD_HOST`, `HOOKS_HOST`, `OUTPOST_DASHBOARD_USER`,
+  `OUTPOST_DASHBOARD_PASSWORD` — there is no inbound webhook secret to leak
+  and no dashboard BasicAuth surface left to guard.
+- **Dashboards removed.** ArgoCD UI, Tekton Dashboard, and the Argo Rollouts
+  dashboard are gone — no in-cluster CI/CD web UI. Build status lives in the
+  GitHub Actions UI (or `journalctl -u actions.runner.*` on the runner host);
+  deploy status lives in `outpost status` / `outpost logs sync` (sync-job
+  logs + `sync-heartbeat` ConfigMap: `last_sync_ts` / `applied_head` /
+  `last_result`).
+- **Data layer moves into k3s for `full` mode.** postgres/redis/rabbitmq/
+  manticore become StatefulSets in `infra-bridges` (Service names unchanged
+  — application connection strings need zero edits). The
+  `host.docker.internal` / CoreDNS bridge is deleted. `local` mode keeps a
+  pure-Compose `local-data` profile; `full` mode's Compose stack shrinks to
+  an `edge` profile (`caddy` + `cloudflared`). See
+  [ADR-0004](docs/decisions/0004-data-layer-in-k3s.md).
+- **Rollback CLI unchanged in shape, new mechanism**: `outpost rollback
+  <app> [sha]` now lists registry tags via the NodePort registry API,
+  yq-rewrites the manifest repo through the same `update-manifest.sh` code
+  path, and relies on manifest-sync to converge (≤2 sync intervals, fully
+  domestic — works with github.com unreachable). `kubectl rollout undo`
+  remains the break-glass escape hatch but MUST be paired with a manifest
+  revert or the next sync tick reverts it (enforced truth is a feature).
+- **`outpost onboard` registers CI, not a webhook.** Onboarding an app now
+  appends its clone URL to `OUTPOST_REPOS`, prints dual-push / workflow-copy
+  instructions, and offers to drop `templates/github/outpost-build.yml`
+  into the target repo's `.github/workflows/`. No provider-side webhook
+  step exists anywhere in the onboarding flow.
 
 ### Changed
 
@@ -91,7 +166,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `core/k8s/05-tekton/eventlistener.yaml` (the hardcoded v0.1
   Gitee-only EventListener). Replaced by the assembly pipeline above.
 
-See [`TODOS.md`](TODOS.md) for the v0.3 roadmap and beyond.
+See [`TODOS.md`](TODOS.md) for the v0.4 roadmap and beyond.
 
 ## [0.2.0] — 2026-05-12
 

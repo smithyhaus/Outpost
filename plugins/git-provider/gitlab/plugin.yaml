@@ -1,15 +1,23 @@
 kind: git-provider
 name: gitlab
 description: |
-  GitLab webhook -> Tekton EventListener trigger.
-  Validates X-Gitlab-Token header against GIT_WEBHOOK_SECRET (plain compare).
+  GitLab (gitlab.com or self-hosted CE/EE) — a credential + host-matching
+  contract, same as gitee/github. v0.3 retires the inbound webhook path
+  entirely (CI is triggered by GitHub Actions on a self-hosted runner, not
+  by an inbound GitLab webhook). preflight.sh runs a real authenticated
+  `git ls-remote` against every OUTPOST_REPOS entry whose host looks like a
+  GitLab host, so a revoked/expired token fails loudly at bootstrap instead
+  of silently breaking reconciliation later.
 required_env:
   - GIT_USER
   - GIT_TOKEN
-  - GIT_WEBHOOK_SECRET
 provides:
-  - webhook-url: https://hooks.${ROOT_DOMAIN}
-  - signature-mode: plain-token (X-Gitlab-Token header equality)
+  - host: gitlab.com (or self-hosted — matched by hostname pattern, see README)
+  - preflight: authenticated `git ls-remote` probe per matching OUTPOST_REPOS entry
 caveats:
-  - GitLab does not offer HMAC for webhooks — plain shared secret is the only mode.
-  - Both gitlab.com and self-hosted CE/EE are supported.
+  - No cluster objects are applied by this plugin (v0.3) — it is a host +
+    credential contract only, consumed by preflight.sh and verify.sh.
+  - Self-hosted GitLab host matching is a hostname-substring heuristic
+    (anything containing "gitlab.") — see README.md for the exact rule.
+  - Both gitlab.com and self-hosted CE/EE are supported for cloning; this
+    plugin never talks to a GitLab-specific API (only the git ls-remote).

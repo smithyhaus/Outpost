@@ -1,35 +1,62 @@
 # Plugin: git-provider / gitee
 
-Wires Gitee Push Hook → Tekton EventListener → PipelineRun.
+Gitee is Outpost's **primary push target** — manifest-repo host, the
+domestic (CN) path for the deploy/rollback hot loop, and the reconciliation
+basis `verify.sh` checks every `OUTPOST_REPOS` entry against.
 
-## Webhook configuration
+## v0.3 change: no more inbound webhook
 
-In your Gitee repo: **Management → WebHooks → Add**
+Earlier versions wired Gitee's Push Hook straight into a Tekton
+EventListener. That entire inbound-webhook path is retired — CI now runs on
+a **GitHub Actions self-hosted runner** (pure outbound long-poll, no inbound
+endpoint to configure or leak a shared secret from). Gitee's job narrows to:
 
-| Field   | Value                                  |
-|---------|----------------------------------------|
-| URL     | `https://hooks.<ROOT_DOMAIN>`          |
-| 密码    | value of `GIT_WEBHOOK_SECRET` from `.env` (Gitee labels its shared-secret field "密码") |
-| Events  | check **Push** only                    |
-| Status  | enabled                                |
+- primary push target for your app repos
+- host of `MANIFEST_REPO_URL` (the deploy source of truth, pulled by the
+  in-cluster `manifest-sync` CronJob every `MANIFEST_SYNC_INTERVAL` minutes)
+- the host `preflight.sh` and `verify.sh` match `OUTPOST_REPOS` entries
+  against for an authenticated `git ls-remote` probe
 
-## How signature verification works
+There is nothing to configure on the Gitee side anymore — no webhook URL, no
+shared secret, no signature mode.
 
-Gitee sends the raw shared secret in the `X-Gitee-Token` header. The
-EventListener CEL interceptor compares it with `GIT_WEBHOOK_SECRET` baked
-into the trigger.
+## Getting a GitHub trigger surface
 
-> ⚠️ This is a plain-token comparison, weaker than HMAC. If the token leaks,
-> rotate it: regenerate `GIT_WEBHOOK_SECRET` in `.env`, re-run
-> `bash bootstrap.sh` (idempotent), and update the value in every Gitee
-> repo's webhook setting.
+Since GitHub Actions is the CI engine, every app repo needs a `github.com`
+copy for the workflow to trigger from. Two supported ways to keep it in
+sync with gitee (the primary):
 
-## Field mapping
+### Option A — dual-push (recommended)
 
-| Pipeline param | Gitee field                                |
-|----------------|--------------------------------------------|
-| `repo-url`     | `body.repository.git_http_url`             |
-| `repo-name`    | `body.repository.name`                     |
-| `branch`       | `body.ref`                                 |
-| `revision`     | `body.after`                               |
-| `pusher`       | `body.user_name`                           |
+Add GitHub as a second push URL on `origin`, so one `git push` delivers to
+both remotes and a failure is visible in your terminal immediately:
+
+```bash
+git remote set-url --add --push origin https://gitee.com/<org>/<repo>.git
+git remote set-url --add --push origin https://github.com/<org>/<repo>.git
+git push   # now pushes to BOTH
+```
+
+### Option B — gitee's official one-way push-mirror
+
+Gitee repo → **管理 → 仓库镜像管理 → 推送镜像** → add the GitHub repo as a
+push-mirror target. Gitee documents a 30-minute sync window and explicitly
+warns against configuring **bidirectional** mirroring (push-mirror both
+ways) — code can be lost if both sides receive writes inside that window.
+Keep gitee as the only write target; the mirror is one-way gitee → github.
+
+## Credentials
+
+`GIT_USER` / `GIT_TOKEN` (paired with `GIT_HOST`, auto-derived from
+`MANIFEST_REPO_URL`) authenticate against gitee.com. `preflight.sh` uses
+these to run a real `git ls-remote` against every `OUTPOST_REPOS` entry on
+gitee.com — an invalid or expired token fails bootstrap immediately instead
+of silently breaking builds and reconciliation later.
+
+## Field reference (unchanged concepts, new consumers)
+
+| Concept | Source |
+|---------|--------|
+| Repo registry | `OUTPOST_REPOS` (`.env`) — replaces the old `WEBHOOK_REPO_WHITELIST` |
+| Deploy branch | `OUTPOST_DEPLOY_BRANCH` (`.env`) — filters which branch's pushes matter |
+| Manifest repo | `MANIFEST_REPO_URL` / `MANIFEST_REPO_BRANCH` (`.env`) |

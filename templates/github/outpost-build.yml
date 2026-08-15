@@ -1,0 +1,67 @@
+# =============================================================================
+# outpost-build — copy into your app repo as .github/workflows/outpost-build.yml
+# -----------------------------------------------------------------------------
+# All real logic lives in the Outpost repo's hardened scripts on the runner
+# host ($OUTPOST_ROOT, injected via the runner's .env file — see
+# templates/github/README.md). This file stays ~40 lines on purpose: upgrading
+# the build logic = pulling the infras repo on the runner host, not touching
+# 15 app repos.
+#
+# Adjust ONLY the branch below if your deploy branch is not `main`.
+# =============================================================================
+name: outpost-build
+
+on:
+  push:
+    branches: [main]
+
+# One build per repo at a time; queued pushes collapse to the newest.
+concurrency:
+  group: outpost-build-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: [self-hosted, outpost]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # Build + push (sha-7 tag). Library repos (OUTPOST_LIBRARY_REPOS) are
+      # routed to publish-npm.sh internally. Exports IMAGE into $GITHUB_ENV.
+      - name: Build image
+        run: bash "$OUTPOST_ROOT/scripts/ci/build-image.sh" "$GITHUB_WORKSPACE"
+
+      # Gate A — opt-in via outpost.test.yaml / Dockerfile.test; clean no-op
+      # otherwise. Runs containerized on the host.
+      - name: Run tests (Gate A)
+        run: bash "$OUTPOST_ROOT/scripts/ci/run-tests.sh" "$GITHUB_WORKSPACE"
+
+      # Bump the manifest repo (gitee) — manifest-sync converges within
+      # MANIFEST_SYNC_INTERVAL minutes. IMAGE comes from the build step.
+      # Library repos publish packages instead — no IMAGE, no manifest bump.
+      - name: Update manifest
+        if: env.IMAGE != ''
+        run: |
+          set -a; source "$OUTPOST_ROOT/.env"; set +a
+          export APP_NAME="${GITHUB_REPOSITORY##*/}"
+          export COMMIT_MESSAGE="chore(${APP_NAME}): bump image to ${IMAGE##*:} [skip ci]"
+          export WORK_DIR="$RUNNER_TEMP"
+          export MANIFEST_BRANCH="${MANIFEST_REPO_BRANCH:-main}"
+          bash "$OUTPOST_ROOT/scripts/update-manifest.sh"
+
+      # notify-fanout's API is env-based (PAYLOAD/PROVIDERS); --env-file lets
+      # the host invocation stage provider config the same way the in-cluster
+      # caller gets it from mounted Secrets. Never fails the (already red) job.
+      - name: Notify failure
+        if: failure()
+        run: |
+          set -a; source "$OUTPOST_ROOT/.env"; set +a
+          APP="${GITHUB_REPOSITORY##*/}"
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          export PROVIDERS="${NOTIFICATION_PROVIDERS:-}"
+          export PAYLOAD
+          PAYLOAD=$(printf '{"event":"build-failed","level":"error","app":"%s","commit":"%s","ref":"%s","url":"%s","text":"CI build failed for %s"}' \
+            "$APP" "$GITHUB_SHA" "$GITHUB_REF_NAME" "$RUN_URL" "$APP")
+          bash "$OUTPOST_ROOT/scripts/notify-fanout.sh" --env-file "$OUTPOST_ROOT/.env" || true

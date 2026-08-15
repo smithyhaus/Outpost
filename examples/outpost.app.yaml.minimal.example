@@ -21,7 +21,7 @@
 # This minimal example is a stateless web service — so tier=k3s. The actual
 # deployment manifests (deployment.yaml + service.yaml + ingress.yaml) are
 # scaffolded by `outpost onboard . --manifests-dir <local-clone> --lang go`
-# into your manifests repo, then ArgoCD picks them up.
+# into your manifests repo, then the manifest-sync CronJob picks them up.
 # =============================================================================
 apiVersion: outpost.dev/v1
 kind: App

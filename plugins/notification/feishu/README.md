@@ -4,9 +4,13 @@ Sends Outpost CI/CD events to a Feishu (Lark) custom-bot as an interactive card.
 
 ## What gets installed
 
-- `Secret/feishu-webhook` in `tekton-pipelines`.
-- `ConfigMap/feishu-template` in `tekton-pipelines` — Feishu interactive-card template.
-- Merge fragments into `argocd-notifications-cm` and `argocd-notifications-secret`.
+- `Secret/feishu-webhook` in `outpost-ci`, volume-mounted by the manifest-sync CronJob.
+- `ConfigMap/feishu-template` in `outpost-ci` — Feishu interactive-card template.
+
+Host-run callers (the GitHub Actions workflow's `build-failed` step, and the
+`verify.sh` systemd timer's `verify-failed` check) invoke
+`notify-fanout.sh --env-file $OUTPOST_ROOT/.env ...` instead of relying on
+the volume mount.
 
 ## How to enable
 

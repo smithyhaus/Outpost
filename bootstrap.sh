@@ -11,24 +11,27 @@
 #           input — every value either has a sensible default or gets
 #           auto-generated. Phase 1 → 4 → 10-local.
 #
-#   full  : Everything in local + Cloudflare Tunnel + k3s + ArgoCD + Tekton
-#           CI/CD + Testkube + Argo Rollouts + multi-channel notifications.
-#           Requires ROOT_DOMAIN, CF_TUNNEL_TOKEN, GIT_USER, GIT_TOKEN
-#           and MANIFEST_REPO_URL. Phase 1 → 10-full.
+#   full  : Everything in local (data layer moves in-cluster) + Cloudflare
+#           Tunnel edge + k3s + the v0.3 CI/CD engine: GitHub Actions
+#           self-hosted runner (CI) + manifest-sync CronJob (CD) + Testkube
+#           + optional Argo Rollouts + multi-channel notifications.
+#           Requires ROOT_DOMAIN, CF_TUNNEL_TOKEN, GIT_USER, GIT_TOKEN,
+#           MANIFEST_REPO_URL and OUTPOST_REPOS. Phase 1 → 10-full.
 #
 # Each phase lives in its own bootstrap.d/NN-*.sh file:
 #   01-preflight        tools, OS detection, docker daemon
 #   02-config           prompt/load .env, plugin selection, .env persist
 #   03-render-infra     INFRA.md / INFRA.zh-CN.md
-#   04-compose          PG / Redis / RabbitMQ / Manticore (+ tunnel)
+#   04-compose          local: data services / full: edge (caddy+cloudflared)
 #   ──── full mode only below ────
 #   05-k3s              k3s install + namespaces + apps quota
 #   06-sealed-secrets   controller + master-key backup/restore
 #   07-registry-plugin  registry plugin + containerd mirror
-#   08-argocd-tekton    ArgoCD + Tekton + Dashboard + BasicAuth
-#   09-test-gate        Testkube + Argo Rollouts + notifications
+#   08-ci               buildkit + NodePorts + manifest-sync CronJob +
+#                       GitHub runner + outpost-verify timer
+#   09-test-gate        Testkube + rollout plugin (opt-in) + notifications
 #   ────────────────────────────────
-#   10-summary-{local,full}
+#   10-summary-{local,full}   (full: ends with verify.sh; exit code is honest)
 #
 # Each phase script is sourced (not exec'd) so variables flow through to
 # subsequent phases. The orchestrator inherits set -euo pipefail; phase
@@ -45,12 +48,6 @@ cd "$INFRA_ROOT"
 source "${INFRA_ROOT}/platform/lib/portable.sh"
 # shellcheck source=platform/lib/registry-config.sh
 source "${INFRA_ROOT}/platform/lib/registry-config.sh"
-# shellcheck source=platform/lib/cel-helpers.sh
-source "${INFRA_ROOT}/platform/lib/cel-helpers.sh"
-# shellcheck source=platform/lib/eventlistener-assemble.sh
-source "${INFRA_ROOT}/platform/lib/eventlistener-assemble.sh"
-# shellcheck source=platform/lib/git-credentials.sh
-source "${INFRA_ROOT}/platform/lib/git-credentials.sh"
 # shellcheck source=platform/lib/host-capacity.sh
 source "${INFRA_ROOT}/platform/lib/host-capacity.sh"
 
@@ -80,8 +77,8 @@ source "${INFRA_ROOT}/bootstrap.d/05-k3s.sh"
 source "${INFRA_ROOT}/bootstrap.d/06-sealed-secrets.sh"
 # shellcheck source=bootstrap.d/07-registry-plugin.sh
 source "${INFRA_ROOT}/bootstrap.d/07-registry-plugin.sh"
-# shellcheck source=bootstrap.d/08-argocd-tekton.sh
-source "${INFRA_ROOT}/bootstrap.d/08-argocd-tekton.sh"
+# shellcheck source=bootstrap.d/08-ci.sh
+source "${INFRA_ROOT}/bootstrap.d/08-ci.sh"
 # shellcheck source=bootstrap.d/09-test-gate.sh
 source "${INFRA_ROOT}/bootstrap.d/09-test-gate.sh"
 # shellcheck source=bootstrap.d/10-summary-full.sh

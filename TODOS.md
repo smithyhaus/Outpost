@@ -5,42 +5,33 @@ a future contributor to pick it up cold.
 
 ---
 
-## Replace deprecated kaniko catalog Task
+## ✅ Retired in v0.3 — Replace deprecated kaniko catalog Task
 
-**What:** `core/k8s/05-tekton/pipeline-build.yaml` references the
-upstream Tekton catalog `kaniko` Task (currently version 0.7). That
-Task is marked `tekton.dev/deprecated: "true"` upstream. The pinned
-executor image (`gcr.io/kaniko-project/executor:v1.5.1`) is multi-arch
-(linux/amd64 + linux/arm64 + linux/ppc64le, verified via
-`docker manifest inspect`), so it still works on Apple Silicon k3d for
-v0.1, but it won't get security/CI updates from upstream.
+**Originally:** `core/k8s/05-tekton/pipeline-build.yaml` referenced the
+deprecated upstream Tekton catalog `kaniko` Task, with BuildKit already
+promoted to the default `BUILD_ENGINE_TASK` and kaniko kept as a
+one-word-flip rollback.
 
-**Update:** BuildKit has since been adopted as the **default** build engine
-(`BUILD_ENGINE_TASK` defaults to `buildkit` — `bootstrap.d/02-config.sh`,
-`core/k8s/05-tekton/task-buildkit.yaml`), which addresses the first bullet
-below for the common path. Both the `buildkit` and `kaniko` Tasks are still
-applied every bootstrap so operators can flip `BUILD_ENGINE_TASK=kaniko` as
-a one-word rollback — that fallback path is what remains open here.
-
-**Concrete TODO:** either
-- ~~Switch to a maintained build Task (Buildah, BuildKit, `image-build` from
-  Tekton's newer catalogs); requires deciding whether to allow privileged
-  containers in the cluster~~ — done via the BuildKit default above, or
-- Bake our own minimal Task wrapping a recent `gcr.io/kaniko-project/executor`
-  image (v1.20+ pulls security fixes), so the kaniko rollback path also
-  isn't stuck on a deprecated upstream Task.
-
-**Today's user-visible workaround:** none required — the deprecated
-Task functions correctly as the rollback path. Just be aware upstream may
-eventually delete it.
-
-**Depends on:** none.
-
-**Milestone:** v0.2
+**Why retired:** the v0.3.0 CI/CD engine swap
+([ADR-0003](docs/decisions/0003-github-actions-engine-swap.md)) removes
+Tekton entirely — there is no Task, no Pipeline, no PipelineRun anymore.
+Builds run via `scripts/ci/build-image.sh` (buildctl against the
+in-cluster buildkitd, unchanged from the pre-v0.3 hardening) invoked
+directly by the GitHub Actions workflow. The kaniko catalog Task, its
+rollback flag, and this entire deprecation-tracking item no longer apply
+— buildkitd is now the only build path, with no Tekton-Task-shaped
+rollback to maintain.
 
 ---
 
-## ✅ Done in v0.3 — multi-provider EventListener wiring
+## ✅ Done in v0.3, superseded by the v0.3.0 engine swap — multi-provider EventListener wiring
+
+> **Superseded:** the mechanism described below (Tekton EventListener +
+> per-provider `trigger.yaml`) is deleted by the v0.3.0 CI/CD engine swap
+> ([ADR-0003](docs/decisions/0003-github-actions-engine-swap.md)).
+> `GIT_PROVIDER_PLUGIN` still exists but now selects a credential + `git
+> ls-remote` preflight contract, not webhook routing. Left below for
+> historical record.
 
 `bootstrap.sh` Phase 8 now assembles the EventListener from a
 provider-agnostic envelope (`core/k8s/05-tekton/eventlistener-base.yaml`)
@@ -175,12 +166,25 @@ revisit the generator idea then.
 
 ## Helm chart packaging
 
-**What:** Ship a Helm chart for the k3s layer (ArgoCD + Tekton + bridges +
-plugins) so operators on existing clusters can install just that layer
-without using `bootstrap.sh`.
+**What:** Ship a Helm chart for the k3s layer (`outpost-ci` CI/CD glue +
+`infra-bridges` data StatefulSets + buildkit/registry + plugins) so
+operators on existing clusters can install just that layer without using
+`bootstrap.sh`.
+
+**Updated for v0.3.0:** the ArgoCD + Tekton stack this item originally
+targeted is gone ([ADR-0003](docs/decisions/0003-github-actions-engine-swap.md)).
+The k3s layer is now considerably smaller — `manifest-sync` CronJob +
+RBAC/PVC/NodePorts (`core/k8s/03-ci/`), the data StatefulSets
+(`core/k8s/06-bridges/`), buildkitd (`core/k8s/08-buildkit/`), and the
+registry plugin. A Helm chart is arguably a better fit now than before
+(less to templatize, no Tekton-Task Go-template contortions), but the
+GitHub Actions **runner** piece is host-level (systemd), not k8s, and
+doesn't fit a Helm chart at all — this item would ship a chart for the
+in-cluster half only; the runner install stays a host-side script either
+way.
 
 **Why:** Some users already have k3s / k8s clusters. They want the
-GitOps + Tekton parts but not the Compose data layer. A Helm chart is
+CI/CD glue parts but not the Compose data layer. A Helm chart is
 the standard packaging.
 
 **Pros:**
@@ -328,33 +332,26 @@ platform's KANIKO_EXTRA_ARGS) preserved exactly.
 
 ---
 
-### ✅ Done in v0.3 — EventListener CEL whitelist of `body.repository.url`
+### ✅ Retired in v0.3.0 — EventListener CEL whitelist of `body.repository.url`
 
-**What:** Today a single `GIT_WEBHOOK_SECRET` covers every project on
-the Outpost. Anyone with the secret can submit ANY `body.repository.url`
-and trigger a kaniko build of arbitrary code (compute / registry abuse;
-manifest update fails because they don't have manifest-repo write).
+**What it was:** a `WEBHOOK_REPO_WHITELIST` → `build_cel_whitelist()`
+(`platform/lib/cel-helpers.sh`) → EventListener CEL filter narrowing
+which repos a shared `GIT_WEBHOOK_SECRET` could trigger builds for, plus
+`scripts/register-webhooks.sh` / `outpost register-webhooks` to register
+the provider-side webhook per whitelisted repo.
 
-**Why:** narrow the blast radius without going to per-repo secrets
-(which the user has to update across N repos every rotation).
-
-**Concrete TODO:** add a CEL filter
-`body.repository.git_http_url in ['<repo1>', '<repo2>', ...]` populated
-from `.env`. Expand list per-onboard.
-
-Implemented via `WEBHOOK_REPO_WHITELIST` → `build_cel_whitelist()`
-(`platform/lib/cel-helpers.sh`) → the EventListener filter
-`size(...) == 0 || body.repository.git_http_url in [...]` (empty list =
-back-compat accept-all). `scripts/register-webhooks.sh` /
-`outpost register-webhooks` registers the provider-side webhook for
-every whitelisted repo. Doc debt closed too: `outpost onboard` and
-`outpost register-webhooks` now warn when a repo isn't covered by the
-whitelist (silent-CEL-drop trap), and
-`i18n/{en,zh-CN}/docs/05-onboard-project.md` §5 + a new 0→1 quickstart
-table document `register-webhooks` as the primary path (manual UI
-demoted to fallback).
-
-**Milestone:** v0.3
+**Why retired:** the entire inbound-webhook attack surface this item was
+defending against is deleted by the v0.3.0 CI/CD engine swap
+([ADR-0003](docs/decisions/0003-github-actions-engine-swap.md)) — there
+is no shared webhook secret, no CEL filter, no
+`scripts/register-webhooks.sh` (deleted), and nothing to register on the
+provider side. `platform/lib/cel-helpers.sh` and
+`platform/lib/eventlistener-assemble.sh` are deleted along with it.
+`WEBHOOK_REPO_WHITELIST`'s *gating* role is replaced by `OUTPOST_REPOS`
+(comma-list of `<clone-url>[#branch]`) — but as a reconciliation basis
+for `verify.sh`, not a webhook access-control list; there is no
+"anyone with the secret can submit any repo URL" failure mode left to
+mitigate, because there is no secret.
 
 ---
 
@@ -372,38 +369,46 @@ estimate).
 
 ---
 
-### ✅ Done in v0.2 — `outpost verify --app <name>`
+### ✅ Done in v0.2, reshaped in v0.3.0 — `outpost verify --app <name>`
 
-`scripts/outpost verify --app <name>` covers 4 of 5 originally-asked
-checks inline: ArgoCD Application sync/health/revision, pods in `apps`
-namespace filtered by `app=<name>`, recent PipelineRuns matching
-`build-<name>-*`, last 10 events in `<name>` namespace. App teams have
-a single command for self-service triage.
+`scripts/outpost verify --app <name>` originally covered: ArgoCD
+Application sync/health/revision, pods in `apps` namespace filtered by
+`app=<name>`, recent PipelineRuns matching `build-<name>-*`, last 10
+events in `<name>` namespace.
 
-**Deferred to v0.4:** "last webhook delivery" — needs an EventListener
-log scraper or ring buffer; not worth the complexity yet. Log into
-`kubectl logs deploy/el-build-listener -n tekton-pipelines` covers it
-manually.
+**v0.3.0 reshape:** ArgoCD Application status and Tekton PipelineRuns no
+longer exist. `outpost verify --app <name>` now shows pods + deployed
+image tag + recent events in the app's namespace, and points at
+`outpost logs sync` (deploy status) and the GitHub Actions UI / runner
+journal (build status) instead — there's no single in-cluster object
+left that carries "build status" the way a PipelineRun did, since builds
+run on the host runner now.
 
-(The standalone `bash verify.sh --app <name>` flag is not implemented;
-the CLI is the canonical entry. Calling `verify.sh` directly with
-`--app` is a TODO if anyone needs scriptable JSON output for app
-state.)
+**Still deferred:** "last webhook delivery" — moot, there is no webhook.
+The v0.3.0-equivalent ask ("last GitHub Actions run status for this
+repo") is partially covered by `verify.sh`'s `ci.workflow.<name>` check
+(queries the GitHub API per `OUTPOST_REPOS` entry) but not surfaced in
+`outpost verify --app` itself yet.
 
 ---
 
 ### PR / branch preview environments
 
-**What:** Today the gitee CEL filter accepts any non-tag branch push, but
-the pipeline always writes to the same `apps/<repo>/` path in the manifest
-repo. Two PRs on different branches race the manifest repo and silently
-overwrite each other.
+**What:** the deploy-branch workflow (`templates/github/outpost-build.yml`,
+`on: push` to `OUTPOST_DEPLOY_BRANCH`) always writes to the same
+`apps/<repo>/` path in the manifest repo. Two branches pushed close
+together would race the manifest repo and silently overwrite each other
+— same underlying risk as before the v0.3.0 engine swap, different
+trigger mechanism.
 
-**Architecture sketch:** EventListener routes PR/MR events through a
-different TriggerTemplate that creates `PipelineRun`s targeting
-`apps/<repo>-pr<n>/`, served at `<repo>-pr<n>.apps.<root>` via the
-existing wildcard. main-branch path stays unchanged. Lifecycle: clean
-up PR namespaces on PR close (a small Tekton finally task).
+**Architecture sketch (updated for v0.3.0):** a second GitHub Actions
+workflow triggered `on: pull_request`, running on the same self-hosted
+runner, targeting `apps/<repo>-pr<n>/` in the manifest repo, served at
+`<repo>-pr<n>.apps.<root>` via the existing wildcard. The main-branch
+workflow and path stay unchanged. Lifecycle: clean up PR namespaces on
+PR close (a workflow step `on: pull_request: types: [closed]`, or a
+small addition to `manifest-sync` that prunes PR-suffixed app dirs past
+an age threshold).
 
 **Why:** PR preview is the most-asked DX feature in our user base;
 "open a PR, get a deployment" is competitive table stakes vs Vercel /
@@ -566,65 +571,48 @@ version + bug.yml placeholder) is < 30 min CC.
 
 ---
 
-## Make `upgrade.sh` actually work in full mode
+## Make `upgrade.sh` actually work in full mode (scope shrunk in v0.3.0)
 
 **What:** `upgrade.sh` today is 5 lines: `docker compose pull && up -d`.
 That covers the Compose layer (PG / Redis / RabbitMQ / Manticore /
-cloudflared / caddy) but does *nothing* for the full-mode k3s layer:
-ArgoCD, Tekton, Sealed-Secrets controller, Testkube, Argo Rollouts,
-or the in-cluster Docker Registry.
+cloudflared / caddy in `local` mode; `cloudflared` + `caddy` only in
+`full` mode's `edge` profile) but does *nothing* for the k3s layer.
 
-**Why this is a silent-failure-grade bug:** a full-mode user running
-`bash upgrade.sh` after a Tekton CVE announcement *thinks* they upgraded
-but actually only refreshed the data layer. The k8s layer is silently
-unchanged. No warning, no exit code, no log line.
+**Scope shrunk by the v0.3.0 CI/CD engine swap
+([ADR-0003](docs/decisions/0003-github-actions-engine-swap.md)):**
+ArgoCD, Tekton, and Argo Rollouts (dashboard tier) are deleted outright —
+their vendor manifests
+(`core/k8s/vendor/argocd-install-v3.4.5.yaml`,
+`tekton-pipeline-v1.14.0.yaml`, `argo-rollouts-dashboard-install-v1.9.0.yaml`)
+are gone, so there is nothing left to version-drift-track for them. The
+remaining k8s-layer upgrade surface is genuinely small: Sealed-Secrets
+controller (`core/k8s/vendor/sealed-secrets-controller-v0.38.4.yaml`,
+still vendored + pinned), Testkube (helm-installed when
+`TESTKUBE_MODE=oss`), buildkitd/registry (`core/k8s/08-buildkit/`,
+`plugins/registry/`), and the `outpost-ci` glue itself (`bootstrap.d/08-ci.sh`
+is already idempotent re-`apply`).
 
-**Update (post-v0.3):** the manifests are already vendored + version-pinned
-in-repo (`core/k8s/vendor/argocd-install-v3.4.5.yaml`,
-`tekton-pipeline-v1.14.0.yaml`, `sealed-secrets-controller-v0.38.4.yaml`,
-`argo-rollouts-install-v1.9.0.yaml`, etc. — see
-`bootstrap.d/06-sealed-secrets.sh` and `bootstrap.d/08-argocd-tekton.sh`).
-There is no more floating upstream URL to "controlled-bump" — re-applying
-the same local vendor file today is a true no-op. The remaining gap is
-purely (a) wiring `upgrade.sh` to re-run those same `kubectl apply
---server-side` steps + the helm upgrades, and (b) a documented process for
-bumping the vendor/ pins themselves (fetch new upstream release → save to
-`core/k8s/vendor/<name>-vX.Y.Z.yaml` → update the bootstrap.d references →
-PR).
+**Why still a real (smaller) gap:** a full-mode user running
+`bash upgrade.sh` after a Sealed-Secrets CVE announcement still only
+refreshes the Compose edge layer — the k3s layer is silently unchanged.
+Smaller blast radius than before, but the silent-failure shape is
+unchanged.
 
-**Concrete TODO:**
-- **`upgrade.sh` becomes mode-aware** (same pattern as `bootstrap.sh`):
-  in `local` mode keep the current Compose-only behavior; in `full`
-  mode also:
-  - `kubectl apply --server-side -f` re-apply the already-vendored ArgoCD /
-    Tekton / Sealed-Secrets / Argo Rollouts manifests (the same
-    `core/k8s/vendor/*.yaml` files `bootstrap.d/06` and `08` apply).
-  - `helm upgrade testkube` for the helm-installed piece (matches what
-    `09-test-gate.sh` installs when `TESTKUBE_MODE=oss`).
-  - Print a final diff/summary: "ArgoCD: X.Y.Z → A.B.C" etc.
-- **Separately:** define the vendor-pin bump procedure itself (which today
-  is manual and undocumented) — a short script or checklist for "fetch
-  release N+1, save under `core/k8s/vendor/`, update the `bootstrap.d`
-  reference, PR."
+**Concrete TODO (revised, smaller scope):**
+- `upgrade.sh` becomes mode-aware: `local` mode keeps current behavior;
+  `full` mode also re-applies `core/k8s/vendor/sealed-secrets-controller-*.yaml`
+  and (if `TESTKUBE_MODE=oss`) runs `helm upgrade testkube`, then
+  re-runs `bootstrap.d/08-ci.sh`'s idempotent `kubectl apply` steps
+  (buildkitd, `core/k8s/03-ci/*`, the runner registration check) so a
+  drifted CI engine also gets caught, not just the data-layer StatefulSets.
+- Define the vendor-pin bump procedure for the one CRD that remains
+  (Sealed-Secrets): fetch new upstream release → save under
+  `core/k8s/vendor/<name>-vX.Y.Z.yaml` → update the `bootstrap.d`
+  reference → PR.
 
-**Pros:** closes a real security-relevant silent failure. Aligns with
-the bootstrap.d/ refactor (per-phase scripts are easy to call from
-upgrade.sh too).
+**Depends on:** none.
 
-**Cons:** k8s component upgrades occasionally need pre-/post-migration
-hooks (ArgoCD has had a few of these). Mitigate: document the upgrade
-matrix in `docs/`; bump vendor pins deliberately via PR, not automatically.
-
-**Context:** every existing user has been promised "re-running
-bootstrap.sh is idempotent" (README). That covers re-install but
-doesn't address version drift. `upgrade.sh` is the right surface to
-fix.
-
-**Depends on:** none — the pin strategy (pin-in-repo via `core/k8s/vendor/`)
-is already decided and implemented; what's missing is wiring `upgrade.sh`
-to it and a bump procedure for the pins.
-
-**Milestone:** v0.3
+**Milestone:** v0.4
 
 ---
 
@@ -813,6 +801,19 @@ runs from main).
 
 ## SCM MCP — migrate from tier=compose to tier=k3s
 
+> **v0.3.0 status note:** SCM MCP remains on `tier=compose` as a known,
+> tracked exception — not a silent drift. It is blocked on source-side
+> work (no buildable source available for this app during the v0.3.0
+> engine swap), not on anything in `infras`. The `outpost.app.yaml`
+> tier-contract enforcement described below is unaffected by the CI/CD
+> engine swap: `tier=compose` apps still render a Caddy fragment +
+> compose override exactly as before (§ below), independent of whether
+> CI runs via Tekton or GitHub Actions. When SCM MCP's source becomes
+> available, follow the migration steps below as originally written —
+> they still apply verbatim except step 3, where `argocd-application.yaml`
+> is no longer part of the scaffold (`manifest-sync` reads `apps/<name>/`
+> directly; drop that file from the checklist).
+
 **What:** SCM MCP was the first real-project onboard against Outpost
 (commit `1b22f1b`, since reverted), and went onto `mcp.<ROOT_DOMAIN>`
 via a Caddy fragment + manual Cloudflare Public Hostname. The v0.5.1
@@ -884,16 +885,18 @@ top-level subdomains via Caddy. Per-app tier check in
 ## Unify `decommission` to cover compose-tier apps
 
 **What:** `outpost decommission <app>` was designed for k3s-tier apps
-(removes the ArgoCD Application + cleans manifest repo). v0.5 added
-`outpost off-board <name>` for compose-tier cleanup (Caddyfile fragment
-+ override + container removal). Operators now have two commands for
-"remove this app" and the right choice depends on the app's tier.
+(removed the manifest-repo entry for the app — pre-v0.3.0 this was an
+ArgoCD Application; post-v0.3.0 it's the `apps/<name>/` directory
+`manifest-sync` reads). v0.5 added `outpost off-board <name>` for
+compose-tier cleanup (Caddyfile fragment + override + container removal).
+Operators now have two commands for "remove this app" and the right
+choice depends on the app's tier.
 
 **Concrete TODO:** merge into a single `outpost decommission <name>`
 that reads the on-disk artefacts (Caddyfile.d/<name>.caddy AND/OR
-argocd-apps/<name>.yaml in the manifest repo) and runs the appropriate
-cleanup branch. Keep `off-board` as a backwards-compat alias for one
-release, with a deprecation hint.
+`apps/<name>/` in the manifest repo) and runs the appropriate cleanup
+branch. Keep `off-board` as a backwards-compat alias for one release,
+with a deprecation hint.
 
 **Pros:** one command, no tier guess.
 

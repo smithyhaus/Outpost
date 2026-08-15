@@ -1,0 +1,84 @@
+# =============================================================================
+# manifest-sync RBAC — ns outpost-ci (v0.3.0).
+# -----------------------------------------------------------------------------
+# ServiceAccount outpost-sync gets EXACTLY two capabilities, per the
+# anti-blast-radius contract (NO cluster-admin):
+#   1. write the sync-heartbeat ConfigMap in outpost-ci (liveness signal)
+#   2. apply app manifests in the `apps` namespace (namespace-scoped Role
+#      with wide verbs — the manifest repo may carry Deployments, Services,
+#      IngressRoutes (traefik.io), SealedSecrets (bitnami.com), Rollouts
+#      (argoproj.io), HPAs, PDBs, Jobs — enumerating resource kinds here
+#      would silently break the first app that adds a new kind, so the
+#      grant is "anything, but ONLY inside apps").
+# Apps that pick their OWN namespace need a copy of the Role+Binding there —
+# see the comment at the bottom.
+#
+# The Namespace ships here so 03-ci applies standalone (bootstrap order:
+# namespaces → rbac → pvc → cronjob).
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: outpost-ci
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: outpost-sync
+  namespace: outpost-ci
+---
+# --- 1. heartbeat ConfigMap write (outpost-ci only) --------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: outpost-sync-heartbeat
+  namespace: outpost-ci
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: outpost-sync-heartbeat
+  namespace: outpost-ci
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: outpost-sync-heartbeat
+subjects:
+  - kind: ServiceAccount
+    name: outpost-sync
+    namespace: outpost-ci
+---
+# --- 2. app manifest apply rights (apps namespace only) ----------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: outpost-sync-apply
+  namespace: apps
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: outpost-sync-apply
+  namespace: apps
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: outpost-sync-apply
+subjects:
+  - kind: ServiceAccount
+    name: outpost-sync
+    namespace: outpost-ci
+# ---------------------------------------------------------------------------
+# Apps living outside `apps` (e.g. scm-mcp historically): duplicate the
+# outpost-sync-apply Role + RoleBinding into that namespace. A Role is
+# namespace-scoped — this "wide verbs" grant never escapes the namespace it
+# is defined in, which is the whole point of avoiding a ClusterRole here.
+# ---------------------------------------------------------------------------

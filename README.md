@@ -22,20 +22,27 @@
                        ▼                 ▼
               ┌──────────────┐    ┌──────────────────────────┐
               │  Compose     │    │  k3s cluster              │
-              │              │    │                            │
-              │  Postgres    │    │  ArgoCD (GitOps)          │
-              │  + pgvector  │    │  Tekton + webhook          │
-              │  Redis       │    │  Registry                  │
-              │  RabbitMQ    │    │  Testkube (test gate)      │
-              │  Manticore   │    │  Argo Rollouts (auto-roll) │
+              │  (edge)      │    │                            │
+              │  cloudflared │    │  Postgres + pgvector       │
+              │  caddy       │    │  Redis / RabbitMQ / Manti- │
+              │              │    │  core (StatefulSets)       │
+              │              │    │  Registry + buildkitd       │
+              │              │    │  manifest-sync (CD)        │
               │              │    │  Your apps                 │
               └──────────────┘    └──────────────────────────┘
+                                          ▲
+                                          │ (host, outbound-only)
+                              GitHub Actions self-hosted runner
 ```
 
-- **Data layer (Compose)** — runs the stateful services that almost every
-  project needs in development.
-- **App layer (k3s)** — runs your applications and a complete GitOps pipeline:
-  push to git → Tekton builds → image to registry → ArgoCD deploys.
+- **Data layer** — Postgres/Redis/RabbitMQ/Manticore run as k3s
+  `StatefulSet`s in `full` mode (pure Compose in `local` mode) — the
+  stateful services almost every project needs in development.
+- **CI/CD** — push to git → a GitHub Actions self-hosted runner (host
+  systemd service, pure outbound long-poll, no inbound webhook anywhere)
+  builds and pushes the image → `manifest-sync` CronJob deploys it. See
+  [`ARCHITECTURE.md`](ARCHITECTURE.md) and
+  [ADR-0003](docs/decisions/0003-github-actions-engine-swap.md).
 - **One Cloudflare Tunnel** exposes everything on subdomains of your own
   domain. No router config, no public IP, works behind double NAT.
 
@@ -46,7 +53,7 @@ Outpost ships in two modes; pick the one that matches what you need today.
 | Mode | What runs | Required input | Use when |
 |------|-----------|----------------|----------|
 | **`local`** *(default)* | Compose data services on `localhost`: PG, Redis, RabbitMQ, Manticore Search | nothing — every value defaults or auto-generates | You want a personal dev backend on this box, no public hosting, no CI/CD |
-| **`full`** | Everything in `local` + Cloudflare Tunnel + k3s + ArgoCD + Tekton | `ROOT_DOMAIN`, `CF_TUNNEL_TOKEN`, `GIT_USER`, `GIT_TOKEN`, `MANIFEST_REPO_URL` | You want public access on your domain + push-to-deploy GitOps |
+| **`full`** | k3s data layer + Cloudflare Tunnel + GitHub Actions self-hosted runner + manifest-sync CD | `ROOT_DOMAIN`, `CF_TUNNEL_TOKEN`, `GIT_USER`, `GIT_TOKEN`, `MANIFEST_REPO_URL`, `GITHUB_RUNNER_URL`, `GITHUB_RUNNER_PAT` | You want public access on your domain + push-to-deploy CI/CD |
 
 Switch by editing `OUTPOST_MODE` in `.env`. Re-running `bash bootstrap.sh` is idempotent; passwords already in `.env` are reused.
 
@@ -111,22 +118,36 @@ After it finishes:
 
 You'll need first:
 1. A Cloudflare account + domain (NS already moved to Cloudflare) + a Tunnel token ([`docs/01`](i18n/en/docs/01-cloudflare-setup.md))
-2. An empty Gitee / GitHub / GitLab **manifest repo** (with empty `apps/` and `argocd-apps/` directories) + a PAT
-3. Six required `.env` fields: `OUTPOST_MODE=full`, `ROOT_DOMAIN`, `CF_TUNNEL_TOKEN`, `GIT_USER`, `GIT_TOKEN`, `MANIFEST_REPO_URL`
+2. An empty Gitee / GitHub / GitLab **manifest repo** (with an empty `apps/`
+   directory) + a PAT
+3. A GitHub org (or personal account) to register a self-hosted runner
+   against, and a PAT scoped to mint runner registration tokens
+4. `OUTPOST_REPOS` — the app repos to watch (comma-list of clone URLs);
+   `.env` fields: `OUTPOST_MODE=full`, `ROOT_DOMAIN`, `CF_TUNNEL_TOKEN`,
+   `GIT_USER`, `GIT_TOKEN`, `MANIFEST_REPO_URL`, `GITHUB_RUNNER_URL`,
+   `GITHUB_RUNNER_PAT`, `OUTPOST_REPOS`
 
 ```bash
 git clone https://github.com/smithyhaus/outpost.git ~/outpost
 cd ~/outpost
-cp .env.example .env       # fill in the 6 fields; leave passwords blank to auto-generate
-bash bootstrap.sh          # ~5 minutes
+cp .env.example .env       # fill in the required fields; leave passwords blank to auto-generate
+bash bootstrap.sh          # installs + registers the GitHub Actions runner as a systemd service
 bash verify.sh             # should be all PASS
 ```
+
+Each app repo needs the CI workflow + a github copy in sync with gitee —
+`outpost onboard <repo-url>` handles registration and prints the exact
+steps (copy `templates/github/outpost-build.yml`, set up dual-push or a
+gitee→github push-mirror). No webhook to register anywhere — the runner
+long-polls github.com outbound-only.
 
 After it finishes:
 
 - Open `INFRA.md` for every connection string and password
-- ArgoCD UI: `https://argocd.<your-domain>`
-- Webhook URL for your Git provider: `https://hooks.<your-domain>`
+- Build status: the GitHub Actions UI on your app repo (or
+  `journalctl -u actions.runner.*` on this host)
+- Deploy status: `outpost status` (manifest-sync heartbeat) or
+  `outpost logs sync`
 
 ## Why Outpost
 
@@ -134,7 +155,7 @@ After it finishes:
 |------|---------------------|
 | "I need Postgres + Redis + RabbitMQ for my dev box, but spinning each up + exposing them is annoying." | One `bootstrap.sh`, all services up with TLS-terminated public domain. |
 | "My ISP doesn't give me a public IP / blocks 80/443." | Cloudflare Tunnel — egress-only, works behind any NAT. |
-| "I want push-to-deploy locally without setting up Jenkins." | Tekton + ArgoCD pre-wired. Push to your Git provider, app rolls out. |
+| "I want push-to-deploy without setting up Jenkins, and I don't want to run a webhook receiver." | A GitHub Actions self-hosted runner (pure outbound long-poll) + a manifest-sync CronJob, pre-wired. Push to your Git provider, app rolls out — no inbound endpoint anywhere. |
 | "I'm on macOS / Linux / WSL2 and most tutorials assume just one." | One installer detects the OS and uses the right path. |
 | "I don't want to commit to one Docker registry / one Git platform." | Plugin model — swap registries (self-hosted ↔ Aliyun ACR) and Git providers (Gitee / GitHub / GitLab) by changing one env var. |
 
@@ -144,24 +165,26 @@ After it finishes:
 |---------------|---------------------------------------------------------------|----------------------------|
 | Registry      | `self-hosted` (default), `aliyun-acr`                         | `REGISTRY_PLUGIN`          |
 | Git provider  | `gitee` (default), `github`, `gitlab`                         | `GIT_PROVIDER_PLUGIN`      |
-| Test runner   | `testkube` (default), `catalog-tasks`                         | `TEST_RUNNER`              |
-| Rollout       | `argo-rollouts` (default — canary + auto-rollback)            | `ROLLOUT_PLUGIN`           |
+| Test runner   | `testkube` (default)                                           | `TEST_RUNNER`              |
+| Rollout       | `argo-rollouts` (opt-in canary + auto-rollback, controller-only) | `ROLLOUT_PLUGIN` *(default `none`)* |
 | Notification  | `dingtalk`, `feishu`, `wecom`, `webhook-generic`              | `NOTIFICATION_PROVIDERS` *(comma-list)* |
 
-All three git providers are wired end-to-end in v0.3+: the EventListener
-is assembled from a provider-agnostic envelope + the active plugin's
-sibling `trigger.yaml`, so switching `GIT_PROVIDER_PLUGIN` actually
-re-routes webhook handling. GitHub uses Tekton's built-in HMAC
-interceptor (X-Hub-Signature-256); Gitee / GitLab use plain-token
-compare against `GIT_WEBHOOK_SECRET`.
+**v0.3.0: no more webhooks.** `git-provider` plugins are now a credential +
+`git ls-remote` preflight contract, not a webhook-wiring contract — CI is
+a GitHub Actions self-hosted runner (pure outbound long-poll), so there is
+no inbound endpoint to route by provider. `GIT_PROVIDER_PLUGIN` is a
+comma-list in v0.3.0 (e.g. `gitee,github`) since dual-provider — gitee
+primary + github CI-trigger-surface — is the normal setup, not an edge
+case. See [`plugins/README.md`](plugins/README.md) and
+[ADR-0003](docs/decisions/0003-github-actions-engine-swap.md).
 
 Switch by editing `.env`:
 
 ```env
 REGISTRY_PLUGIN=aliyun-acr
-GIT_PROVIDER_PLUGIN=github
+GIT_PROVIDER_PLUGIN=gitee,github
 TEST_RUNNER=testkube
-ROLLOUT_PLUGIN=argo-rollouts
+ROLLOUT_PLUGIN=argo-rollouts          # default: none
 NOTIFICATION_PROVIDERS=dingtalk,feishu        # any combination
 ```
 
@@ -173,15 +196,16 @@ quickstart's "Phase J" section.
 ## Daily CLI
 
 `scripts/outpost` is a single-entry CLI that wraps the half-dozen kubectl /
-argocd / kubeseal commands every Outpost user eventually memorises:
+registry / kubeseal commands every Outpost user eventually memorises:
 
 ```bash
-outpost status                       # full Compose + k8s overview
+outpost status                       # manifest-sync heartbeat + Compose/k8s overview
 outpost verify [--app <name>]        # health checks; --app filters to one app
-outpost open <argocd|tekton|rollouts|search|mq|registry>
-                                     # print URL + creds, open browser
-outpost logs <app> [--build]         # tail container logs / latest PipelineRun
-outpost rollback <app>               # argocd app rollback (with confirm)
+outpost open <search|mq|registry>    # print URL + creds, open browser
+outpost logs [sync|<app>] [--build]  # sync: latest manifest-sync Job logs
+                                     # <app>: pods in 'apps' ns; --build: where build logs live now
+outpost rollback <app> [sha]         # list registry tags, rewrite manifest repo, sync converges
+outpost onboard <repo-url>           # register OUTPOST_REPOS + print CI workflow/dual-push setup
 outpost seal <app> KEY=VALUE ...     # wrap kubeseal — produces SealedSecret YAML
 outpost new-app <name> --lang go|... # scaffold from examples/hello-world/<lang>
 outpost decommission <app>           # guided cleanup
@@ -227,14 +251,15 @@ Drop Outpost into a Claude Code session and ask "is the stack healthy?" — it w
 
 ## Status
 
-Outpost is **v0.2.0** — see [`CHANGELOG.md`](CHANGELOG.md) for what landed
-since v0.1 (zero-friction `local` mode, CI/CD test gate + auto-rollback +
-multi-channel notifications, `outpost` CLI, kaniko build cache,
-EventListener CEL whitelist, sealed-key persistence, dashboard BasicAuth).
+Outpost is **v0.3.0** — see [`CHANGELOG.md`](CHANGELOG.md) for what landed:
+the CI/CD engine swap (Tekton + ArgoCD → GitHub Actions self-hosted runner
++ manifest-sync CronJob), the retired inbound-webhook path, and the data
+layer moving into k3s for `full` mode. Rationale in
+[ADR-0003](docs/decisions/0003-github-actions-engine-swap.md) /
+[ADR-0004](docs/decisions/0004-data-layer-in-k3s.md).
 
 End-to-end verification on macOS / Linux / WSL2 is ongoing; roadmap items
-(multi-provider EventListener wiring, tunnel plugin abstraction, Helm
-packaging, app-team DX features) live in [`TODOS.md`](TODOS.md).
+live in [`TODOS.md`](TODOS.md).
 The current version is also in [`VERSION`](VERSION); `outpost version`
 prints `v<VERSION> (commit <sha>)`.
 

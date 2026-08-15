@@ -1,22 +1,6 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: argocd
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: tekton-pipelines
-  labels:
-    # Tekton Dashboard + EventListener pods fail under the K8s default
-    # `restricted` Pod Security level (they need things like
-    # allowPrivilegeEscalation / runAsNonRoot=false defaults). Downgrade
-    # to `baseline`. Apps namespace stays at the cluster default.
-    pod-security.kubernetes.io/enforce: baseline
----
-apiVersion: v1
-kind: Namespace
-metadata:
   name: sealed-secrets
 ---
 apiVersion: v1
@@ -54,11 +38,21 @@ metadata:
 # buildkit — the persistent build daemon (core/k8s/08-buildkit). buildkitd runs
 # `privileged: true` (mount/overlayfs/runc), which `baseline`/`restricted` PSA
 # forbid; this namespace is the ONLY one labeled `enforce=privileged`. The
-# buildctl CLIENT stays in tekton-pipelines (baseline) — only the daemon needs
-# the elevated level, and isolating it here keeps the blast radius to one ns.
+# buildctl CLIENT runs on the host (self-hosted GitHub Actions runner), talking
+# to buildkitd through the buildkitd-nodeport Service (core/k8s/03-ci) — only
+# the daemon needs the elevated level, and isolating it here keeps the blast
+# radius to one ns.
 apiVersion: v1
 kind: Namespace
 metadata:
   name: buildkit
   labels:
     pod-security.kubernetes.io/enforce: privileged
+---
+# outpost-ci — manifest-sync CronJob (CD) + supporting RBAC/PVC/ConfigMaps.
+# Runs `kubectl apply -k` against apps-ns and writes its own heartbeat CM;
+# default (restricted) PSA is sufficient — no privileged workloads here.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: outpost-ci

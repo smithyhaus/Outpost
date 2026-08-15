@@ -41,6 +41,15 @@ doctor_cf_token_state() {
   fi
 }
 
+# Default --egress probe targets (v0.3): the four hosts the CI/CD engine
+# actually depends on — gitee.com (primary push + manifest repo),
+# github.com (workflow trigger surface + runner long-poll), api.github.com
+# (runner registration/liveness API), m.daocloud.io (base-image mirror).
+# One per line so callers can `read` them without word-splitting surprises.
+doctor_default_egress_hosts() {
+  printf '%s\n' gitee.com github.com api.github.com m.daocloud.io
+}
+
 # Does a hostname resolve via DNS? Echoes "ok" or "nxdomain".
 # Tries getent (Linux), then host, then nslookup — whichever exists.
 doctor_dns_state() {

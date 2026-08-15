@@ -10,7 +10,8 @@
 │ 应用本机 (kubeseal CLI)  │ ──公钥加密──>    │ git: sealed-secret.yaml │
 └──────────────────────────┘                  └────────────────────────┘
                                                           │
-                                                          │ ArgoCD apply
+                                                          │ manifest-sync
+                                                          │ (kubectl apply -k)
                                                           ▼
                               ┌──────────────────────────────────────────┐
                               │ 集群: sealed-secrets controller (私钥)   │
@@ -73,7 +74,8 @@ git commit -m "feat(<app>): seal secrets" && git push
 
 ## 旋转密钥
 
-应用层重新跑一次自己的 onboard 脚本就行;ArgoCD 同步后强制重启:
+应用层重新跑一次自己的 onboard 脚本就行;等 manifest-sync 把新的 SealedSecret
+apply 进集群后,强制重启:
 
 ```bash
 kubectl rollout restart -n <app> deploy

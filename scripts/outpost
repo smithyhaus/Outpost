@@ -2,8 +2,8 @@
 # =============================================================================
 # outpost — single-entry CLI for app-team daily commands.
 # -----------------------------------------------------------------------------
-# Wraps the half-dozen kubectl/argocd/kubeseal incantations every Outpost user
-# eventually memorizes. Add to PATH:
+# Wraps the half-dozen kubectl/kubeseal/registry incantations every Outpost
+# user eventually memorizes. Add to PATH:
 #   ln -s "$PWD/scripts/outpost" /usr/local/bin/outpost
 # Or run as `bash scripts/outpost <subcommand>`.
 # =============================================================================
@@ -25,8 +25,8 @@ if [[ -z "${OUTPOST_HOME:-}" ]]; then
 fi
 cd "$OUTPOST_HOME"
 
-# Load .env if present — every subcommand wants ROOT_DOMAIN / dashboard creds /
-# argocd admin pwd. Missing .env is fine for `help` / `version`. Tests and
+# Load .env if present — every subcommand wants ROOT_DOMAIN / manifest repo /
+# registry settings. Missing .env is fine for `help` / `version`. Tests and
 # specialised callers may pre-export every variable they need and skip the
 # auto-source via OUTPOST_NO_ENV=1 (so caller-set env wins over on-disk .env).
 if [[ -f .env && "${OUTPOST_NO_ENV:-0}" != "1" ]]; then
@@ -54,27 +54,57 @@ _confirm() {
   read -r -p "$prompt [y/N] " ans
   [[ "$ans" =~ ^[Yy]$ ]]
 }
-# Warn (never mutate .env) when the app repo being onboarded isn't covered by
-# WEBHOOK_REPO_WHITELIST: the EventListener's CEL filter silently drops its
-# pushes even though the provider-side webhook call itself returns 200 OK
-# (see scripts/register-webhooks.sh header for the full "9-day silent
-# failure" story). Empty/unset whitelist means CEL accepts every repo
-# (back-compat), so this is a no-op then — matches build_cel_whitelist().
-# Unresolvable repo_url (local checkout with no git remote) is also a no-op
-# rather than a false positive.
-_warn_if_repo_not_whitelisted() {
+# Register an app repo in OUTPOST_REPOS (.env) — v0.3.0's replacement for the
+# WEBHOOK_REPO_WHITELIST role. OUTPOST_REPOS is the reconciliation basis:
+# verify.sh compares each entry's authenticated live HEAD against the deployed
+# image tag, so an unregistered repo is INVISIBLE to the anti-silence layer.
+# Idempotent: already-registered URLs (with or without a #branch suffix) are a
+# no-op. env_kv guarantees a source-safe .env line. Empty URL (local checkout
+# with no git remote) is a no-op rather than a false positive.
+_register_outpost_repo() {
   local repo_url="$1"
-  [[ -z "${WEBHOOK_REPO_WHITELIST:-}" || -z "$repo_url" ]] && return 0
-  local entry
-  IFS=',' read -ra _wl_entries <<< "$WEBHOOK_REPO_WHITELIST"
-  for entry in "${_wl_entries[@]:-}"; do
-    [[ "${entry// /}" == "$repo_url" ]] && return 0
+  [[ -z "$repo_url" ]] && return 0
+  local current="${OUTPOST_REPOS:-}" entry base
+  IFS=',' read -ra _or_entries <<< "$current"
+  for entry in "${_or_entries[@]:-}"; do
+    base="${entry%%#*}"   # entries are <url>[#<branch>]
+    if [[ "${base// /}" == "$repo_url" ]]; then
+      echo "$(_dim ·) $repo_url already in OUTPOST_REPOS"
+      return 0
+    fi
   done
-  echo ""
-  echo "$(_yellow WARNING): $repo_url is not in WEBHOOK_REPO_WHITELIST."
-  echo "  Pushes will be silently dropped by the EventListener's CEL filter —"
-  echo "  the provider webhook call still returns 200 OK, but no build starts."
-  echo "  Fix: add it to WEBHOOK_REPO_WHITELIST in .env, then: bash bootstrap.sh"
+  local new_val="${current:+${current},}${repo_url}"
+  if [[ -f "$OUTPOST_HOME/.env" ]]; then
+    local tmp; tmp=$(mktemp)
+    grep -v '^OUTPOST_REPOS=' "$OUTPOST_HOME/.env" > "$tmp" || true
+    env_kv OUTPOST_REPOS "$new_val" >> "$tmp"
+    mv "$tmp" "$OUTPOST_HOME/.env"
+    export OUTPOST_REPOS="$new_val"
+    echo "$(_green ✓) OUTPOST_REPOS += $repo_url"
+    echo "  $(_dim 'verify.sh reconciliation now watches this repo (live HEAD vs deployed tag)')"
+  else
+    echo "$(_yellow !) no .env at $OUTPOST_HOME — add this line manually:"
+    env_kv OUTPOST_REPOS "$new_val"
+  fi
+}
+
+# Print the CI hookup steps for an app repo (GHA self-hosted runner engine).
+_print_ci_onboarding() {
+  local tmpl="$OUTPOST_HOME/templates/github/outpost-build.yml"
+  cat <<EOF
+
+$(_yellow 'CI hookup') — GitHub Actions self-hosted runner (see templates/github/README.md)
+  1. copy the workflow into the app repo:
+       mkdir -p <app-repo>/.github/workflows
+       cp $tmpl \\
+          <app-repo>/.github/workflows/outpost-build.yml
+  2. dual-push so the github copy (CI trigger surface) tracks gitee (primary):
+       git remote set-url --add --push origin <gitee-url>
+       git remote set-url --add --push origin <github-url>
+     (alternative: gitee ONE-WAY push-mirror; never the bidirectional one)
+  3. push to the deploy branch — the runner picks it up; manifest-sync
+     deploys within ${MANIFEST_SYNC_INTERVAL:-2} min of the manifest bump.
+EOF
 }
 
 usage() {
@@ -85,25 +115,27 @@ $(_yellow USAGE)
   outpost <subcommand> [args]
 
 $(_yellow PLATFORM)
-  status                            Compose + k8s overview (= status.sh)
+  status                            manifest-sync heartbeat + compose/k8s
+                                    overview (= status.sh)
   verify [--app <name>] [--namespace <ns>]
-                                    Health checks; --app filters to one app.
-                                    Namespace auto-resolves from ArgoCD
-                                    Application's spec.destination.namespace
-                                    (default 'apps' for repo's hello-world
-                                    style). Override with --namespace.
+                                    Health checks; --app filters to one app
+                                    (default namespace 'apps'; override with
+                                    --namespace).
   doctor [--egress h1,h2]           Pre-bootstrap preflight — catch
                                     port/Docker/DNS/token failures up front
-  open <argocd|tekton|rollouts|search|mq|registry>
-                                    Print URL + creds (from INFRA.md / .env)
+  open <search|mq|registry>         Print URL + creds (from INFRA.md / .env)
                                     and open the browser
 
 $(_yellow APPLICATION)
   onboard <repo-url-or-path> [--manifests-dir <path> --lang <lang>]
                              [--dry-run] [--no-reload] [--no-up]
                              [--install-skill] [--force]
-                                    Register an app described by its
-                                    outpost.app.yaml. Renders a Caddy fragment
+                                    Register an app repo: appends it to
+                                    OUTPOST_REPOS (verify.sh reconciliation)
+                                    and prints the CI workflow + dual-push
+                                    setup. If the source carries an
+                                    outpost.app.yaml it is ALSO onboarded as
+                                    an app: renders a Caddy fragment
                                     + compose override; reloads caddy live and
                                     auto-starts the compose service (--no-up
                                     to opt out). --install-skill drops the
@@ -117,11 +149,16 @@ $(_yellow APPLICATION)
   new-app <name> --lang <go|python|java|csharp|react|vue>
                                     Scaffold a new app from examples/hello-world/<lang>
                                     into ./my-apps/<name>/
-  logs <app> [--build]              Tail container logs
-                                      default: pods in 'apps' namespace
-                                      --build: latest PipelineRun logs
-  rollback <app>                    Roll back to the previous Healthy revision
-                                    via 'argocd app rollback' (with confirmation)
+  logs [sync|<app>] [--build]       Tail logs
+                                      sync (default): latest manifest-sync
+                                      Job logs + runner-journal hint
+                                      <app>: pods in 'apps' namespace
+                                      --build: where build logs live now
+  rollback <app> [sha]              List registry tags (last
+                                    OUTPOST_REGISTRY_KEEP_TAGS builds), then
+                                    rewrite the manifest repo to <sha>;
+                                    manifest-sync converges in ~2 min. Fully
+                                    domestic path — works with github down.
   seal <app> [<KEY>=<VALUE> ...]    Wrap kubeseal — produces a SealedSecret YAML
                                     on stdout. Example:
                                       outpost seal my-app DATABASE_URL=postgres://...
@@ -137,20 +174,9 @@ $(_yellow APPLICATION)
                                     Inverse of `onboard`: removes the Caddy
                                     fragment + compose override, stops the
                                     container, reloads caddy. Idempotent.
-                                    For k3s-tier ArgoCD cleanup, also run
+                                    For k3s-tier cluster cleanup, also run
                                     `decommission`.
   decommission <app>                Guided cleanup (confirms then runs)
-  setup-argocd-webhook              Print the manifest-repo webhook URL +
-                                    shared secret. Configure this ONE webhook
-                                    once on your manifest repo so ArgoCD
-                                    syncs in ~5s instead of the default 3-min
-                                    poll. Re-runnable; reads .env.
-  register-webhooks [--dry-run]     Auto-register BOTH webhook hops via the git
-                    [--yes]         provider API (Tekton on WEBHOOK_REPO_WHITELIST
-                    [--tekton-only] repos + ArgoCD on the manifest repo).
-                    [--argocd-only] Idempotent. Fixes the silent-failure gap
-                                    where nothing is ever delivered. Needs an
-                                    admin-scoped GIT_TOKEN. --dry-run to preview.
 
 $(_yellow UTILITY)
   help [cmd]                        Show this or a subcommand's help
@@ -169,15 +195,20 @@ cmd_version() {
 
 # --- platform ---------------------------------------------------------------
 cmd_status() {
+  # Sync-heartbeat summary first (the CD engine's liveness signal), then the
+  # full platform overview from status.sh.
+  if command -v kubectl >/dev/null 2>&1; then
+    echo "$(_green manifest-sync) heartbeat (ns outpost-ci):"
+    kubectl get configmap sync-heartbeat -n outpost-ci --request-timeout=5s \
+      -o jsonpath='  last_sync_ts: {.data.last_sync_ts}{"\n  applied_head: "}{.data.applied_head}{"\n  last_result:  "}{.data.last_result}{"\n"}' \
+      2>/dev/null || echo "  (no sync-heartbeat ConfigMap — sync CronJob not installed or never ran)"
+    echo ""
+  fi
   exec bash "$OUTPOST_HOME/status.sh" "$@"
 }
 
 cmd_doctor() {
   exec bash "$OUTPOST_HOME/doctor.sh" "$@"
-}
-
-cmd_register_webhooks() {
-  exec bash "$OUTPOST_HOME/scripts/register-webhooks.sh" "$@"
 }
 
 cmd_verify() {
@@ -190,38 +221,28 @@ cmd_verify() {
     esac
   done
   if [[ -n "$app" ]]; then
-    # App-scoped checks — implements review #10 minimal version inline.
+    # App-scoped checks — pods, deployed image, recent events.
     _need kubectl
     echo "$(_green '═══') app: $app $(_green '═══')"
-    echo "ArgoCD Application:"
-    kubectl get application -n argocd "$app" \
-      -o jsonpath='  sync:   {.status.sync.status}{"\n  health: "}{.status.health.status}{"\n  rev:    "}{.status.sync.revision}{"\n"}' \
-      2>/dev/null || echo "  (not found in argocd namespace)"
-    echo ""
 
-    # Resolve the app's namespace: --namespace > ArgoCD destination.namespace > 'apps'.
-    # Apps that pick a non-shared ns (e.g. an `apiVersion: v1\nkind: Namespace`
-    # in their manifest, or destination.namespace=<own-ns>) would otherwise
-    # show 'No resources found' here even when running fine — `apps` is the
+    # Resolve the app's namespace: --namespace > 'apps'. Apps that pick a
+    # non-shared ns show 'No resources found' here otherwise — `apps` is the
     # convention for hello-world examples, NOT a hard requirement.
-    local ns="$ns_override"
-    if [[ -z "$ns" ]]; then
-      ns="$(kubectl get application -n argocd "$app" \
-        -o jsonpath='{.spec.destination.namespace}' 2>/dev/null)"
-    fi
-    ns="${ns:-apps}"
+    local ns="${ns_override:-apps}"
 
     echo "Pods in $ns namespace (label app=$app):"
-    kubectl get pod -n "$ns" -l "app=$app" 2>&1 | head -20
+    kubectl get pod -n "$ns" -l "app=$app" --request-timeout=5s 2>&1 | head -20 || true
     echo ""
-    echo "Recent PipelineRuns (label app=$app):"
-    kubectl get pipelinerun -n tekton-pipelines \
-      --sort-by=.metadata.creationTimestamp 2>/dev/null | grep -E "^build-${app}-" | tail -3 \
-      || echo "  (none)"
+    echo "Deployed image(s):"
+    kubectl get deploy -n "$ns" -l "app=$app" --request-timeout=5s \
+      -o jsonpath='{range .items[*]}  {.metadata.name}: {.spec.template.spec.containers[0].image}{"\n"}{end}' \
+      2>/dev/null || echo "  (none)"
     echo ""
     echo "Recent events in $ns namespace:"
-    kubectl get events -n "$ns" --sort-by=.lastTimestamp 2>/dev/null | tail -10 \
+    kubectl get events -n "$ns" --sort-by=.lastTimestamp --request-timeout=5s 2>/dev/null | tail -10 \
       || echo "  (no events)"
+    echo ""
+    echo "$(_dim hint:) build logs: GitHub Actions UI / runner journal · deploy logs: outpost logs sync"
   else
     exec bash "$OUTPOST_HOME/verify.sh" "$@"
   fi
@@ -229,22 +250,16 @@ cmd_verify() {
 
 cmd_open() {
   local target="${1:-}"
-  [[ -z "$target" ]] && _die "outpost open <argocd|tekton|rollouts|search|mq|registry>"
+  [[ -z "$target" ]] && _die "outpost open <search|mq|registry>"
   local url user pwd
   case "$target" in
-    argocd)   url="https://argocd.${ROOT_DOMAIN}";              user="admin"
-              pwd="${ARGOCD_ADMIN_PASSWORD:-(re-fetch via kubectl)}" ;;
-    tekton)   url="https://tekton.${ROOT_DOMAIN}";              user="${OUTPOST_DASHBOARD_USER:-outpost}"
-              pwd="${OUTPOST_DASHBOARD_PASSWORD:-}" ;;
-    rollouts) url="https://${ROLLOUTS_DASHBOARD_HOST:-rollouts.${ROOT_DOMAIN}}"; user="${OUTPOST_DASHBOARD_USER:-outpost}"
-              pwd="${OUTPOST_DASHBOARD_PASSWORD:-}" ;;
     search)   url="https://search.${ROOT_DOMAIN}";              user="(none)"
               pwd="" ;;  # Manticore standalone has no built-in auth
     mq)       url="https://mq.${ROOT_DOMAIN}";                  user="${RABBITMQ_USER:-admin}"
               pwd="${RABBITMQ_PASSWORD:-}" ;;
     registry) url="https://registry.${ROOT_DOMAIN}";            user="(anonymous)"
               pwd="" ;;
-    *) _die "unknown target: $target (try: argocd|tekton|rollouts|search|mq|registry)" ;;
+    *) _die "unknown target: $target (try: search|mq|registry — CI lives in the GitHub Actions UI now)" ;;
   esac
   echo "$(_green URL):  $url"
   echo "$(_green User): $user"
@@ -258,47 +273,85 @@ cmd_open() {
 
 # --- application -------------------------------------------------------------
 cmd_logs() {
-  local app="${1:-}"; shift || true
-  [[ -z "$app" ]] && _die "outpost logs <app> [--build]"
+  local target="${1:-sync}"; shift || true
   _need kubectl
-  if [[ "${1:-}" == "--build" ]]; then
-    local pr
-    pr=$(kubectl get pipelinerun -n tekton-pipelines \
-           --sort-by=.metadata.creationTimestamp -o name 2>/dev/null | grep "build-${app}-" | tail -1)
-    [[ -z "$pr" ]] && _die "no PipelineRun found for app=$app"
-    echo "$(_dim "→ $pr")"
-    kubectl logs -n tekton-pipelines "$pr" --all-containers --tail=200 -f 2>/dev/null || \
-      kubectl logs -n tekton-pipelines "$pr" --all-containers --tail=200
+  if [[ "$target" == "sync" ]]; then
+    # Latest manifest-sync Job — the CD half. Builds live on the runner.
+    local job
+    job=$(kubectl get jobs -n outpost-ci -l app=manifest-sync --request-timeout=10s \
+            --sort-by=.metadata.creationTimestamp -o name 2>/dev/null | tail -1)
+    [[ -z "$job" ]] && _die "no manifest-sync Job in ns outpost-ci (CronJob not installed, or never ticked)"
+    echo "$(_dim "→ $job")"
+    kubectl logs -n outpost-ci "$job" --tail=200
+    echo ""
+    echo "$(_dim hint:) build logs live on the RUNNER, not in-cluster:"
+    echo "$(_dim '  journalctl -u actions.runner.* -n 200    # or the GitHub Actions UI')"
+  elif [[ "${1:-}" == "--build" || "$target" == "--build" ]]; then
+    echo "Builds run on the host runner now (no in-cluster build pods)."
+    echo "  · GitHub Actions UI → the repo's outpost-build workflow runs"
+    echo "  · runner journal:  journalctl -u actions.runner.* -n 200"
+    exit 0
   else
-    echo "$(_dim "→ kubectl logs -n apps -l app=$app -f --all-containers")"
-    kubectl logs -n apps -l "app=$app" --all-containers --tail=200 -f
+    echo "$(_dim "→ kubectl logs -n apps -l app=$target -f --all-containers")"
+    kubectl logs -n apps -l "app=$target" --all-containers --tail=200 -f
   fi
 }
 
+# Rollback = manifest rewrite, not kubectl surgery. The manifest repo is the
+# single source of truth; manifest-sync converges within its interval. Fully
+# domestic path (gitee + local registry NodePort) — usable with github down.
+# `kubectl rollout undo` remains the break-glass, but MUST be paired with a
+# manifest revert or the next sync tick puts the bad image back (truth being
+# enforced is a feature, not a bug).
 cmd_rollback() {
-  local app="${1:-}"
-  [[ -z "$app" ]] && _die "outpost rollback <app>"
-  _need kubectl
-  _need argocd 2>/dev/null || true   # warn but continue — kubectl-only fallback below
+  local app="${1:-}" sha="${2:-}"
+  [[ -z "$app" ]] && _die "outpost rollback <app> [sha]"
+  _need curl
+  _need yq
+  _need git
 
-  echo "Current state:"
-  kubectl get application -n argocd "$app" \
-    -o jsonpath='  rev: {.status.sync.revision}{"\n"}' 2>/dev/null \
-    || _die "no ArgoCD Application named $app"
+  local reg_api="${OUTPOST_REGISTRY_API:-http://127.0.0.1:30500}"
+  local push_host="${REGISTRY_PUSH_HOST:-docker-registry.registry.svc.cluster.local:5000}"
 
-  if ! _confirm "Roll back $app to the previous Healthy revision?"; then
+  echo "$(_dim "→ tags for '$app' via $reg_api (registry NodePort)")"
+  local tags_json
+  tags_json=$(curl -fsS --max-time 10 "$reg_api/v2/$app/tags/list" 2>/dev/null) \
+    || _die "cannot list tags for '$app' — registry NodePort (30500) down, or the app never built"
+  echo "$tags_json" | yq -p=json '.tags // [] | .[]' | sed 's/^/  /'
+
+  if [[ -z "$sha" ]]; then
+    echo ""
+    echo "Pick a tag, then: $(_green "outpost rollback $app <sha>")"
+    echo "$(_dim "(registry GC keeps the last ${OUTPOST_REGISTRY_KEEP_TAGS:-10} tags — that IS the rollback depth)")"
+    return 0
+  fi
+
+  echo "$tags_json" | SHA="$sha" yq -e -p=json '.tags // [] | contains([strenv(SHA)])' >/dev/null 2>&1 \
+    || _die "tag '$sha' is not in the registry for '$app' (see the list above)"
+
+  if ! _confirm "Rewrite manifest: $app → ${push_host}/${app}:${sha} ?"; then
     echo "Cancelled."; exit 0
   fi
 
-  if command -v argocd >/dev/null 2>&1 && [[ -n "${ARGOCD_ADMIN_PASSWORD:-}" ]]; then
-    argocd login "argocd.${ROOT_DOMAIN}" --username admin --password "$ARGOCD_ADMIN_PASSWORD" --insecure 2>/dev/null || true
-    argocd app rollback "$app" 0 || _die "argocd app rollback failed"
-  else
-    echo "$(_yellow 'no argocd CLI / no ARGOCD_ADMIN_PASSWORD'): use the ArgoCD UI:"
-    echo "  https://argocd.${ROOT_DOMAIN}/applications/$app  → click HISTORY AND ROLLBACK"
-    echo ""
-    echo "Or revert the latest 'chore($app): bump image' commit in the manifest repo."
-  fi
+  local work; work=$(mktemp -d)
+  trap 'rm -rf "$work"' EXIT
+  # Reuse update-manifest.sh — ONE code path for every manifest rewrite,
+  # including the 6-attempt jittered push retry and the repo-name→apps/<dir>
+  # mapping (scripts/lib/manifest-map.sh).
+  MANIFEST_REPO_URL="${MANIFEST_REPO_URL:?MANIFEST_REPO_URL is not set (.env)}" \
+  MANIFEST_BRANCH="${MANIFEST_REPO_BRANCH:-main}" \
+  APP_NAME="$app" \
+  IMAGE="${push_host}/${app}:${sha}" \
+  COMMIT_MESSAGE="revert(${app}): rollback to ${sha}" \
+  WORK_DIR="$work" \
+  GIT_USER_EMAIL="${GIT_USER_EMAIL:-outpost-cli@local}" \
+  GIT_USER_NAME="${GIT_USER_NAME:-Outpost CLI}" \
+  YQ_BIN="$(command -v yq)" \
+    sh "$OUTPOST_HOME/scripts/update-manifest.sh" \
+    || _die "manifest rewrite failed (see output above)"
+
+  echo "$(_green ✓) manifest updated — manifest-sync converges within ${MANIFEST_SYNC_INTERVAL:-2} min"
+  echo "$(_dim hint:) watch it land:  outpost logs sync   ·   outpost status"
 }
 
 cmd_seal() {
@@ -360,6 +413,7 @@ cmd_new_app() {
   [[ -z "$lang" ]] && _die "--lang is required (one of: go python java csharp react vue)"
 
   local src="examples/hello-world/$lang"
+  # shellcheck disable=SC2010  # README filter on a fixed dir — glob gain is nil
   [[ -d "$src" ]] || _die "no template at $src — supported langs: $(ls examples/hello-world/ | grep -v README | tr '\n' ' ')"
 
   local dst="my-apps/$name"
@@ -369,8 +423,10 @@ cmd_new_app() {
 
   # Rename inside the copy: hello-<lang> / hello-world-<lang> → <name>
   find "$dst" -type f \( -name '*.yaml' -o -name '*.md' -o -name 'Dockerfile' -o -name 'main.*' \) | while read -r f; do
-    portable_sed_i="-i"; [[ "$(uname -s)" == "Darwin" ]] && portable_sed_i="-i ''"
-    # shellcheck disable=SC2086
+    portable_sed_i="-i"
+    # shellcheck disable=SC2089  # historical Darwin sed -i'' quirk, kept as-is
+    [[ "$(uname -s)" == "Darwin" ]] && portable_sed_i="-i ''"
+    # shellcheck disable=SC2086,SC2090
     sed $portable_sed_i \
       -e "s|hello-world-${lang}|${name}|g" \
       -e "s|hello-${lang}|${name}|g" \
@@ -383,8 +439,9 @@ cmd_new_app() {
   echo "  1. Edit $dst/manifest/*.yaml — set your image, ingress hostname, replicas"
   echo "  2. Push your application code (with a Dockerfile at the root) to a git repo"
   echo "  3. Copy $dst/manifest/ into your manifest repo as apps/$name/"
-  echo "  4. Configure the webhook on your application repo (see 05-onboard-project.md §5)"
-  echo "  5. ArgoCD picks up the change within ~30s"
+  echo "  4. Copy templates/github/outpost-build.yml into the app repo's"
+  echo "     .github/workflows/ and set up dual-push (outpost onboard <url> prints both)"
+  echo "  5. manifest-sync deploys the change within ~${MANIFEST_SYNC_INTERVAL:-2} min of the first build"
 }
 
 cmd_decommission() {
@@ -393,8 +450,9 @@ cmd_decommission() {
   _need kubectl
 
   echo "$(_yellow WARNING): this will:"
-  echo "  - delete ArgoCD Application '$app' (cascades to K8s resources)"
+  echo "  - delete K8s resources labeled app=$app in the 'apps' namespace"
   echo "  - print git commands for you to run in the manifest repo"
+  echo "    (manifest-sync APPLIES, it never prunes — the git rm is the real removal)"
   echo "  - leave registry images intact (manual cleanup if needed)"
   echo ""
   if ! _confirm "Continue?"; then
@@ -402,20 +460,25 @@ cmd_decommission() {
   fi
 
   echo ""
-  echo "$(_dim '→') kubectl delete application -n argocd $app --cascade=foreground"
-  kubectl delete application -n argocd "$app" --cascade=foreground 2>&1 | head -5 || true
+  echo "$(_dim '→') kubectl delete all,ingressroute -n apps -l app=$app"
+  kubectl delete all -n apps -l "app=$app" 2>&1 | head -10 || true
+  kubectl delete ingressroute -n apps -l "app=$app" 2>&1 | head -5 || true
+  kubectl delete sealedsecret,secret -n apps -l "app=$app" 2>&1 | head -5 || true
 
   echo ""
-  echo "$(_green '✓') ArgoCD Application removed."
+  echo "$(_green '✓') cluster resources removed."
   echo ""
-  echo "Now in your manifest repo:"
+  echo "Now in your manifest repo (or the next sync re-creates nothing, but the"
+  echo "dir keeps confusing humans):"
   cat <<EOF
   cd <manifest-repo>
   git rm -r apps/$app/
-  git rm argocd-apps/${app}.yaml
   git commit -m "chore: decommission $app"
   git push
 EOF
+  echo ""
+  echo "Also remove the repo's entry from OUTPOST_REPOS in .env (or verify.sh"
+  echo "reconciliation will FAIL naming it)."
   echo ""
   echo "Optional registry image cleanup (self-hosted):"
   echo "  curl -X DELETE -u .. https://registry.${ROOT_DOMAIN}/v2/$app/manifests/<digest>"
@@ -569,7 +632,7 @@ cmd_manifest() {
 _scaffold_kustomization() {
   local app="$1" image="$2"
   cat <<EOF
-# Kustomize-managed image override. Tekton's update-manifest task rewrites
+# Kustomize-managed image override. CI's update-manifest step rewrites
 # the matching images[] entry's newTag on every successful build.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -603,6 +666,7 @@ _manifest_scaffold() {
   [[ -z "$mdir" ]] && _die "--manifests-dir <path> is required"
 
   local src="$OUTPOST_HOME/examples/hello-world/$lang/manifest"
+  # shellcheck disable=SC2010  # README filter on a fixed dir — glob gain is nil
   [[ -d "$src" ]] || _die "unknown --lang '$lang' — supported: $(ls "$OUTPOST_HOME/examples/hello-world" | grep -v README | tr '\n' ' ')"
   [[ -d "$mdir" ]] || _die "--manifests-dir does not exist: $mdir (clone the manifests repo first)"
 
@@ -612,16 +676,16 @@ _manifest_scaffold() {
   done
 
   local step="manifest.scaffold"
-  local appdir="$mdir/apps/$app" argodir="$mdir/argocd-apps"
-  mkdir -p "$appdir" "$argodir"
+  # v0.3: no argocd-apps/ scaffold — manifest-sync deploys straight from
+  # apps/<app>/; the legacy argocd-apps/ dir is ignored by the sync engine.
+  local appdir="$mdir/apps/$app"
+  mkdir -p "$appdir"
 
-  local registry domain repo_url repo_branch
+  local registry domain
   # The host the build pipeline pushes to — keeps the scaffolded kustomization
   # images[].name matching what update-manifest rewrites on the first build.
   registry="${REGISTRY_PUSH_HOST:-${REGISTRY_HOST:-registry.example.com}}"
   domain="${ROOT_DOMAIN:-example.com}"
-  repo_url="${MANIFEST_REPO_URL:-https://example.com/your/infras-manifests.git}"
-  repo_branch="${MANIFEST_REPO_BRANCH:-main}"
 
   # Substitutions shared by deployment / service / ingress.
   # `-apps.example.com` → `-apps.<root>` honors the v0.5.2 naming convention
@@ -641,13 +705,8 @@ _manifest_scaffold() {
   onboard_render_subst "$src/service.yaml"    "$tmpdir/service.yaml"    "${subst[@]}"
   onboard_render_subst "$src/ingress.yaml"    "$tmpdir/ingress.yaml"    "${subst[@]}"
   _scaffold_kustomization "$app" "${registry}/${app}" > "$tmpdir/kustomization.yaml"
-  onboard_render_subst "$OUTPOST_HOME/examples/demo-app/argocd-application.yaml" \
-    "$tmpdir/argocd-application.yaml" \
-    "s|demo-app|${app}|g" \
-    "s|https://gitee.com/<your-user>/infras-manifests.git|${repo_url}|g" \
-    "s|targetRevision: main|targetRevision: ${repo_branch}|g"
 
-  # Place the 5 files idempotently: absent → write; identical → skip;
+  # Place the 4 files idempotently: absent → write; identical → skip;
   # drifted → leave untouched (unless --force) so hand edits are never lost.
   local written=() drifted=0 unchanged=0
   local pairs=(
@@ -655,7 +714,6 @@ _manifest_scaffold() {
     "$tmpdir/service.yaml|$appdir/service.yaml"
     "$tmpdir/ingress.yaml|$appdir/ingress.yaml"
     "$tmpdir/kustomization.yaml|$appdir/kustomization.yaml"
-    "$tmpdir/argocd-application.yaml|$argodir/$app.yaml"
   )
   local pair tmpf dstf
   for pair in "${pairs[@]}"; do
@@ -674,11 +732,11 @@ _manifest_scaffold() {
   local status detail next_action
   if [[ "$drifted" -gt 0 ]]; then
     status="drift"
-    detail="$drifted of 5 file(s) differ from the scaffold; not overwritten"
+    detail="$drifted of 4 file(s) differ from the scaffold; not overwritten"
     next_action="inspect the differing file(s), or re-run with --force to overwrite"
   elif [[ ${#written[@]} -eq 0 ]]; then
     status="unchanged"
-    detail="all 5 manifest file(s) already match the scaffold"
+    detail="all 4 manifest file(s) already match the scaffold"
     next_action="nothing to do — manifests are up to date"
   else
     status="scaffolded"
@@ -714,7 +772,7 @@ _manifest_scaffold() {
 # For tier=k3s, this delegates to the existing `outpost manifest scaffold` flow;
 # the manifest_repo can be overridden per-app via spec.k3s.manifest_repo.
 cmd_onboard() {
-  local src_arg="" tmpdir="" cleanup=0
+  local src_arg="" tmpdir=""
   local dry_run=0 no_reload=0 no_up=0 force=0 install_skill=0
   local manifests_dir="" lang=""
   while [[ $# -gt 0 ]]; do
@@ -741,7 +799,6 @@ cmd_onboard() {
     *://*|git@*:*|*@*:*) # URL-ish — clone shallow
       _need git
       tmpdir="$(mktemp -d)"
-      cleanup=1
       # shellcheck disable=SC2064  # tmpdir is captured by value
       trap "[[ -n '$tmpdir' && -d '$tmpdir' ]] && rm -rf '$tmpdir'" EXIT INT TERM
       echo "$(_dim Cloning) $src_arg → $tmpdir"
@@ -757,18 +814,42 @@ cmd_onboard() {
       ;;
   esac
 
-  # Resolve the repo URL for the whitelist check below: prefer the literal
-  # URL the caller passed (that's what belongs in WEBHOOK_REPO_WHITELIST);
-  # fall back to the local checkout's origin remote. Neither may resolve
-  # (local dir with no git remote) — _warn_if_repo_not_whitelisted no-ops then.
+  # A nonexistent local path must fail loudly BEFORE any registration.
+  [[ -d "$src_dir" ]] || _die "not a directory: $src_dir"
+
+  # Resolve the repo URL for OUTPOST_REPOS registration: prefer the literal
+  # URL the caller passed (that's the canonical clone URL verify.sh will
+  # ls-remote); fall back to the local checkout's origin remote. Neither may
+  # resolve (local dir with no git remote) — registration no-ops then.
   local onboard_repo_url="$src_arg"
   case "$src_arg" in
     .|/*|./*|../*) onboard_repo_url="$(git -C "$src_dir" remote get-url origin 2>/dev/null || true)" ;;
   esac
 
+  # ---- CI registration (v0.3.0) — happens for EVERY onboard ----------------
+  # Register the repo for reconciliation + print the workflow/dual-push setup.
+  if [[ "$dry_run" -ne 1 ]]; then
+    _register_outpost_repo "$onboard_repo_url"
+  else
+    echo "$(_yellow DRY RUN) — would register in OUTPOST_REPOS: ${onboard_repo_url:-<unresolvable>}"
+  fi
+  _print_ci_onboarding
+  # Offer to drop the workflow template straight into a local checkout.
+  local wf_tmpl="$OUTPOST_HOME/templates/github/outpost-build.yml"
+  if [[ "$dry_run" -ne 1 && -d "$src_dir" && -r "$wf_tmpl" && ! -f "$src_dir/.github/workflows/outpost-build.yml" && -t 0 ]]; then
+    if _confirm "Copy the workflow template into $src_dir/.github/workflows/ now?"; then
+      mkdir -p "$src_dir/.github/workflows"
+      cp "$wf_tmpl" "$src_dir/.github/workflows/outpost-build.yml"
+      echo "$(_green ✓) wrote $src_dir/.github/workflows/outpost-build.yml — commit it"
+    fi
+  fi
+
   local cfg="$src_dir/outpost.app.yaml"
   if [[ ! -r "$cfg" ]]; then
-    _die "no outpost.app.yaml at $src_dir (see examples/outpost.app.yaml.minimal.example)"
+    echo ""
+    echo "$(_dim ·) no outpost.app.yaml at $src_dir — CI registration done; nothing app-level to render"
+    echo "$(_dim '  (add an outpost.app.yaml to also onboard it as a compose/k3s app — see examples/)')"
+    return 0
   fi
 
   onboard_app_validate "$cfg" || _die "outpost.app.yaml validation failed"
@@ -806,7 +887,6 @@ cmd_onboard() {
       echo "  (tier=k3s — no caddy fragment / no compose override; k3s manifests"
       echo "   scaffolded only when --manifests-dir is provided)"
     fi
-    _warn_if_repo_not_whitelisted "$onboard_repo_url"
     return 0
   fi
 
@@ -880,6 +960,7 @@ cmd_onboard() {
         echo "$(_dim hint:) this app overrides MANIFEST_REPO_URL to: $resolved_repo"
       fi
     elif [[ -z "$lang" ]]; then
+      # shellcheck disable=SC2010  # README filter on a fixed dir
       _die "--lang is required when --manifests-dir is set (one of: $(ls "$OUTPOST_HOME/examples/hello-world" 2>/dev/null | grep -v README | tr '\n' ' '))"
     elif [[ -z "$resolved_repo" ]]; then
       _die "no manifest repo to wire — set spec.k3s.manifest_repo in $cfg, or MANIFEST_REPO_URL in .env"
@@ -943,8 +1024,6 @@ cmd_onboard() {
       echo "$(_dim hint:) commit \`.claude/skills/outpost-deploy.skill.md\` to share onboarding with the team"
     fi
   fi
-
-  _warn_if_repo_not_whitelisted "$onboard_repo_url"
 }
 
 # --- off-board ---------------------------------------------------------------
@@ -1040,63 +1119,7 @@ cmd_off_board() {
   fi
 
   echo "$(_dim ·) off-board complete for '${name}'"
-  echo "$(_dim hint:) for tier=k3s apps, also run \`outpost decommission ${name}\` to remove the ArgoCD Application"
-}
-
-# --- setup-argocd-webhook ----------------------------------------------------
-# Prints the manifest-repo webhook URL + shared secret + per-provider setup
-# steps. Re-runnable: reads everything from .env and the live cluster, no
-# state of its own. Called at the tail of `bash bootstrap.sh` (Phase 10) so
-# operators see this immediately after a clean install; runnable any time
-# after that to re-print the values (e.g. when adding a second manifest
-# repo or rotating the secret).
-cmd_setup_argocd_webhook() {
-  local domain="${ROOT_DOMAIN:-}"
-  local argocd_host="${ARGOCD_HOST:-argocd}"
-  local secret="${ARGOCD_WEBHOOK_SECRET:-}"
-  local provider="${GIT_PROVIDER_PLUGIN:-gitee}"
-  local manifest_url="${MANIFEST_REPO_URL:-<your manifest repo URL>}"
-
-  if [[ -z "$domain" || -z "$secret" ]]; then
-    _die "ROOT_DOMAIN and ARGOCD_WEBHOOK_SECRET must be set in .env (run bash bootstrap.sh first)"
-  fi
-
-  local url="https://${argocd_host}.${domain}/api/webhook"
-
-  # Per-provider header tip — ArgoCD's receiver dispatches on the provider's
-  # signature/token header. Same secret across providers (see
-  # core/k8s/04-argocd/webhook-cm-patch.template.yaml header for why).
-  local header_tip
-  case "$provider" in
-    gitee)  header_tip="Header field: 'Secret' (gitee.com webhook UI). ArgoCD matches X-Gitee-Token to webhook.gitee.secret." ;;
-    github) header_tip="Header: configured automatically by GitHub (X-Hub-Signature-256). Paste secret in the 'Secret' field." ;;
-    gitlab) header_tip="Header: X-Gitlab-Token. Paste secret in the 'Secret token' field." ;;
-    *)      header_tip="Provider '$provider' — paste secret in the webhook 'Secret' field; ArgoCD will validate via the provider-specific signature header." ;;
-  esac
-
-  cat <<EOF
-$(_green ArgoCD instant-sync webhook) — one-time manifest repo setup
-
-  Manifest repo : $manifest_url
-  Webhook URL   : $(_green "$url")
-  Secret        : $(_green "$secret")
-  Provider      : $provider
-  Events        : Push only
-  Content-Type  : application/json
-
-  $(_dim "$header_tip")
-
-$(_yellow why?) ArgoCD polls every 3 min by default. Configuring this webhook on
-        the manifest repo collapses that to ~5s — push → ArgoCD refresh → sync.
-        See i18n/zh-CN/docs/05-onboard-project.md for screenshots per provider.
-
-$(_dim "·") this is a ONE-TIME setup per manifest repo. Adding new apps does not
-   require revisiting this webhook.
-
-$(_dim "·") to verify after configuring: push any commit to the manifest repo and
-   watch \`kubectl logs -n argocd deploy/argocd-server | grep webhook\` — you should
-   see a 'webhook received' line within seconds.
-EOF
+  echo "$(_dim hint:) for tier=k3s apps, also run \`outpost decommission ${name}\` (deletes the app's k8s resources) and git-rm apps/${name}/ from the manifests repo so manifest-sync stops re-applying it"
 }
 
 # --- router ------------------------------------------------------------------
@@ -1117,8 +1140,6 @@ case "$SUB" in
   onboard)        cmd_onboard "$@" ;;
   off-board)      cmd_off_board "$@" ;;
   decommission)   cmd_decommission "$@" ;;
-  setup-argocd-webhook) cmd_setup_argocd_webhook "$@" ;;
-  register-webhooks)    cmd_register_webhooks "$@" ;;
   version|--version|-v) cmd_version ;;
   help|--help|-h|"") usage ;;
   *) echo "$(_red unknown): $SUB"; usage; exit 1 ;;

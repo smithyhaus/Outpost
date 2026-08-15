@@ -1,0 +1,86 @@
+# =============================================================================
+# manifest-sync CronJob — the CD half of the v0.3.0 engine (template).
+# -----------------------------------------------------------------------------
+# Rendered by bootstrap (render_template — every ${VAR} must be set):
+#   MANIFEST_SYNC_INTERVAL  minutes between runs (default 2 in .env.example)
+#
+# Design points (each one is a scar, not a preference):
+#   - concurrencyPolicy: Forbid → SINGLE WRITER. The manifest push-race class
+#     lives in CI (update-manifest's 6-attempt jittered retry); the apply
+#     side must never race itself.
+#   - backoffLimit: 0 → a failed run is NOT retried inside its Job; the next
+#     cron tick retries naturally. Retry-inside-Forbid would just delay the
+#     next tick and blur the failure timeline.
+#   - startingDeadlineSeconds: 300 → after controller downtime, missed runs
+#     collapse into one (with Forbid) instead of erroring out forever.
+#   - image alpine/k8s:1.31.0 — same pin as the old update-manifest task:
+#     ships bash+git+kubectl+yq (verified in-cluster), so ZERO runtime
+#     installs (per-run apk/curl installs were the measured batch-deploy
+#     killer). Direct ref, NOT daocloud-prefixed (allowlist is per-repo;
+#     pull-test before ever adding a prefix).
+#   - sync-scripts ConfigMap carries scripts/sync/manifest-sync.sh (packed by
+#     bootstrap via `kubectl create cm --from-file`); sync-config ConfigMap
+#     (rendered from .env) + notify-secrets Secret arrive via envFrom.
+#   - resources + Burstable QoS: same DiskPressure-eviction hardening story
+#     as the old EventListener pod.
+# =============================================================================
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: manifest-sync
+  namespace: outpost-ci
+  labels:
+    app: manifest-sync
+spec:
+  schedule: "*/${MANIFEST_SYNC_INTERVAL} * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    metadata:
+      labels:
+        app: manifest-sync
+    spec:
+      backoffLimit: 0
+      # A wedged apply/rollout-wait must not outlive the next few ticks.
+      activeDeadlineSeconds: 900
+      template:
+        metadata:
+          labels:
+            app: manifest-sync
+        spec:
+          serviceAccountName: outpost-sync
+          restartPolicy: Never
+          containers:
+            - name: sync
+              image: alpine/k8s:1.31.0
+              command: ["/scripts/manifest-sync.sh"]
+              envFrom:
+                - configMapRef:
+                    name: sync-config
+                - secretRef:
+                    name: notify-secrets
+                    optional: true
+              volumeMounts:
+                - name: sync-scripts
+                  mountPath: /scripts
+                  readOnly: true
+                - name: manifest-cache
+                  mountPath: /var/lib/outpost
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                  ephemeral-storage: 200Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+          volumes:
+            - name: sync-scripts
+              configMap:
+                name: sync-scripts
+                defaultMode: 0755
+            - name: manifest-cache
+              persistentVolumeClaim:
+                claimName: manifest-cache

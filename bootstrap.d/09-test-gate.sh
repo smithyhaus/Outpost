@@ -1,10 +1,13 @@
 # shellcheck shell=bash
 # =============================================================================
-# Phase 9 — CI/CD test gate + auto-rollback + notifications.
-# Wires up Gate A (Tekton run-tests Task), Gate B (Argo Rollouts canary +
-# auto-rollback), and multi-channel notifications. Idempotent: safe to re-run.
+# Phase 9 — CI/CD test gate + rollout plugin + notifications.
+# v0.3: Gate A runs on the HOST (scripts/ci/run-tests.sh, called by the GHA
+# workflow — nothing to install in-cluster for it); the rollout plugin is
+# opt-in controller-only (ROLLOUT_PLUGIN=none default); notification plugin
+# manifests land in ns outpost-ci (consumed by the manifest-sync CronJob and
+# host-side notify-fanout callers). Idempotent: safe to re-run.
 # =============================================================================
-phase "Phase 9 / 10 Test gate, auto-rollback, notifications"
+phase "Phase 9 / 10 Test gate, rollout plugin, notifications"
 
 # ---- 9a. Test runner ----
 log "Installing test-runner: ${TEST_RUNNER}"
@@ -54,35 +57,23 @@ case "${TEST_RUNNER}" in
       log "TESTKUBE_MODE=cloud — skipping local agent install (configure CLI later)"
     fi
     ;;
-  catalog-tasks)
-    log "Installing Tekton Catalog test tasks..."
-    for _task in golang-test pytest jest junit-runner dotnet-test; do
-      kubectl apply -n tekton-pipelines \
-        -f "https://raw.githubusercontent.com/tektoncd/catalog/main/task/${_task}/0.1/${_task}.yaml" \
-        2>/dev/null || warn "  catalog task ${_task} not found at 0.1; check manually"
-    done
-    unset _task
-    ;;
 esac
 render_apply "plugins/test-runner/${TEST_RUNNER}/manifest.yaml"
+# Gate A itself is host-side now: scripts/ci/run-tests.sh (called by the GHA
+# workflow), opt-in per app via outpost.test.yaml — no in-cluster Task.
+ok "Test runner ready (Gate A runs on the host via scripts/ci/run-tests.sh)"
 
-# Apply the run-tests Task (uses the active runner).
-kubectl apply -f core/k8s/05-tekton/run-tests-task.yaml
-ok "Test runner ready"
-
-# ---- 9b. Rollout plugin (Argo Rollouts) ----
-log "Installing rollout plugin: ${ROLLOUT_PLUGIN}"
+# ---- 9b. Rollout plugin (opt-in, controller-only) ----
+log "Rollout plugin: ${ROLLOUT_PLUGIN}"
 if [[ "${ROLLOUT_PLUGIN}" == "argo-rollouts" ]]; then
-  # Server-side apply — Rollouts CRDs are large, same rationale as ArgoCD/Tekton.
-  # Vendored (core/k8s/vendor/) instead of curl'd from github.com/.../latest/
-  # download/ at install time — that host is intermittently throttled/blocked
-  # in CN, and the old `latest` path floated (a re-bootstrap months apart
-  # could silently jump major versions). See each file's header for upgrade
-  # instructions.
+  # Controller ONLY — the dashboard (and its BasicAuth IngressRoute) retired
+  # with the ArgoCD/Tekton dashboard tier in v0.3. Server-side apply —
+  # Rollouts CRDs are large. Vendored (core/k8s/vendor/) instead of curl'd
+  # from github.com/.../latest/download/ at install time — that host is
+  # intermittently throttled/blocked in CN, and a floating `latest` could
+  # silently jump major versions. See the vendor file's header to upgrade.
   kubectl apply --server-side=true --force-conflicts -n argo-rollouts \
     -f core/k8s/vendor/argo-rollouts-install-v1.9.0.yaml
-  kubectl apply --server-side=true --force-conflicts -n argo-rollouts \
-    -f core/k8s/vendor/argo-rollouts-dashboard-install-v1.9.0.yaml
   kubectl wait --for=condition=Available --timeout=180s \
     deployment/argo-rollouts -n argo-rollouts 2>/dev/null || \
     warn "argo-rollouts controller still rolling — apply continues"
@@ -94,131 +85,50 @@ if [[ "${ROLLOUT_PLUGIN}" == "argo-rollouts" ]]; then
   else
     log "  Skipping smoke AnalysisTemplate (test-runner != testkube)"
   fi
-  render_apply "plugins/rollout/${ROLLOUT_PLUGIN}/ingressroute.yaml"
+  ok "Rollout plugin ready (controller-only; apps opt in via the Rollout CRD)"
+else
+  log "ROLLOUT_PLUGIN=none — canary/auto-rollback disabled (set argo-rollouts to enable)"
 fi
-ok "Rollout plugin ready (https://${ROLLOUTS_DASHBOARD_HOST})"
 
 # ---- 9c. Notifications ----
-# argocd-notifications is shipped as part of ArgoCD core (>=2.3); the controller
-# auto-discovers argocd-notifications-cm + argocd-notifications-secret.
-
-# Pre-step: ConfigMap for the notify-task's mounted scripts. Carries both
-# scripts/notify-fanout.sh (canonical, replaces v0.2's 80-line inline bash)
-# and platform/lib/sign-webhook.sh (signing math — single source of truth,
-# no more mirroring with the YAML). Apply unconditionally so the notify-task
-# (which is applied in both NOTIFICATION_PROVIDERS branches below) always
-# has its scripts volume populated. v0.4 will bake outpost/notify-runner:v1
-# with these scripts + jq/curl/gettext/openssl pre-installed, eliminating
-# the per-PipelineRun apk-add cost.
-kubectl create configmap notify-runner-scripts \
-  --from-file=notify-fanout.sh=scripts/notify-fanout.sh \
-  --from-file=sign-webhook.sh=platform/lib/sign-webhook.sh \
-  -n tekton-pipelines \
-  --dry-run=client -o yaml | kubectl apply -f -
-
+# v0.3: argocd-notifications is gone with ArgoCD. Notification events are
+# emitted by three callers, all through scripts/notify-fanout.sh:
+#   build-failed                    GHA workflow step (host)
+#   deploy-succeeded/deploy-failed  manifest-sync CronJob (in-cluster)
+#   verify-failed                   outpost-verify.timer (host)
+# Each enabled plugin's manifest.yaml contributes its Secret (webhook-url /
+# sign-secret) + body-template ConfigMap in ns outpost-ci.
 if [[ -n "${NOTIFICATION_PROVIDERS}" ]]; then
   log "Wiring notifications: ${NOTIFICATION_PROVIDERS}"
 
-  # Build combined argocd-notifications-cm by concatenating base + per-plugin
-  # fragments. Same pattern for argocd-notifications-secret. Both base files
-  # leave their `data:` / `stringData:` sections empty so plugin fragments
-  # can be appended as indented k:v lines.
-  ARGO_CM_OUT="$(mktemp)"
-  ARGO_SECRET_OUT="$(mktemp)"
-  trap 'rm -f "$ARGO_CM_OUT" "$ARGO_SECRET_OUT"' EXIT
-
-  cp core/k8s/04-argocd/notifications-cm.template.yaml "$ARGO_CM_OUT"
-  cp core/k8s/04-argocd/notifications-secret.template.yaml "$ARGO_SECRET_OUT"
-
-  # Notification manifest.yaml mixes install-time vars (DINGTALK_WEBHOOK_URL etc.)
-  # with runtime vars (${NOTIFY_*}) inside body.tmpl. Use targeted
+  # Notification manifest.yaml mixes install-time vars (DINGTALK_WEBHOOK_URL
+  # etc.) with runtime vars (${NOTIFY_*}) inside body.tmpl. Use targeted
   # substitution so the runtime placeholders survive into the ConfigMap.
   NOTIFY_ALLOWLIST="DINGTALK_WEBHOOK_URL DINGTALK_SIGN_SECRET FEISHU_WEBHOOK_URL FEISHU_SIGN_SECRET WECOM_WEBHOOK_URL GENERIC_WEBHOOK_URL GENERIC_WEBHOOK_BEARER ROOT_DOMAIN"
 
   IFS=',' read -ra _np <<< "${NOTIFICATION_PROVIDERS}"
-  # Plugin service short-names (template suffix + service.webhook.<short>):
-  #   dingtalk → dingtalk, feishu → feishu, wecom → wecom, webhook-generic → generic
-  # Keep in sync with each plugin's argocd-cm-fragment.yaml service block.
-  _to_short() {
-    case "$1" in
-      webhook-generic) echo "generic" ;;
-      *)               echo "$1" ;;
-    esac
-  }
-  _shorts=()
   for _p in "${_np[@]}"; do
     _p="${_p// /}"
     [[ -z "$_p" ]] && continue
     log "  notification plugin: ${_p}"
-    # Per-plugin Tekton-side resources. Targeted substitution preserves
-    # ${NOTIFY_*} runtime placeholders inside body.tmpl.
+    # SECURITY: the rendered manifest carries cleartext webhook URLs/secrets —
+    # render to a 0600 temp file and clean up on the failure path too.
     _tmp_manifest=$(mktemp)
-    render_template_only "plugins/notification/${_p}/manifest.yaml" "$_tmp_manifest" "$NOTIFY_ALLOWLIST"
-    kubectl apply -f "$_tmp_manifest"
+    chmod 0600 "$_tmp_manifest"
+    if ! render_template_only "plugins/notification/${_p}/manifest.yaml" "$_tmp_manifest" "$NOTIFY_ALLOWLIST"; then
+      rm -f "$_tmp_manifest"
+      err "render of notification plugin '${_p}' failed"
+      exit 1
+    fi
+    if ! kubectl apply -f "$_tmp_manifest" >/dev/null; then
+      rm -f "$_tmp_manifest"
+      err "kubectl apply for notification plugin '${_p}' failed"
+      exit 1
+    fi
     rm -f "$_tmp_manifest"
-    # Append per-plugin argocd fragments (already 2-space-indented to fit
-    # under data: / stringData:).
-    cat "plugins/notification/${_p}/argocd-cm-fragment.yaml" >> "$ARGO_CM_OUT"
-    cat "plugins/notification/${_p}/argocd-secret-fragment.yaml" >> "$ARGO_SECRET_OUT"
-    _shorts+=("$(_to_short "$_p")")
   done
   unset _np _p _tmp_manifest
-
-  # Substitute placeholders in the assembled cm. Each trigger's `send:` list
-  # needs the actual template names that the plugin fragments contributed
-  # (e.g. app-deployed-dingtalk, app-deployed-feishu); the subscriptions
-  # `recipients:` needs the actual service names (webhook.dingtalk, ...).
-  # Without this step the literal `_PLUGIN_*_` strings remain in the cm
-  # and argocd-notifications-controller logs `unknown template` for every
-  # firing — silent failure mode.
-  _join() { local IFS=", "; echo "$*"; }
-  _tmpl_for_event() {
-    # Build "app-<event>-<short1>, app-<event>-<short2>, ..."
-    local event="$1" out=() s
-    for s in "${_shorts[@]}"; do out+=("app-${event}-${s}"); done
-    _join "${out[@]}"
-  }
-  _recipients() {
-    local out=() s
-    for s in "${_shorts[@]}"; do out+=("webhook.${s}"); done
-    _join "${out[@]}"
-  }
-  # sed -i differs on macOS vs GNU; use a temp + mv for portability.
-  _ARGO_CM_FILLED="$(mktemp)"
-  sed \
-    -e "s|_PLUGIN_TEMPLATES_DEPLOYED_|$(_tmpl_for_event deployed)|g" \
-    -e "s|_PLUGIN_TEMPLATES_SYNC_FAILED_|$(_tmpl_for_event sync-failed)|g" \
-    -e "s|_PLUGIN_TEMPLATES_DEGRADED_|$(_tmpl_for_event degraded)|g" \
-    -e "s|_PLUGIN_TEMPLATES_DELETED_|$(_tmpl_for_event deleted)|g" \
-    -e "s|_PLUGIN_TEMPLATES_ROLLBACK_|$(_tmpl_for_event rollback)|g" \
-    -e "s|_PLUGIN_RECIPIENTS_|$(_recipients)|g" \
-    "$ARGO_CM_OUT" > "$_ARGO_CM_FILLED"
-  mv "$_ARGO_CM_FILLED" "$ARGO_CM_OUT"
-  unset _shorts _tmpl_for_event _recipients _join _to_short _ARGO_CM_FILLED
-
-  # Defensive: fail loudly if any placeholder survived (means a future
-  # template added _PLUGIN_*_ without updating the sed list above).
-  if grep -q '_PLUGIN_[A-Z_]*_' "$ARGO_CM_OUT"; then
-    err "argocd-notifications-cm has unsubstituted _PLUGIN_*_ placeholders:"
-    grep '_PLUGIN_[A-Z_]*_' "$ARGO_CM_OUT" | sed 's/^/    /'
-    exit 1
-  fi
-
-  # Render envsubst on the combined files (resolves ${ROOT_DOMAIN} in templates,
-  # ${DINGTALK_WEBHOOK_URL} in secret data, etc.) then apply.
-  render_apply "$ARGO_CM_OUT"
-  render_apply "$ARGO_SECRET_OUT"
-
-  # Apply the shared Tekton notify-task (called from pipeline-build.yaml `finally`).
-  kubectl apply -f core/k8s/05-tekton/notify-task.yaml
   ok "Notifications ready (${NOTIFICATION_PROVIDERS})"
 else
-  log "NOTIFICATION_PROVIDERS empty — skipping notification wiring"
-  # Apply the notify-task anyway so pipeline-build's finally block resolves;
-  # with no provider Secrets mounted, the fanout step no-ops with [WARN] logs.
-  kubectl apply -f core/k8s/05-tekton/notify-task.yaml
+  log "NOTIFICATION_PROVIDERS empty — CI/CD events will be log-only (set NOTIFICATION_PROVIDERS to enable)"
 fi
-
-# Re-render pipeline-build with the now-canonical NOTIFICATION_PROVIDERS so
-# the finally step receives the right provider list.
-render_apply "core/k8s/05-tekton/pipeline-build.yaml"

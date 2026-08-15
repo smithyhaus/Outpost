@@ -10,7 +10,8 @@
 │ Your laptop (kubeseal CLI)│ ──pubkey encrypt─►│ git: sealed-secret.yaml │
 └───────────────────────────┘                  └─────────────────────────┘
                                                           │
-                                                          │ ArgoCD apply
+                                                          │ manifest-sync
+                                                          │ (kubectl apply -k)
                                                           ▼
                               ┌──────────────────────────────────────────┐
                               │ Cluster: sealed-secrets controller (priv)│

@@ -330,7 +330,7 @@ EOF
   [[ "$output" =~ "onboard" ]]
 }
 
-@test "outpost onboard k3s: spec.k3s.manifest_repo overrides global MANIFEST_REPO_URL" {
+@test "outpost onboard k3s: per-app manifest_repo tolerated; apps/-only scaffold (v0.3)" {
   # Stage an app repo with tier=k3s + a per-app manifest_repo, plus a fake
   # local manifests-dir clone the scaffolder will write into. Verify the
   # rendered argocd-app.yaml points at the PER-APP repo, not the global one.
@@ -356,19 +356,15 @@ YAML
             --no-reload
   [ "$status" -eq 0 ]
 
-  # The scaffolded argocd-app yaml must reference the per-app repo + branch.
-  local argo_app="$TEST_TMPDIR/manifests/argocd-apps/k3s-app.yaml"
-  [ -r "$argo_app" ]
-  run grep -F "https://example.com/per-app/manifests.git" "$argo_app"
-  [ "$status" -eq 0 ]
-  run grep -F "targetRevision: release" "$argo_app"
-  [ "$status" -eq 0 ]
-  # And the global URL must NOT have leaked in.
-  run grep -F "GLOBAL/should-NOT-be-used" "$argo_app"
-  [ "$status" -ne 0 ]
+  # v0.3: no argocd-apps/ artifact — manifest-sync deploys from apps/<name>/
+  # only, and the per-app manifest_repo override no longer materializes
+  # anywhere (parsed + tolerated for forward-compat; ignored otherwise).
+  [ ! -e "$TEST_TMPDIR/manifests/argocd-apps/k3s-app.yaml" ]
+  [ -r "$TEST_TMPDIR/manifests/apps/k3s-app/kustomization.yaml" ]
+  [ -r "$TEST_TMPDIR/manifests/apps/k3s-app/deployment.yaml" ]
 }
 
-@test "outpost onboard k3s: falls back to MANIFEST_REPO_URL when per-app override absent" {
+@test "outpost onboard k3s: global MANIFEST_REPO_URL path also yields apps/-only scaffold" {
   mkdir -p "$TEST_TMPDIR/app" "$TEST_TMPDIR/manifests/apps" "$TEST_TMPDIR/manifests/argocd-apps"
   cat > "$TEST_TMPDIR/app/outpost.app.yaml" <<'YAML'
 apiVersion: outpost.dev/v1
@@ -387,8 +383,10 @@ YAML
             --lang go \
             --no-reload
   [ "$status" -eq 0 ]
-  run grep -F "https://example.com/fallback/manifests.git" "$TEST_TMPDIR/manifests/argocd-apps/k3s-default.yaml"
-  [ "$status" -eq 0 ]
+  # v0.3: apps/<name>/ scaffold only; no argocd-apps artifact regardless of
+  # global vs per-app manifest repo configuration.
+  [ ! -e "$TEST_TMPDIR/manifests/argocd-apps/k3s-default.yaml" ]
+  [ -r "$TEST_TMPDIR/manifests/apps/k3s-default/kustomization.yaml" ]
 }
 
 @test "outpost onboard k3s: envsubst applied to manifest_repo (per-app gating)" {
@@ -415,8 +413,10 @@ YAML
             --lang go \
             --no-reload
   [ "$status" -eq 0 ]
-  run grep -F "https://example.com/scm-mcp/manifests.git" "$TEST_TMPDIR/manifests/argocd-apps/gated-app.yaml"
-  [ "$status" -eq 0 ]
+  # v0.3: the envsubst'd per-app value is parsed + tolerated but produces no
+  # argocd-apps artifact; the scaffold lands under apps/<name>/ as usual.
+  [ ! -e "$TEST_TMPDIR/manifests/argocd-apps/gated-app.yaml" ]
+  [ -r "$TEST_TMPDIR/manifests/apps/gated-app/kustomization.yaml" ]
 }
 
 @test "outpost onboard --install-skill: copies skill template into app's .claude/skills/" {

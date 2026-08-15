@@ -8,10 +8,13 @@
 生成时间：bootstrap 时
 模式：`local`（仅 Compose 数据服务 —— 无公网域名、无 GitOps）
 
-升级到 `full` 模式（Cloudflare Tunnel + k3s + ArgoCD + Tekton）：
+升级到 `full` 模式（k3s 数据层 + Cloudflare Tunnel + GitHub Actions
+自托管 runner + manifest-sync CD）：
 
 1. 在 `.env` 里把 `OUTPOST_MODE` 改成 `full`
-2. 填 `ROOT_DOMAIN`、`CF_TUNNEL_TOKEN`、`GIT_USER`、`GIT_TOKEN`、`MANIFEST_REPO_URL`
+2. 填 `ROOT_DOMAIN`、`CF_TUNNEL_TOKEN`、`GIT_USER`、`GIT_TOKEN`、
+   `MANIFEST_REPO_URL`、`GITHUB_RUNNER_URL`、`GITHUB_RUNNER_PAT`、
+   `OUTPOST_REPOS`
 3. 重新执行 `bash bootstrap.sh`
 
 ---

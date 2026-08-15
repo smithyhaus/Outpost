@@ -30,7 +30,7 @@ if ! command -v yamllint >/dev/null; then
   warn "yamllint not installed — skipping (pip install yamllint)"
 else
   yamllint -d "{extends: relaxed, rules: {line-length: {max: 200}}}" \
-    core/ plugins/ examples/ .github/ || FAILED=1
+    core/ plugins/ examples/ .github/ templates/ || FAILED=1
 fi
 
 phase "docker compose config"

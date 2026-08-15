@@ -19,63 +19,130 @@ sequence for a team that already knows the shape of it:
 #    already have an app repo with a root-level Dockerfile).
 bash scripts/outpost new-app <name> --lang <go|python|java|csharp|react|vue>
 
-# 2. Push the application source to your git provider.
+# 2. Push the application source to gitee (primary) AND github (CI trigger).
 
-# 3. Register the Tekton webhook via the provider API (needs an
-#    admin-scoped GIT_TOKEN — see step 5 below for the manual fallback).
-bash scripts/outpost register-webhooks --tekton-only
+# 3. Register the repo with Outpost. This appends it to OUTPOST_REPOS and
+#    prints the CI hookup steps — there is NO webhook to register.
+bash scripts/outpost onboard <clone-url>
 
-# 4. Scaffold deployment/service/ingress/kustomization + argocd-app into
-#    a local clone of your manifest repo (or run `outpost onboard` for
-#    the one-shot version of steps 4+, see step 2 of the walkthrough).
+# 4. Copy the CI workflow into the app repo (step 3 prints the exact path).
+cp templates/github/outpost-build.yml \
+   <app-repo>/.github/workflows/outpost-build.yml
+
+# 5. Scaffold deployment/service/ingress/kustomization into a local clone
+#    of your manifest repo.
 bash scripts/outpost manifest scaffold <app> --lang <lang> \
   --manifests-dir <path-to-manifest-repo-clone>
 
-# 5. Create the app's Postgres database (skip if the app has no DB).
+# 6. Create the app's Postgres database (skip if the app has no DB).
 bash scripts/outpost db create <app>
 
-# 6. Seal the secrets the manifest references.
+# 7. Seal the secrets the manifest references.
 bash scripts/outpost seal <app> KEY=value ...
 
-# 7. Commit + push the manifest repo — ArgoCD takes over from here.
-bash scripts/outpost verify --app <app>   # confirm sync/health after ArgoCD picks it up
+# 8. Commit + push the manifest repo — manifest-sync takes over from here.
+bash scripts/outpost verify --app <app>   # confirm pods/image after the next sync tick
 ```
 
-> ⚠️ **If `WEBHOOK_REPO_WHITELIST` is set in `.env`,** a brand-new repo
-> must be added to it **and** `bash bootstrap.sh` re-run before step 3's
-> webhook actually delivers builds. Until then, pushes are silently
-> dropped by the EventListener's CEL filter even though the provider
-> shows the webhook delivery as 200 OK. `outpost onboard` and `outpost
-> register-webhooks` both print a warning when they detect this.
+> ℹ️ **`OUTPOST_REPOS` is the registry that matters now.** It replaced
+> `WEBHOOK_REPO_WHITELIST`, but it is not a gate — it's the **positive
+> registry that `verify.sh` reconciliation walks**. A repo missing from it
+> still builds and deploys fine; what you lose is the anti-silence layer,
+> because nothing is comparing that repo's live HEAD against its deployed
+> image tag. `outpost onboard` appends it for you; `outpost off-board`
+> removes it.
 
 ## Prerequisites
 
 - `bash bootstrap.sh` has completed successfully
-- The manifest repo (`MANIFEST_REPO_URL`) exists and contains at least
-  empty `apps/` and `argocd-apps/` directories
+- The manifest repo (`MANIFEST_REPO_URL`) exists and contains at least an
+  empty `apps/` directory
+- A GitHub Actions self-hosted runner is registered and online
+  (`systemctl status 'actions.runner.*'`)
 - `INFRA.md` is at hand for connection strings
 
 ## Steps
 
 ### 1. Application repository
 
-In your Git provider, create a repo for the application and push the
-code. The root must contain a `Dockerfile`.
+Create a repo for the application and push the code. The root must
+contain a `Dockerfile`.
 
-### 2. Manifest repo — `apps/<app>/`
+Two remotes, two different jobs:
 
-> **Faster path:** `bash scripts/outpost new-app <name> --lang <go|python|java|csharp|react|vue>`
-> scaffolds `my-apps/<name>/` from the matching hello-world template with all
-> the renames done. Edit, copy the `manifest/` directory into your manifest
-> repo. See `outpost help` for all subcommands.
+| Remote | Role | Must stay in sync? |
+|--------|------|--------------------|
+| **gitee** (primary) | where you push, what reconciliation reads, where the manifest repo lives | — |
+| **github** (copy) | the *only* reason it exists: GitHub Actions fires the build workflow from it | yes — a dead mirror means builds silently stop |
 
-Use `examples/demo-app/` as the template. Add to your manifest repo:
+Keep them in sync with **dual push** (recommended — a failure is visible
+in your terminal at push time):
+
+```bash
+cd <app-repo>
+git remote set-url --add --push origin <gitee-url>
+git remote set-url --add --push origin <github-url>
+# one `git push` now reaches both forges
+```
+
+The alternative is gitee's **one-way** push-mirror (gitee → github,
+configured in the gitee repo settings UI). Use the one-way mirror only —
+gitee's own docs warn that the bidirectional mirror's 30-minute window can
+lose commits. Either way, a dead mirror is caught by `verify.sh`
+reconciliation, not by anything inside the workflow.
+
+### 2. Register the repo
+
+```bash
+bash scripts/outpost onboard <clone-url>
+```
+
+This appends the URL to `OUTPOST_REPOS` in `.env` (idempotent) and prints
+the CI hookup steps. If the source carries an `outpost.app.yaml` it is
+*also* onboarded as a Compose-tier app (Caddy fragment + compose
+override). Useful flags: `--dry-run`, `--manifests-dir <path> --lang <lang>`
+to scaffold k8s manifests in the same pass, `--install-skill` to drop the
+LLM onboarding skill into the app's `.claude/skills/`.
+
+### 3. Application repo — the CI workflow
+
+```bash
+mkdir -p <app-repo>/.github/workflows
+cp templates/github/outpost-build.yml \
+   <app-repo>/.github/workflows/outpost-build.yml
+# edit the `branches: [main]` line if your deploy branch differs
+git -C <app-repo> add .github/workflows/outpost-build.yml
+git -C <app-repo> commit -m "ci: outpost build workflow"
+```
+
+That ~40-line file is the *entire* per-repo CI surface. All real logic
+lives in this repo's hardened scripts on the runner host, resolved through
+`$OUTPOST_ROOT` (injected via `~/actions-runner/.env` when bootstrap
+installs the runner). Upgrading build logic = `git pull` on the Outpost
+host, not editing N app repos. Details: `templates/github/README.md`.
+
+Push to the deploy branch and the runner picks it up. Watch it in the
+app repo's **GitHub Actions** tab, or on the host:
+
+```bash
+journalctl -u 'actions.runner.*' -n 200
+```
+
+### 4. Manifest repo — `apps/<app>/`
+
+> **Faster path:** `bash scripts/outpost manifest scaffold <app> --lang <lang> --manifests-dir <path>`
+> generates all of the below from the matching hello-world template with
+> the renames done. `outpost new-app <name> --lang <lang>` scaffolds the
+> *application* side into `my-apps/<name>/`. See `outpost help`.
+
+Add to your manifest repo:
 
 ```
 apps/<app>/
 ├── deployment.yaml
 ├── service.yaml
-└── ingress.yaml
+├── ingress.yaml
+└── kustomization.yaml     ← manifest-sync prefers `apply -k` when present
 ```
 
 Key points in `deployment.yaml`:
@@ -86,8 +153,8 @@ spec:
     spec:
       containers:
         - name: app
-          image: registry.<root>/<app>:latest   # ← Tekton patches this on every push
-          # Secrets come from a SealedSecret — see step 2b. NEVER inline
+          image: registry.<root>/<app>:latest   # ← CI patches this on every push
+          # Secrets come from a SealedSecret — see step 4b. NEVER inline
           # plaintext connection strings here.
           envFrom:
             - secretRef:
@@ -110,11 +177,17 @@ The `-apps` suffix keeps the FQDN at one subdomain level so the free
 Universal SSL `*.<root>` certificate covers it (a two-level
 `*.apps.<root>` would require paid Advanced Certificate Manager).
 
-**Image tag format:** Tekton writes a 7-character short SHA
-(`registry.<root>/<app>:abc1234`). Rollback = revert the manifest repo
-commit; `kubectl rollout undo` also works.
+**Image tag format:** CI writes a 7-character short SHA
+(`registry.<root>/<app>:abc1234`). That `sha-7` shape is a contract —
+`verify.sh` reconciliation compares it against the repo's live branch
+head. Rollback = `outpost rollback <app> [sha]`.
 
-#### 2b. Secrets — never inline plaintext
+> ⚠️ `outpost manifest scaffold` also writes a fifth file,
+> `argocd-apps/<app>.yaml`. That is **legacy**: `manifest-sync` reads only
+> `apps/`, and a commit that touches nothing under `apps/` is logged as
+> "nothing to apply". The file is harmless; you can delete it.
+
+#### 4b. Secrets — never inline plaintext
 
 Outpost provides SealedSecret out of the box. Mechanism +
 disaster-recovery in [08-seal-secret.md](./08-seal-secret.md); the
@@ -148,139 +221,56 @@ it on the next `bootstrap.sh`. A normal `reset.sh` keeps the file;
 re-sealed). See
 [08-seal-secret.md](./08-seal-secret.md#controller-disaster-recovery).
 
-### 3. Manifest repo — `argocd-apps/<app>.yaml`
-
-```yaml
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: <app>
-  namespace: argocd
-  finalizers:
-    - resources-finalizer.argocd.argoproj.io
-spec:
-  project: default
-  source:
-    repoURL: <your manifest repo URL>
-    targetRevision: main
-    path: apps/<app>
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: apps
-  syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
-    syncOptions:
-      - CreateNamespace=true
-```
-
-### 4. Push the manifest repo
+### 5. Push the manifest repo
 
 ```bash
-git add apps/<app>/ argocd-apps/<app>.yaml
+git add apps/<app>/
 git commit -m "feat: onboard <app>"
 git push
 ```
 
-> **First time you point Outpost at a manifest repo** (one-time per cluster;
-> subsequent apps don't need to revisit this): in the manifest repo, add a
-> webhook:
-> - URL: `https://argocd.<root>/api/webhook`
-> - Secret: `${ARGOCD_WEBHOOK_SECRET}` (INFRA.md §6)
-> - Events: Push only
-> - Content-Type: `application/json`
->
-> This collapses ArgoCD's default 3-min poll interval to ~5s push-triggered
-> sync. Re-print the URL + secret any time with
-> `bash scripts/outpost setup-argocd-webhook`.
-
-With the webhook configured ArgoCD syncs within ~5s; without it it still
-syncs but on its own ~30s–3min poll cadence.
-
-### 5. Application repo — webhook
-
-**Preferred: `bash scripts/outpost register-webhooks`.** It registers
-(or updates) the Tekton webhook on every repo in `WEBHOOK_REPO_WHITELIST`
-directly via the provider API — no clicking through provider UIs:
+`manifest-sync` (ns `outpost-ci`) pulls every `MANIFEST_SYNC_INTERVAL`
+minutes, diffs `applied_head..HEAD`, and `kubectl apply -k`s each touched
+`apps/<dir>` — then waits for the rollout. There is nothing else to
+configure: **no webhook on the manifest repo either**, and no sync button
+to press. If you're impatient:
 
 ```bash
-bash scripts/outpost register-webhooks --dry-run --tekton-only   # preview first
-bash scripts/outpost register-webhooks --tekton-only             # then apply
+kubectl -n outpost-ci create job manifest-sync-now --from=cronjob/manifest-sync
+outpost logs sync
 ```
-
-- **Needs an admin-scoped `GIT_TOKEN`** (repo-admin permission on the
-  target host — set in `.env`, or `GIT_CREDENTIALS_EXTRA` for a host
-  other than the manifest repo's). Without one it skips the repo with a
-  clear message rather than failing silently.
-- **Idempotent:** matches an existing hook by its target URL and updates
-  it in place (PUT/PATCH) instead of creating a duplicate — safe to
-  re-run any time (rotated secret, new repo added, etc).
-- **Only touches repos listed in `WEBHOOK_REPO_WHITELIST`** (`.env`,
-  comma-separated). If that variable is set and your new repo isn't in
-  it yet, add it there first, then **re-run `bash bootstrap.sh`** — the
-  EventListener's CEL filter only picks up whitelist changes on
-  bootstrap, not on `register-webhooks` alone. Until you do, pushes are
-  silently dropped by CEL even though the provider shows the webhook
-  delivery as 200 OK. `outpost onboard` and `outpost register-webhooks`
-  both print a warning when they detect a repo missing from the
-  whitelist.
-
-**Fallback: manual UI** (no admin token available, or you'd rather click
-through it). The exact label varies by provider — see
-`plugins/git-provider/<provider>/README.md` (`gitee` / `github` /
-`gitlab`) for provider-specific field names:
-
-- **URL:** `https://hooks.<root>`
-- **Secret:** `${GIT_WEBHOOK_SECRET}` from `INFRA.md` §7
-- **Events:** Push only
-- **Active:** yes
-
-> ⚠️ **Webhook secret hygiene:** the secret is *shared across all
-> projects on this Outpost.* If it leaks, rotate it (regenerate in
-> `.env`, re-run `bash bootstrap.sh`) AND update every onboarded repo's
-> webhook config — there's no per-repo isolation in v0.2. `WEBHOOK_REPO_WHITELIST`
-> (v0.3+) narrows the blast radius to listed repos, but doesn't replace
-> per-repo secrets.
-
-Test by pushing a commit. Within seconds:
-
-```bash
-kubectl get pipelinerun -n tekton-pipelines
-```
-
-Should show a new run. To inspect via the dashboard:
-
-- `https://tekton.<root>` — Tekton Dashboard
-  (BasicAuth: `OUTPOST_DASHBOARD_USER` / `OUTPOST_DASHBOARD_PASSWORD`
-  in `INFRA.md` §0)
 
 ### 6. Watch the rollout
 
-ArgoCD UI (`https://argocd.<root>`): the `<app>` application should go
-to **Synced + Healthy**.
+```bash
+outpost status                # sync heartbeat: last_sync_ts / applied_head / last_result
+outpost verify --app <app>    # pods + deployed image + recent events
+outpost logs <app>            # app logs from the 'apps' namespace
+```
 
 Application URL: `https://<app>-apps.<root>`.
 
 ### 7. (optional) Wire test gate + auto-rollback
 
-Drop `outpost.test.yaml` at your application repo root to make Tekton
-run tests **before** updating the manifest. Convert your `Deployment`
-to an `argoproj.io/v1alpha1/Rollout` to get canary + automatic rollback
-on health degradation. Multi-channel notifications (DingTalk / Feishu /
-WeCom / generic webhook) fan out on every failure.
+Drop `outpost.test.yaml` at your application repo root to make CI run
+tests **before** updating the manifest (Gate A — the manifest never moves
+on a red test, so the cluster never sees the broken image). Set
+`ROLLOUT_PLUGIN=argo-rollouts` and convert your `Deployment` to an
+`argoproj.io/v1alpha1/Rollout` to get canary + automatic rollback;
+`manifest-sync` is `Rollout`-kind aware and fails the sync on `Degraded`.
+Multi-channel notifications (DingTalk / Feishu / WeCom / generic webhook)
+fan out on `build-failed` / `deploy-failed` / `verify-failed`.
 
 Walkthrough:
 [`00-quickstart.md` Phase J](./00-quickstart.md#phase-j--test-gate-auto-rollback-notifications-optional-but-recommended).
-Full design:
+Design history (Tekton/ArgoCD era — read for the *why*):
 [`proposals/cicd-test-gate.md`](./proposals/cicd-test-gate.md).
 
 ### 8. (optional) Per-app build config — `outpost.build.yaml`
 
-By default Tekton builds `./Dockerfile` at context `./` with the
-registry-plugin-aware kaniko defaults (cache flags + `--insecure` for
-self-hosted). Drop an `outpost.build.yaml` at your application repo
-root to override any of:
+By default CI builds `./Dockerfile` at context `./` with the
+registry-plugin-aware defaults. Drop an `outpost.build.yaml` at your
+application repo root to override any of:
 
 ```yaml
 dockerfile: ./services/api/Dockerfile     # monorepo / subdir builds
@@ -288,49 +278,88 @@ context: ./services/api
 buildArgs:                                # each becomes --build-arg=KEY=VAL
   - MAVEN_MIRROR=https://nexus.example.com/repository/maven-public
   - JAVA_VERSION=21
-extraArgs:                                # passed through verbatim
+extraArgs:                                # kaniko-era passthrough
   - --single-snapshot
-  - --use-new-run
 ```
 
-All keys are optional. Absent file → v0.2 defaults preserved exactly
-(zero-regression). Live example:
+All keys are optional; an absent file keeps the defaults exactly.
+
+> **v0.3 note on `extraArgs`:** the build engine is now buildkit
+> (`buildctl` against the in-cluster daemon), not kaniko.
+> `scripts/ci/build-image.sh` accepts only `--build-arg=K=V` entries out
+> of `extraArgs` and **silently ignores kaniko-only flags** — that
+> filtering is deliberate (an unfiltered passthrough would let one repo's
+> config inject a second `buildctl` flag and overwrite another app's image
+> tag in the shared registry). `buildArgs` is the supported way to pass
+> build arguments.
+
+Live example:
 [`../../../examples/hello-world/go/outpost.build.yaml`](../../../examples/hello-world/go/outpost.build.yaml).
 
 ## Troubleshooting
 
-### Pipeline failed
+### The build never started
+
+The push reached gitee but not github, or the runner is down. In order:
+
 ```bash
-kubectl logs -n tekton-pipelines -l tekton.dev/pipelineRun=<run> \
-  --all-containers --tail=200
+git ls-remote <github-url> refs/heads/main   # is the mirror current?
+systemctl status 'actions.runner.*'          # is the runner alive?
+bash verify.sh                               # ci.runner.online / ci.workflow.<app>
 ```
 
-### Image build succeeded but ArgoCD didn't sync
-- Check the manifest repo for a recent commit by the CI bot
-  (`chore(<app>): bump image to <sha>`)
-- ArgoCD UI → click **Refresh** on the Application
+`verify.sh` reconciliation catches all of these from the outside: a repo
+whose live HEAD hasn't become a deployed tag within
+`OUTPOST_STALENESS_THRESHOLD` (default 1800s) is a FAIL naming the repo.
 
-### Webhook didn't trigger
-- Provider's webhook delivery log → look at the most recent attempt
-- 200 OK + something in EventListener logs = OK
-- 401 → secret mismatch. Check what's in `INFRA.md` vs the provider UI
-- 5xx / no response → cloudflared down or k3s Traefik down
+### The workflow failed
+
+Open the run in the app repo's GitHub Actions tab (or
+`journalctl -u 'actions.runner.*' -n 200`) and read the failing step:
+
+- `Build image` — Dockerfile error, base-image pull timeout, or buildkitd
+  not Ready (`kubectl -n buildkit get pods`)
+- `Run tests (Gate A)` — your tests failed, or the runner host is missing
+  `yq` / `docker`
+- `Update manifest` — the manifest repo has no `apps/<app>/`, or
+  `GIT_TOKEN` can't push
+
+### Image built but the app didn't update
+
+- Check the manifest repo for a recent commit by the CI bot
+  (`chore(<app>): bump image to <sha>`). No commit → the workflow's
+  `Update manifest` step never ran or failed
+- Commit exists → look at the CD half: `outpost status` (is
+  `last_sync_ts` fresh, is `last_result=ok`?) then `outpost logs sync`
 
 ### Pod CrashLoopBackOff in apps/
 - Usually a wrong connection string (typo in bridge service name)
 - `kubectl describe pod -n apps <pod>` for events
 - `kubectl exec -it -n apps <pod> -- nslookup postgres.infra-bridges.svc.cluster.local`
 
+### I applied something with kubectl and it disappeared
+
+Expected. The manifest repo is the enforced source of truth for the `apps`
+namespace. Nothing reverts your change immediately (there's no self-heal
+loop any more), but it silently diverges and gets clobbered the next time
+that app's manifest changes. Put it in the manifest repo instead.
+
 ## Multiple Git providers
 
-If different repos live on different providers, configure each repo's
-webhook with the URL above. `GIT_PROVIDER_PLUGIN` accepts a
-comma-separated list (e.g. `GIT_PROVIDER_PLUGIN=gitee,github,gitlab` in
-`.env`), so a single `el-build-listener` can ingest webhooks from every
-provider you list at once — no manual EventListener editing needed. Each
-provider's trigger short-circuits on its own header-type filter
-(`X-Gitee-Token` / `X-Hub-Signature-256` / `X-Gitlab-Event`), so an
-inbound push matches exactly one trigger and the rest no-op. Re-run
-`bash bootstrap.sh` after changing the list to re-assemble the
-EventListener (see `plugins/git-provider/<name>/manifest.yaml` for the
-trigger fragment shape).
+`GIT_PROVIDER_PLUGIN` accepts a comma-separated list (e.g.
+`GIT_PROVIDER_PLUGIN=gitee,github,gitlab` in `.env`). In v0.3 this is a
+**credential contract, not a routing one**: each listed provider's
+`preflight.sh` runs an authenticated `git ls-remote` against every
+`OUTPOST_REPOS` entry whose host it owns, so a revoked token fails at
+bootstrap instead of quietly breaking builds later. There is no
+EventListener to assemble and no per-provider webhook signature to
+configure.
+
+For private app repos on a host *other* than the manifest repo's, add
+per-host credentials:
+
+```env
+GIT_CREDENTIALS_EXTRA=github.com|ci-bot|ghp_xxxx,gitlab.mycorp.com|ci-bot|glpat-yyyy
+```
+
+Re-run `bash bootstrap.sh` after changing either variable.

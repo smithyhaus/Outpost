@@ -1,43 +1,74 @@
 # =============================================================================
-# e2e — fresh `bash bootstrap.sh` (full mode) in k3d-on-ubuntu.
+# e2e — fresh `bash bootstrap.sh` (full mode) in k3d-on-ubuntu (v0.3.0).
 # -----------------------------------------------------------------------------
 # Why this workflow exists:
-#   The other workflows (lint / test-matrix) are static checks. They catch
-#   syntax + structural regressions, but EVERY user-facing bug from the
-#   past two months (Tekton JSON coercion, .env quote corruption, pruner
-#   self-eviction, kaniko --snapshotMode typo, apps-quota too small,
-#   registry leak) bit at RUNTIME and would have been invisible to static
-#   analysis. The only way to catch them ahead of an operator push is to
-#   actually run bootstrap.sh against a real cluster.
+#   lint.yml / test-matrix.yml are static checks (shellcheck, yamllint, bats
+#   with mocked kubectl/git). They catch syntax + structural regressions but
+#   CANNOT see anything that only exists at runtime in a real cluster: the
+#   manifest-sync CronJob actually heartbeating, buildkitd actually reaching
+#   Ready, the outpost-sync RBAC actually binding, NodePorts actually
+#   selecting the right pods. The only way to catch that class of bug ahead
+#   of an operator push is to run bootstrap.sh against a real cluster — this
+#   job does that on ubuntu-latest using k3d-in-Docker.
 #
-#   This job does exactly that on ubuntu-latest using k3d-in-Docker. Fake
-#   but plausible credentials drive full mode through every phase 1–10.
-#   Cloudflared and ArgoCD app-sync don't actually work end-to-end (no
-#   real CF tunnel, no real manifest repo), but the BOOTSTRAP itself —
-#   including all our resilience layers (pruner, registry-gc, apps-quota,
-#   kaniko args, webhook patches) — is exercised.
+# v0.3.0 architecture under test (see
+# docs/prp/plans/outpost-cicd-dispatcher-engine.plan.md for full rationale):
+#   CI = GitHub Actions self-hosted runner + scripts/ci/*.sh (host-run).
+#   CD = manifest-sync CronJob in k3s (ns outpost-ci).
+#   Tekton/ArgoCD/inbound-webhooks are REMOVED; the data layer moved
+#   in-cluster (core/k8s/06-bridges/); Compose's only full-mode job is the
+#   public-ingress `edge` profile (caddy + cloudflared).
+#
+# Two CI-only accommodations (NOT bug fixes — see the steps below for why):
+#   1. cloudflared cannot register a real Cloudflare Tunnel without a genuine
+#      CF account, in ANY CI environment, by construction. Phase 4
+#      (bootstrap.d/04-compose.sh) now HARD-GATES full-mode compose bring-up
+#      on cloudflared's Docker healthcheck reaching "healthy" — a change from
+#      the pre-v0.3 behaviour, where cloudflared/caddy were started but never
+#      health-waited. We restore that "started, not gated" behaviour for CI
+#      ONLY via a compose override (core/compose/overrides/*.yml is a
+#      supported, glob-picked-up extension point per 04-compose.sh — this
+#      does not touch any frozen file). verify.sh's `cloudflared.tunnel`
+#      check still and correctly reports FAIL (see the JSON assertion below)
+#      — we are not hiding that cloudflared isn't really connected, only
+#      unblocking the OTHER phases so they get exercised.
+#   2. bootstrap.d/08-ci.sh hard-fails (exit 1) unless the FIRST manifest-sync
+#      run reports last_result=ok, which requires MANIFEST_REPO_URL to be a
+#      REAL, clonable repo (a syntactically-plausible but dead URL — the
+#      pre-v0.3 e2e pattern — no longer gets bootstrap.sh to complete). We
+#      point it at a long-lived public GitHub demo repo with no apps/ dir, so
+#      the sync run legitimately converges on "nothing to apply" = ok. This
+#      is a real, working git clone — not a mock.
+#
+# KNOWN BLOCKER (not introduced by this workflow, not ours to fix — flagged
+# by the plugins worker and independently reproduced here): both
+# plugins/registry/{self-hosted,aliyun-acr}/manifest.yaml still target a
+# Secret at `namespace: tekton-pipelines`, a namespace that no longer exists
+# anywhere in core/k8s/ (Tekton was fully removed). `render_apply` runs
+# `kubectl apply -f` on the whole rendered multi-doc manifest and returns
+# kubectl's exit code; that one Secret failing makes the WHOLE Phase 7 apply
+# non-zero, and bootstrap.sh's `set -euo pipefail` aborts the script right
+# there — BEFORE Phase 8 (this repo's new CI engine: RBAC, PVC, NodePorts,
+# manifest-sync CronJob, GitHub runner, verify timer) ever runs. Until that
+# Secret's namespace is fixed, this job is expected to fail at the
+# `bash bootstrap.sh` step, and every assertion after it is skipped. That is
+# accurate, not a flaw in this workflow — see the diagnostics upload for the
+# live evidence, and treat a red run here as confirmation, not noise.
 #
 # When does it run:
 #   - schedule: 16:00 UTC daily = 00:00 Beijing
 #   - workflow_dispatch: manual button on the Actions tab
 #
-# No `push:` trigger by design. A commit-message-tag trigger sounded
-# clever but two consecutive iterations (`[e2e]`, then `[ci-e2e]`)
-# self-collided — the commit body that DOCUMENTED the new tag
-# necessarily contained the tag substring, which contains() matched.
-# Documentation about the trigger string IS unavoidable, so any
-# substring-based trigger has a built-in foot-gun. Manual dispatch
-# via the Actions tab covers the "I want to run e2e on this commit
-# now" use case with one click and zero collision risk.
+# No `push:` trigger by design — see the historical note in this repo's git
+# history (`[e2e]`/`[ci-e2e]` commit-tag triggers self-collided because the
+# commit body documenting the tag necessarily contains the tag substring).
+# Manual dispatch covers "run e2e on this commit now" with zero collision
+# risk; daily cron covers unattended drift detection.
 #
 # Why NOT every push:
-#   ~15 min/run on ubuntu-latest; the maintainer pushes frequently in
-#   rapid-iteration cycles. Running every push would block the queue and
-#   burn the project's free-tier minutes for no informational gain (the
-#   previous push's e2e result is still relevant to the next push). Daily
-#   cron + on-demand catches actual breakage with ~16h max latency, which
+#   ~20+ min/run; the maintainer pushes frequently. Daily cron + on-demand
 #   matches the project's "single operator deploys interactively next
-#   morning" cadence.
+#   morning" cadence without burning free-tier minutes on every push.
 # =============================================================================
 name: e2e
 
@@ -49,36 +80,29 @@ on:
 jobs:
   bootstrap:
     runs-on: ubuntu-latest
-    # 25 min budget: kaniko/argocd/tekton image pulls dominate (~10 min
-    # cold-cache on a fresh runner). Image cache between runs helps when
-    # GitHub schedules the same runner pool — typical re-runs ~15 min.
-    timeout-minutes: 25
-    # No if-guard needed — workflow only fires on schedule + manual dispatch.
+    # 30 min budget: buildkitd + testkube (oss/helm) + verdaccio + registry
+    # image pulls dominate on a cold-cache runner; the manifest-sync
+    # first-run wait alone budgets up to 300s inside bootstrap.d/08-ci.sh.
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
 
       # ── Tooling ────────────────────────────────────────────────────────
-      - name: Install k3d + kubectl + helm + envsubst + yq
+      - name: Install k3d + kubectl + helm + envsubst + yq + jq
         run: |
           set -euo pipefail
-          # k3d (k3s in Docker) — Linux is its primary target so no surprises.
           curl -sL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh \
             | TAG=v5.8.3 bash
           k3d version
 
-          # kubectl pinned to a known-good minor that matches the project's
-          # other tooling (alpine/k8s:1.31.0 in the pruner image).
           KCTL_VER="$(curl -sL https://dl.k8s.io/release/stable.txt)"
           curl -sL "https://dl.k8s.io/release/${KCTL_VER}/bin/linux/amd64/kubectl" -o /usr/local/bin/kubectl
           sudo chmod +x /usr/local/bin/kubectl
           kubectl version --client=true
 
-          # helm for the Phase 9 testkube install.
           curl -sL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
-          # yq (mikefarah v4) + jq + envsubst + bats already present on ubuntu-latest
-          # except yq which we install pinned.
           YQ_VER=v4.44.6
           sudo curl -sL "https://github.com/mikefarah/yq/releases/download/${YQ_VER}/yq_linux_amd64" \
             -o /usr/local/bin/yq
@@ -87,12 +111,45 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq gettext-base jq
 
+      # ── CI-only accommodation #1: cloudflared can never register a real
+      #    tunnel in any CI environment. Restore the pre-v0.3 "started, not
+      #    health-gated" behaviour ONLY for this job, via the supported
+      #    core/compose/overrides/*.yml extension point (04-compose.sh globs
+      #    it automatically) — no frozen file is touched. cloudflared keeps
+      #    its normal image/network/labels; only its process (replaced with a
+      #    no-op that stays up) and healthcheck (trivial) are overridden, so
+      #    it never even attempts to parse the fake CF_TUNNEL_TOKEN below.
+      #    verify.sh's cloudflared.tunnel check still (correctly) reports
+      #    FAIL — see the honest-exit-code assertion further down.
+      - name: CI-only compose override — cloudflared stays up without a real CF account
+        run: |
+          set -euo pipefail
+          mkdir -p core/compose/overrides
+          cat > core/compose/overrides/ci-cloudflared-noop.yml <<'EOF'
+          # CI-only. Not part of the shipped product; written fresh by
+          # .github/workflows/e2e.yml before every run. See that file's
+          # header for why this exists (no real Cloudflare account in CI).
+          services:
+            cloudflared:
+              entrypoint: ["sleep", "infinity"]
+              command: []
+              healthcheck:
+                test: ["CMD", "true"]
+                interval: 5s
+                timeout: 2s
+                retries: 1
+                start_period: 0s
+          EOF
+
       # ── Synthetic credentials — full mode through every phase ─────────
-      # These look real enough to pass envsubst's strict ${VAR} check but
-      # the external services they reference (cloudflared, gitee, ACR)
-      # are unreachable from CI. That's intentional — the bootstrap should
-      # complete every PHASE regardless, and the resilience-layer
-      # resources it creates are what we assert on.
+      # These look real enough to pass envsubst's strict ${VAR} check, and
+      # MANIFEST_REPO_URL/OUTPOST_REPOS point at a real, long-lived public
+      # GitHub repo (no apps/ dir) so the Phase 8 first-sync gate can
+      # legitimately converge — see accommodation #2 in the header above.
+      # GIT_USER/GIT_TOKEN are fake but GitHub tolerates bad Basic-Auth
+      # credentials on read access to a PUBLIC repo (verified empirically:
+      # `git ls-remote`/`git clone` both succeed with garbage creds against
+      # github.com/octocat/Hello-World).
       - name: Render .env for full-mode CI bootstrap
         run: |
           cat > .env <<EOF
@@ -102,11 +159,24 @@ jobs:
           CF_TUNNEL_TOKEN=ci-fake-token-not-used
           GIT_USER=ci-test-user
           GIT_TOKEN=ci-fake-token
-          MANIFEST_REPO_URL=https://github.com/dummy/manifests.git
-          MANIFEST_REPO_BRANCH=main
+          MANIFEST_REPO_URL=https://github.com/octocat/Hello-World.git
+          MANIFEST_REPO_BRANCH=master
           REGISTRY_PLUGIN=self-hosted
-          GIT_PROVIDER_PLUGIN=gitee
+          GIT_PROVIDER_PLUGIN=gitee,github
+          OUTPOST_REPOS=https://github.com/octocat/Hello-World.git#master
+          OUTPOST_DEPLOY_BRANCH=master
           NOTIFICATION_PROVIDERS=
+          # GITHUB_RUNNER_URL/PAT intentionally BOTH EMPTY — the documented
+          # CI/e2e mode: bootstrap.d/08-ci.sh must skip the runner install
+          # with a loud WARN, not fail. OUTPOST_CI_SELFTEST=1 is the explicit
+          # opt-in that keeps verify.sh's ci.runner check at WARN for this
+          # rehearsal — a REAL full-mode install without a PAT is FAIL.
+          GITHUB_RUNNER_URL=
+          GITHUB_RUNNER_PAT=
+          OUTPOST_CI_SELFTEST=1
+          MANIFEST_SYNC_INTERVAL=2
+          OUTPOST_STALENESS_THRESHOLD=1800
+          OUTPOST_REGISTRY_KEEP_TAGS=10
           # Skip testkube cloud (no real key); use OSS mode.
           TEST_RUNNER=testkube
           TESTKUBE_MODE=oss
@@ -117,64 +187,112 @@ jobs:
       # ── The actual bootstrap ─────────────────────────────────────────
       # We run the production bootstrap.sh as-is — same entrypoint a real
       # operator uses. Anything that breaks here breaks for real users too.
+      # No `|| true` — if bootstrap exits non-zero, the test fails. See the
+      # KNOWN BLOCKER note at the top of this file: as of this writing that
+      # is the expected outcome (Phase 7 registry-plugin, not Phase 4/8).
       - name: bash bootstrap.sh (full mode)
         run: bash bootstrap.sh
-        # No `|| true` — if bootstrap exits non-zero, the test fails.
 
-      # ── Assertions on the resilience layers ──────────────────────────
-      # The layers we shipped over the last 10 commits all live in cluster
-      # state. Static analysis can't see them; we have to query the apiserver.
-      - name: Assert all 4 resilience layers are present
+      # ── Assertions on the v0.3.0 CI/CD engine ─────────────────────────
+      # Everything here lives in cluster state (or systemd) that static
+      # analysis can't see — we have to query the live apiserver / host.
+      - name: Assert the v0.3.0 CI/CD engine came up
         run: |
           set -euo pipefail
           fail() { echo "FAIL: $*"; exit 1; }
 
-          echo "═══ L1: Tekton auto-pruner ═══"
-          kubectl -n tekton-pipelines get cronjob tekton-pruner >/dev/null \
-            || fail "tekton-pruner CronJob missing"
-          sched=$(kubectl -n tekton-pipelines get cronjob tekton-pruner -o jsonpath='{.spec.schedule}')
-          [[ "$sched" == "*/15 * * * *" ]] || fail "pruner schedule wrong: $sched"
+          echo "═══ outpost-ci RBAC + PVC + NodePorts (core/k8s/03-ci) ═══"
+          kubectl -n outpost-ci get serviceaccount outpost-sync >/dev/null \
+            || fail "ServiceAccount outpost-sync missing"
+          kubectl -n outpost-ci get role outpost-sync-heartbeat >/dev/null \
+            || fail "Role outpost-sync-heartbeat missing"
+          kubectl -n apps get role outpost-sync-apply >/dev/null \
+            || fail "Role outpost-sync-apply (ns apps) missing"
+          bound=$(kubectl -n outpost-ci get pvc manifest-cache -o jsonpath='{.status.phase}')
+          [[ "$bound" == "Bound" ]] || fail "manifest-cache PVC not Bound (phase=$bound)"
 
-          echo "═══ L1: Registry GC ═══"
-          kubectl -n registry get cronjob registry-gc >/dev/null \
-            || fail "registry-gc CronJob missing"
+          bk_port=$(kubectl -n buildkit get svc buildkitd-nodeport -o jsonpath='{.spec.ports[0].nodePort}')
+          [[ "$bk_port" == "30750" ]] || fail "buildkitd-nodeport wrong nodePort: $bk_port"
+          reg_port=$(kubectl -n registry get svc registry-nodeport -o jsonpath='{.spec.ports[0].nodePort}')
+          [[ "$reg_port" == "30500" ]] || fail "registry-nodeport wrong nodePort: $reg_port"
 
-          echo "═══ L2: ephemeral-storage requests + disk-pressure tolerations ═══"
-          for ns_cj in "tekton-pipelines/tekton-pruner" "registry/registry-gc"; do
-            ns="${ns_cj%/*}"; cj="${ns_cj#*/}"
-            eph=$(kubectl -n "$ns" get cronjob "$cj" \
-              -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].resources.requests.ephemeral-storage}')
-            [[ -n "$eph" ]] || fail "$cj missing ephemeral-storage request"
-            tol=$(kubectl -n "$ns" get cronjob "$cj" \
-              -o jsonpath='{.spec.jobTemplate.spec.template.spec.tolerations[*].key}')
-            [[ "$tol" == *"node.kubernetes.io/disk-pressure"* ]] \
-              || fail "$cj missing disk-pressure toleration"
-          done
+          echo "═══ manifest-sync CronJob + ConfigMaps (CD engine) ═══"
+          kubectl -n outpost-ci get cronjob manifest-sync >/dev/null \
+            || fail "manifest-sync CronJob missing"
+          sched=$(kubectl -n outpost-ci get cronjob manifest-sync -o jsonpath='{.spec.schedule}')
+          [[ "$sched" == "*/2 * * * *" ]] || fail "manifest-sync schedule wrong: $sched (expected */2 * * * * for MANIFEST_SYNC_INTERVAL=2)"
+          [[ "$(kubectl -n outpost-ci get cronjob manifest-sync -o jsonpath='{.spec.concurrencyPolicy}')" == "Forbid" ]] \
+            || fail "manifest-sync concurrencyPolicy != Forbid (single-writer contract)"
+          kubectl -n outpost-ci get configmap sync-scripts >/dev/null \
+            || fail "sync-scripts ConfigMap missing"
+          kubectl -n outpost-ci get configmap sync-config >/dev/null \
+            || fail "sync-config ConfigMap missing"
+          # First sync already ran (bootstrap.d/08-ci.sh blocks on it) — the
+          # heartbeat must be fresh and successful, not just present.
+          hb_result=$(kubectl -n outpost-ci get configmap sync-heartbeat -o jsonpath='{.data.last_result}')
+          [[ "$hb_result" == "ok" ]] || fail "sync-heartbeat last_result != ok (got: $hb_result)"
 
-          echo "═══ L3: kaniko --single-snapshot in Pipeline default-extra-args ═══"
-          args=$(kubectl -n tekton-pipelines get pipeline build-and-deploy \
-            -o jsonpath='{.spec.tasks[?(@.name=="read-build-config")].params[?(@.name=="default-extra-args")].value}')
-          [[ "$args" == *"--single-snapshot"* ]] \
-            || fail "Pipeline missing --single-snapshot (got: $args)"
-          [[ "$args" == *"--snapshotMode=redo"* ]] \
-            || fail "Pipeline missing --snapshotMode=redo"
+          echo "═══ buildkitd (build engine) ═══"
+          kubectl -n buildkit wait --for=condition=Available deployment/buildkitd --timeout=60s \
+            || fail "buildkitd not Available"
 
-          echo "═══ ArgoCD webhook receiver enabled ═══"
-          secret=$(kubectl -n argocd get cm argocd-cm -o jsonpath='{.data.webhook\.gitee\.secret}')
-          [[ -n "$secret" ]] || fail "argocd-cm missing webhook.gitee.secret"
+          echo "═══ infra-bridges data layer (4 workloads) ═══"
+          kubectl -n infra-bridges rollout status statefulset/postgres   --timeout=180s || fail "postgres StatefulSet not Ready"
+          kubectl -n infra-bridges rollout status deployment/redis       --timeout=180s || fail "redis Deployment not Ready"
+          kubectl -n infra-bridges rollout status statefulset/rabbitmq   --timeout=180s || fail "rabbitmq StatefulSet not Ready"
+          kubectl -n infra-bridges rollout status statefulset/manticore  --timeout=180s || fail "manticore StatefulSet not Ready"
 
-          echo "═══ Dynamic apps-quota ═══"
-          lim=$(kubectl get resourcequota apps-quota -n apps -o jsonpath='{.spec.hard.limits\.cpu}')
-          [[ -n "$lim" ]] || fail "apps-quota.limits.cpu unset"
-          echo "  apps-quota.limits.cpu = $lim (auto-derived from runner host)"
+          echo "═══ GitHub runner correctly SKIPPED (GITHUB_RUNNER_PAT empty) ═══"
+          [[ ! -d "$HOME/actions-runner" ]] \
+            || fail "actions-runner directory exists but GITHUB_RUNNER_PAT was empty — install should have been skipped"
 
-          echo "═══ Core platform pods Running ═══"
-          for ns in argocd tekton-pipelines registry argo-rollouts; do
-            kubectl -n "$ns" wait --for=condition=Ready pod --all --timeout=180s \
-              || fail "pods in $ns not all Ready"
-          done
+          echo "═══ outpost-verify dead-man-switch timer (host systemd) ═══"
+          systemctl is-enabled outpost-verify.timer >/dev/null \
+            || fail "outpost-verify.timer not enabled"
 
           echo "═══ ALL ASSERTIONS PASS ═══"
+
+      # ── verify.sh --json: shape + honest exit code under fake creds ───
+      # We do NOT assert a clean/PASS-only run — that would be dishonest
+      # given the deliberately-fake CF tunnel and GitHub PAT. We assert:
+      #   (a) the output is valid JSON matching tests/schema/verify-output.schema.json
+      #   (b) cloudflared.tunnel is a FAIL (no real CF account — always true
+      #       in CI, this is the ONE guaranteed-deterministic check)
+      #   (c) ci.runner is a WARN, not a FAIL (GITHUB_RUNNER_PAT empty +
+      #       OUTPOST_CI_SELFTEST=1 is the documented e2e state; without the
+      #       selftest flag an empty PAT is FAIL by design)
+      #   (d) the process exit code is 1 (FAIL present) — never 0 (that
+      #       would mean cloudflared.tunnel silently stopped being checked)
+      #       and never 2 (FAIL takes priority over WARN in verify.sh's own
+      #       exit-code contract, so 2 here would mean a FAIL got miscounted
+      #       as a WARN)
+      - name: verify.sh --json — schema + honest FAIL under fake creds
+        run: |
+          set -uo pipefail   # NOT -e: we need the real exit code, not a trap
+          out=$(bash verify.sh --json)
+          ec=$?
+
+          echo "$out" | jq -e . >/dev/null \
+            || { echo "FAIL: verify.sh --json did not produce valid JSON"; exit 1; }
+          echo "$out" | jq -e '.schema_version == "1"' >/dev/null \
+            || { echo "FAIL: schema_version != 1"; exit 1; }
+          echo "$out" | jq -e '.checks | type == "array"' >/dev/null \
+            || { echo "FAIL: .checks is not an array"; exit 1; }
+          echo "$out" | jq -e '.checks | all(.status as $s | (["PASS","WARN","FAIL"] | index($s)) != null)' >/dev/null \
+            || { echo "FAIL: a check has a status outside PASS/WARN/FAIL"; exit 1; }
+
+          cf_status=$(echo "$out" | jq -r '.checks[] | select(.id == "cloudflared.tunnel") | .status')
+          [[ "$cf_status" == "FAIL" ]] \
+            || { echo "FAIL: expected cloudflared.tunnel=FAIL under fake creds, got '$cf_status'"; exit 1; }
+
+          runner_status=$(echo "$out" | jq -r '.checks[] | select(.id == "ci.runner") | .status')
+          [[ "$runner_status" == "WARN" ]] \
+            || { echo "FAIL: expected ci.runner=WARN (GITHUB_RUNNER_PAT empty is supported), got '$runner_status'"; exit 1; }
+
+          [[ "$ec" -eq 1 ]] \
+            || { echo "FAIL: expected verify.sh --json exit code 1 (FAIL present via cloudflared.tunnel), got $ec"; exit 1; }
+
+          echo "verify.sh --json: schema OK, cloudflared.tunnel=FAIL (expected), ci.runner=WARN (expected), exit=$ec (expected)"
 
       # ── Diagnostics when something fails ─────────────────────────────
       - name: Collect diagnostics on failure
@@ -184,11 +302,14 @@ jobs:
           kubectl get all -A > /tmp/diag/all.txt 2>&1 || true
           kubectl describe nodes > /tmp/diag/nodes.txt 2>&1 || true
           kubectl get events -A --sort-by=.lastTimestamp > /tmp/diag/events.txt 2>&1 || true
-          for ns in argocd tekton-pipelines registry; do
+          docker compose --env-file .env -f core/compose/docker-compose.yml \
+            -f core/compose/overrides/ci-cloudflared-noop.yml ps > /tmp/diag/compose-ps.txt 2>&1 || true
+          docker logs caddy --tail 100 > /tmp/diag/caddy.log 2>&1 || true
+          for ns in outpost-ci buildkit registry infra-bridges argo-rollouts testkube; do
             kubectl -n "$ns" get pods -o wide > "/tmp/diag/${ns}-pods.txt" 2>&1 || true
             for p in $(kubectl -n "$ns" get pods -o name 2>/dev/null); do
-              kubectl -n "$ns" describe "$p" > "/tmp/diag/${ns}-$(basename $p)-desc.txt" 2>&1 || true
-              kubectl -n "$ns" logs "$p" --all-containers > "/tmp/diag/${ns}-$(basename $p).log" 2>&1 || true
+              kubectl -n "$ns" describe "$p" > "/tmp/diag/${ns}-$(basename "$p")-desc.txt" 2>&1 || true
+              kubectl -n "$ns" logs "$p" --all-containers > "/tmp/diag/${ns}-$(basename "$p").log" 2>&1 || true
             done
           done
 

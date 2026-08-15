@@ -1,33 +1,42 @@
 # Plugin: git-provider / gitlab
 
-GitLab Push Hook → Tekton EventListener → PipelineRun.
-Works on both gitlab.com and self-hosted GitLab CE/EE.
+GitLab (gitlab.com or self-hosted CE/EE) — a credential + host-matching
+contract, same shape as gitee/github. Works alongside them: `GIT_PROVIDER_PLUGIN`
+accepts a comma-list, and each enabled provider's `preflight.sh` only probes
+`OUTPOST_REPOS` entries whose host it owns.
 
-## Webhook configuration
+## v0.3 change: no more inbound webhook
 
-Repo → **Settings → Webhooks → Add new webhook**
+Earlier versions wired GitLab's Push Hook straight into a Tekton
+EventListener (plain `X-Gitlab-Token` compare — GitLab has never offered
+HMAC signing for webhooks). That path is retired; CI is triggered by GitHub
+Actions on a self-hosted runner, so there is nothing to configure on the
+GitLab webhook UI anymore.
 
-| Field           | Value                                  |
-|-----------------|----------------------------------------|
-| URL             | `https://hooks.<ROOT_DOMAIN>`          |
-| Secret token    | value of `GIT_WEBHOOK_SECRET` from `.env` |
-| SSL verify      | enabled                                |
-| Trigger events  | check **Push events** only             |
+## Host matching
 
-## How signature verification works
+GitLab self-hosted instances can live on any hostname, so this plugin can't
+match a single fixed host like gitee/github do. `preflight.sh` treats any
+`OUTPOST_REPOS` entry whose host contains the substring `gitlab.` as owned by
+this plugin (matches `gitlab.com`, `gitlab.corp.example`, etc.). If your
+self-hosted instance's hostname doesn't contain `gitlab.`, its entries won't
+be probed by this plugin — they'll need `GIT_CREDENTIALS_EXTRA` credentials
+regardless, since only the *probe*, not the clone, depends on host matching.
 
-GitLab sends the raw shared secret in the `X-Gitlab-Token` header. The
-EventListener CEL interceptor compares it with `GIT_WEBHOOK_SECRET`.
+## Credentials
 
-> ⚠️ GitLab does not offer HMAC signing for webhooks — plain token is the
-> only available mode. Rotate `GIT_WEBHOOK_SECRET` if leaked.
+Same resolution as every other git-provider plugin: the primary
+`GIT_USER`/`GIT_TOKEN` pair when the entry's host equals `GIT_HOST`
+(derived from `MANIFEST_REPO_URL` — normally gitee, so this is rare for
+GitLab), otherwise a `GIT_CREDENTIALS_EXTRA` `host|user|token` entry:
 
-## Field mapping
+```env
+GIT_CREDENTIALS_EXTRA=gitlab.corp.example|ci-bot|glpat-xxxx
+```
 
-| Pipeline param | GitLab field                       |
-|----------------|------------------------------------|
-| `repo-url`     | `body.repository.git_http_url`     |
-| `repo-name`    | `body.repository.name`             |
-| `branch`       | `body.ref`                         |
-| `revision`     | `body.after`                       |
-| `pusher`       | `body.user_username`               |
+## What preflight checks
+
+For every matching `OUTPOST_REPOS` entry, an authenticated `git ls-remote`
+confirms the token can actually list refs — a revoked/expired token fails
+loudly at bootstrap instead of silently breaking `verify.sh` reconciliation
+weeks later.

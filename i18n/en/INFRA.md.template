@@ -11,8 +11,12 @@ Root domain: `${ROOT_DOMAIN}`
 Registry plugin: `${REGISTRY_PLUGIN}`
 Git provider plugin: `${GIT_PROVIDER_PLUGIN}`
 Test runner: `${TEST_RUNNER}` (mode: `${TESTKUBE_MODE}`)
-Rollout plugin: `${ROLLOUT_PLUGIN}`
+Rollout plugin: `${ROLLOUT_PLUGIN}` (default `none` — opt-in canary, controller-only)
 Notification providers: `${NOTIFICATION_PROVIDERS}` (empty = none enabled)
+
+> v0.3.0: CI is a GitHub Actions self-hosted runner (§6), CD is the
+> manifest-sync CronJob (§7). No dashboards, no inbound webhook — see
+> [ADR-0003](../../docs/decisions/0003-github-actions-engine-swap.md).
 
 ---
 
@@ -25,10 +29,13 @@ Notification providers: `${NOTIFICATION_PROVIDERS}` (empty = none enabled)
 | RabbitMQ AMQP  | `rabbitmq.${ROOT_DOMAIN}`    | 5672  | `${RABBITMQ_USER}` | `${RABBITMQ_PASSWORD}`     |
 | RabbitMQ UI    | `https://mq.${ROOT_DOMAIN}`  | —     | `${RABBITMQ_USER}` | `${RABBITMQ_PASSWORD}`     |
 | Manticore HTTP | `https://search.${ROOT_DOMAIN}` | — | (none)            | — (standalone has no auth) |
-| ArgoCD         | `https://argocd.${ROOT_DOMAIN}` | — | `admin`           | (see §6)                   |
-| Tekton Dashboard | `https://tekton.${ROOT_DOMAIN}` | — | `${OUTPOST_DASHBOARD_USER}` (BasicAuth) | `${OUTPOST_DASHBOARD_PASSWORD}` |
-| Argo Rollouts UI | `https://${ROLLOUTS_DASHBOARD_HOST}` | — | `${OUTPOST_DASHBOARD_USER}` (BasicAuth) | `${OUTPOST_DASHBOARD_PASSWORD}` |
 | Registry       | `https://registry.${ROOT_DOMAIN}` | — | (anonymous)       | —                          |
+| GitHub Actions runner | (host, no public URL) | — | — | `${GITHUB_RUNNER_PAT}` (registration-token minting only) |
+
+There is no ArgoCD / Tekton / Argo-Rollouts dashboard row — those UIs are
+retired in v0.3.0. Build status: GitHub Actions UI on the app repo (or
+`journalctl -u actions.runner.* -n 200` on this host). Deploy status:
+`outpost status` / `outpost logs sync`.
 
 ---
 
@@ -107,67 +114,75 @@ curl https://search.${ROOT_DOMAIN}/
 mysql -h127.0.0.1 -P9306 -e 'SHOW STATUS'
 ```
 
-## 6. ArgoCD
+## 6. CI — GitHub Actions self-hosted runner
 
-- Web UI: `https://argocd.${ROOT_DOMAIN}`
-- User: `admin`
-- Initial password (or fetch via the command below):
-  ```bash
-  kubectl -n argocd get secret argocd-initial-admin-secret \
-    -o jsonpath='{.data.password}' | base64 -d
-  ```
-  Also written to `.env` as `ARGOCD_ADMIN_PASSWORD`.
-- Recommended: change the password after first login (`argocd account update-password`).
-- Manifest repo: `${MANIFEST_REPO_URL}` (branch `${MANIFEST_REPO_BRANCH}`)
-- **Manifest-repo instant-sync webhook** (configure ONCE per cluster — every app
-  inherits it automatically):
-  - URL: `https://argocd.${ROOT_DOMAIN}/api/webhook`
-  - Secret: `${ARGOCD_WEBHOOK_SECRET}`
-  - Push event, Content-Type=application/json
-  - Replaces ArgoCD's default 3-min poll with ~5s push-triggered sync.
-  - Re-print: `bash scripts/outpost setup-argocd-webhook`
+- Install dir: `$HOME/actions-runner` (systemd service `actions.runner.*`)
+- Runner URL: `${GITHUB_RUNNER_URL}` (org-level recommended — one runner
+  serves every private repo in the org)
+- Registration PAT: `${GITHUB_RUNNER_PAT}` — used ONLY to mint short-lived
+  runner *registration* tokens via the GitHub API; never the runner's
+  long-lived auth, never logged. **Empty = runner install/checks skipped
+  with a loud WARN** (this is the intended CI/e2e-mode shape, not a
+  config error).
+- Labels: `${GITHUB_RUNNER_LABELS}` (default `outpost`)
+- Runner name: `${GITHUB_RUNNER_NAME}` (blank → `outpost-<hostname>`)
+- Registered app repos: `${OUTPOST_REPOS}` — comma-list of
+  `<clone-url>[#branch]`. This is the reconciliation basis
+  `verify.sh` watches; register new repos with `outpost onboard <url>`.
+- Pure outbound long-poll (50s) against `api.github.com` — **no inbound
+  port, no webhook secret, nothing to open in a firewall.**
 
-## 7. Tekton CI (webhook + pipeline + dashboard)
-
-- Webhook URL: `https://hooks.${ROOT_DOMAIN}`
-- Webhook secret: `${GIT_WEBHOOK_SECRET}` (Tekton EventListener verifies this on every push)
-- Dashboard UI: `https://tekton.${ROOT_DOMAIN}` (PipelineRun / TaskRun / log viewer; can cancel runs, delete runs from the UI)
-  - **BasicAuth user:** `${OUTPOST_DASHBOARD_USER}`
-  - **BasicAuth password:** `${OUTPOST_DASHBOARD_PASSWORD}`
-  - Hardening: replace BasicAuth with Cloudflare Access (Zero Trust) at the edge — gate by email OTP / IdP. The middleware can stay enabled as defense in depth.
-- Active git provider plugin: `${GIT_PROVIDER_PLUGIN}`
-- Configure your repos to send Push events to the URL above with the secret.
-
-Pipeline behaviour:
-
-```
-1. push   →  EventListener  →  PipelineRun
-2. git-clone        clone the app repo at the pushed commit
-3. kaniko-build     build a Docker image
-4. push-image       push to <REGISTRY_HOST>/<repo>:<short-sha>
-5. update-manifest  patch image tag in the manifest repo, commit, push
-6. ArgoCD sync      → kubectl apply → rolling deploy
-```
-
-Inspect runs:
+Check status:
 
 ```bash
-kubectl get pipelinerun -n tekton-pipelines
-kubectl logs -n tekton-pipelines -l tekton.dev/pipelineRun=<run-name> \
-  --all-containers --tail=200
+systemctl status 'actions.runner.*'
+journalctl -u 'actions.runner.*' -n 200
 ```
 
-PipelineRun auto-cleanup (prevents kaniko buildup from exhausting node
-ephemeral-storage):
+Pipeline behaviour (`templates/github/outpost-build.yml`, on push to the
+deploy branch):
 
-- CronJob `tekton-pruner` sweeps hourly, deleting PRs whose
-  completion is older than `${OUTPOST_TEKTON_RETENTION_HOURS}` hours
-  (cascades to their TaskRuns + pods via owner-references).
-- Schedule: `${OUTPOST_TEKTON_PRUNE_SCHEDULE}` (override in `.env`).
-- Image: `${OUTPOST_TEKTON_PRUNER_IMAGE}`.
-- Manual trigger (don't wait for cron):
-  `kubectl create job --from=cronjob/tekton-pruner -n tekton-pipelines tekton-pruner-manual-$(date +%s)`
-- See [`06-troubleshooting.md` "Build pod reports Evicted"](docs/06-troubleshooting.md).
+```
+1. push (gitee primary, dual-push or gitee→github mirror keeps github in sync)
+2. github.com dispatches the workflow → runner picks it up (long-poll)
+3. checkout          shallow clone at the pushed commit
+4. build-image.sh     buildctl → 127.0.0.1:30750 (buildkitd NodePort)
+                       push → in-cluster registry, tag = 7-char commit SHA
+5. run-tests.sh       Gate A: outpost.test.yaml / Dockerfile.test (opt-in)
+6. update-manifest.sh clone gitee manifest repo, patch image tag, push
+                       (6-attempt jittered retry)
+7. on any-step failure → notify-fanout.sh build-failed
+```
+
+## 7. CD — manifest-sync CronJob
+
+- Namespace: `outpost-ci`
+- Interval: `${MANIFEST_SYNC_INTERVAL}` minutes (`concurrencyPolicy: Forbid`
+  — single writer, never overlaps itself)
+- Manifest repo: `${MANIFEST_REPO_URL}` (branch `${MANIFEST_REPO_BRANCH}`)
+- Reconciliation staleness threshold: `${OUTPOST_STALENESS_THRESHOLD}`
+  seconds — how long a live-HEAD-vs-deployed-tag mismatch may persist
+  before `verify.sh` calls it FAIL and names the repo
+- Registry tag retention (= rollback depth): `${OUTPOST_REGISTRY_KEEP_TAGS}`
+
+Check status:
+
+```bash
+outpost status                    # sync-heartbeat summary
+outpost logs sync                 # latest manifest-sync Job logs
+kubectl get configmap sync-heartbeat -n outpost-ci -o yaml
+```
+
+Rollback:
+
+```bash
+outpost rollback <app> [sha]      # domestic path — works with github down
+```
+
+**Break-glass:** `kubectl rollout undo` still works directly, but MUST be
+paired with a manifest revert (`outpost rollback`) — the manifest repo is
+the enforced source of truth, and the next sync tick reverts an
+unpaired `rollout undo`.
 
 ## 8. Docker Registry
 
@@ -180,7 +195,8 @@ ephemeral-storage):
 - User: `${GIT_USER}`
 - Personal access token: `${GIT_TOKEN}`
 - Manifest repo: `${MANIFEST_REPO_URL}` (branch `${MANIFEST_REPO_BRANCH}`)
-- Token use: ArgoCD HTTPS pull, Tekton clone, update-manifest push
+- Token use: manifest-sync HTTPS pull, `update-manifest.sh` push
+  (workflow-side, on the runner)
 
 ## 10. Host / OS
 
@@ -212,17 +228,21 @@ Full design: `i18n/en/docs/proposals/cicd-test-gate.md`. Walkthrough in
 
 ### Endpoints
 
-- Argo Rollouts Dashboard: `https://${ROLLOUTS_DASHBOARD_HOST}` — canary progress, abort, promote
-  - **BasicAuth user:** `${OUTPOST_DASHBOARD_USER}` / **password:** `${OUTPOST_DASHBOARD_PASSWORD}` (shared with Tekton Dashboard — same Traefik middleware)
+- No dashboard — `ROLLOUT_PLUGIN` is controller-only in v0.3.0 (no Argo
+  Rollouts dashboard tier). Canary status: `kubectl argo rollouts get
+  rollout <name> -n apps` (kubectl plugin) or `kubectl get rollout -n apps`.
 - Testkube agent: namespace `testkube` (`kubectl get pods -n testkube`)
-- Argo Rollouts controller: namespace `argo-rollouts`
+- Argo Rollouts controller (only if `ROLLOUT_PLUGIN=argo-rollouts`):
+  namespace `argo-rollouts`
 
 ### Notification fan-out
 
-Every PipelineRun failure / ArgoCD sync failure / Argo Rollouts auto-rollback
-fans out to all enabled notification providers. Configure / disable channels
-by editing `NOTIFICATION_PROVIDERS` in `.env` (comma-separated) and re-running
-`bash bootstrap.sh`.
+Three events fan out to all enabled notification providers via
+`scripts/notify-fanout.sh`: `build-failed` (GitHub Actions workflow),
+`deploy-succeeded`/`deploy-failed` (manifest-sync CronJob),
+`verify-failed` (the `outpost-verify.timer` systemd timer). Configure /
+disable channels by editing `NOTIFICATION_PROVIDERS` in `.env`
+(comma-separated) and re-running `bash bootstrap.sh`.
 
 | Provider          | Webhook URL var          | Sign secret var (optional)   |
 |-------------------|--------------------------|------------------------------|
@@ -257,10 +277,15 @@ Default `AnalysisTemplate`: `failureLimit: 2`, `consecutiveErrorLimit: 3`,
 
 ## 12. Hardening checklist (recommended, not enforced)
 
-- [ ] Add Cloudflare Access (email OTP) in front of `argocd.${ROOT_DOMAIN}`, `mq.${ROOT_DOMAIN}`, `tekton.${ROOT_DOMAIN}`, `${ROLLOUTS_DASHBOARD_HOST}` — replaces / supplements BasicAuth at the edge.
-- [ ] Rotate `OUTPOST_DASHBOARD_PASSWORD` (set blank in `.env`, re-run `bash bootstrap.sh`).
+- [ ] Add Cloudflare Access (email OTP) in front of `mq.${ROOT_DOMAIN}`,
+      `search.${ROOT_DOMAIN}` — no BasicAuth dashboards left to
+      supplement in v0.3.0; this is now the only edge-auth surface.
 - [ ] Add basic auth or Cloudflare Access in front of `registry.${ROOT_DOMAIN}` if exposing publicly (currently anonymous).
-- [ ] Change ArgoCD admin password (`argocd account update-password`).
+- [ ] Scope `${GITHUB_RUNNER_PAT}` to the minimum (registration-token
+      minting only) and revoke/rotate it after the runner is registered
+      — it is not needed for day-to-day operation.
+- [ ] Keep the GitHub Actions runner group private-repos-only (GitHub
+      default) — never route public-repo PRs to a self-hosted runner.
 - [ ] Backup `secrets-backup/sealed-secrets-pub.pem` to a password manager.
 
 ## 13. Reuse checklist (when onboarding a new project)
@@ -268,9 +293,19 @@ Default `AnalysisTemplate`: `failureLimit: 2`, `consecutiveErrorLimit: 3`,
 See `i18n/en/docs/05-onboard-project.md`. In short:
 
 1. Create a Gitee/GitHub/GitLab repo with a `Dockerfile`
-2. Add `apps/<name>/{deployment,service,ingress}.yaml` to the manifest repo
-3. Add `argocd-apps/<name>.yaml` to the manifest repo
-4. In the application repo, configure a webhook → `https://hooks.${ROOT_DOMAIN}` with secret `${GIT_WEBHOOK_SECRET}`
-5. `git push origin main` and watch ArgoCD synchronise
+2. `outpost onboard <repo-url>` — registers it in `OUTPOST_REPOS`
+   (verify.sh's reconciliation basis) and prints the CI workflow +
+   dual-push setup
+3. Copy `templates/github/outpost-build.yml` into the app repo's
+   `.github/workflows/` (the onboard command offers to do this for you)
+4. Set up dual-push (`git remote set-url --add --push origin <url>` for
+   both gitee and github) or a gitee→github one-way push-mirror —
+   **no webhook to register anywhere**
+5. Add `apps/<name>/{deployment,service,ingress,kustomization}.yaml` to
+   the manifest repo (`outpost onboard --manifests-dir <path> --lang
+   <lang>` scaffolds this)
+6. `git push` (both remotes fire with dual-push) and watch
+   `outpost logs sync` — `manifest-sync` converges within
+   `${MANIFEST_SYNC_INTERVAL}` minutes
 
 Connection strings come from §0 of this file.

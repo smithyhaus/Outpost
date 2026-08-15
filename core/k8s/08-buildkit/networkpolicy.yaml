@@ -1,23 +1,30 @@
 # =============================================================================
-# buildkitd-ingress — the ONLY thing allowed to dial the privileged daemon.
+# buildkitd-ingress — port-scoped ingress for the privileged daemon.
 # -----------------------------------------------------------------------------
 # buildkitd exposes an UNAUTHENTICATED gRPC control plane on :1234 that drives
-# arbitrary privileged (privileged:true, --oci-worker-net=host) builds. Without
-# this policy any pod in any namespace could resolve buildkitd.buildkit.svc and
-# run `buildctl build …` — a standing "become root in a network-connected
-# privileged container on demand, no credential" oracle that kaniko never had
-# (kaniko has no long-lived service; builds only exist as Tekton-created pods).
+# arbitrary privileged (privileged:true, --oci-worker-net=host) builds.
 #
-# Restrict ingress on :1234 to the buildctl CLIENT Task's namespace
-# (tekton-pipelines). Egress is intentionally left UNrestricted — build RUN
-# steps legitimately need broad egress (npm registries, prisma mirror, docker
-# mirror) plus the in-cluster Verdaccio/registry ClusterIPs.
+# v0.2 restricted ingress to the tekton-pipelines namespace (the buildctl
+# client Task lived there). v0.3 removed Tekton: the ONLY client is now
+# host-side buildctl (scripts/ci/build-image.sh) entering through the
+# buildkitd-nodeport Service (30750). NodePort traffic reaches the pod with an
+# environment-dependent SNAT source (cni0 gateway on k3s, different again on
+# k3d/WSL2) — pinning an ipBlock here risks "every build fails" on a CIDR
+# guess, the worst possible failure class for a single-operator box.
+#
+# So this policy is now PORT-scoped only (:1234, any source). The effective
+# boundary moves to:
+#   (a) single-tenant cluster — every pod on this node is the operator's own;
+#   (b) the NodePort is only reachable from the WSL2/host network (never
+#       published through cloudflared/Traefik — keep it that way);
+#   (c) TIGHTENING (optional, post-deploy): observe the real client source once
+#       via `conntrack -L -p tcp --dport 1234` (or check buildkitd logs) and
+#       pin it as an ipBlock/32 — then a compromised app pod can no longer
+#       reach the daemon.
 #
 # NOTE: enforcement requires k3s's built-in NetworkPolicy controller (on by
-# default; a cluster booted with --disable-network-policy will NOT enforce this
-# — verify with `kubectl get pods -n kube-system | grep -i network` or test a
-# cross-namespace dial). The tekton-pipelines label match uses the auto-applied
-# kubernetes.io/metadata.name (GA since k8s 1.22).
+# default; a cluster booted with --disable-network-policy will NOT enforce
+# this — verify with `kubectl get pods -n kube-system | grep -i network`).
 # =============================================================================
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -31,10 +38,6 @@ spec:
   policyTypes:
     - Ingress
   ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: tekton-pipelines
-      ports:
+    - ports:
         - protocol: TCP
           port: 1234

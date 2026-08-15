@@ -1,36 +1,22 @@
 # =============================================================================
 # Plugin: git-provider / gitlab
 # -----------------------------------------------------------------------------
-# GitLab Push Hook event:
-#   - body.ref                 = "refs/heads/main"
-#   - body.after               = commit SHA
-#   - body.repository.git_http_url
-#   - body.repository.name
-#   - body.user_username
-#   - X-Gitlab-Event: Push Hook
-#   - X-Gitlab-Token: <plain shared secret>
+# v0.3: no cluster objects. The inbound-webhook path (TriggerBinding/
+# EventListener Trigger, plain X-Gitlab-Token compare) retired with Tekton.
+# GitLab (gitlab.com or self-hosted CE/EE) is now just a credential +
+# host-matching contract, same shape as gitee/github.
+#
+# This file is a plain data contract (no envsubst placeholders, nothing
+# applied via kubectl) consumed by:
+#   - preflight.sh — resolves credentials for OUTPOST_REPOS entries whose
+#     host matches the `host-pattern` heuristic below, probes each with an
+#     authenticated `git ls-remote`.
+#   - verify.sh reconciliation — same host-matching convention.
 # =============================================================================
-apiVersion: triggers.tekton.dev/v1beta1
-kind: TriggerBinding
-metadata:
-  name: gitlab-push-binding
-  namespace: tekton-pipelines
-spec:
-  params:
-    - name: repo-url
-      value: $(body.repository.git_http_url)
-    - name: repo-name
-      value: $(body.repository.name)
-    - name: branch
-      value: $(body.ref)
-    - name: revision
-      value: $(body.after)
-    - name: short-revision
-      # 7-char short SHA produced by the CEL overlay interceptor in
-      # the assembled EventListener. See sibling `trigger.yaml`.
-      value: $(extensions.short_sha)
-    - name: pusher
-      value: $(body.user_username)
-# NOTE: the Trigger spec spliced into the EventListener lives in the
-# sibling file `trigger.yaml`. bootstrap's assemble_eventlistener reads
-# it directly — no ConfigMap is needed in the cluster.
+host: gitlab.com
+host-pattern: "gitlab\\."   # also matches self-hosted, e.g. gitlab.corp.example
+role: optional
+credential-template:
+  primary-user-env: GIT_USER
+  primary-token-env: GIT_TOKEN
+  extra-env: GIT_CREDENTIALS_EXTRA

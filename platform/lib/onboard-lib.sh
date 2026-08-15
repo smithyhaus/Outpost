@@ -90,6 +90,120 @@ onboard_render_subst() {
 }
 
 # =============================================================================
+# OUTPOST_REPOS helpers — v0.3 onboarding primitive (plugin contract v2).
+# -----------------------------------------------------------------------------
+# Replaces the pre-v0.3 webhook-registration flow (scripts/register-webhooks.sh
+# + WEBHOOK_REPO_WHITELIST). OUTPOST_REPOS is a comma list of
+# "<canonical-clone-url>[#<branch>]" entries — the single source of truth for
+# git-provider preflight.sh (per-host ls-remote probes) AND verify.sh
+# reconciliation (live HEAD vs deployed manifest tag per repo). These helpers
+# are pure string transforms: callers persist the result via env_kv
+# (platform/lib/portable.sh) — this file never writes to .env directly.
+# =============================================================================
+
+# Compute the new OUTPOST_REPOS value after registering one app repo.
+#   onboard_repos_add <current-value> <clone-url> [branch]
+# <current-value> is OUTPOST_REPOS's current comma-separated content (may be
+# empty). <clone-url> is a canonical git clone URL (gitee or github host —
+# either is a valid reconciliation basis per the git-provider plugin
+# contract). [branch] is optional; an omitted branch means
+# OUTPOST_DEPLOY_BRANCH applies at consume-time.
+#
+# Idempotent: if an entry for the SAME clone-url (any branch, or no branch)
+# is already present, the list is returned UNCHANGED — this never creates a
+# second entry for one repo. Prints the new value to stdout.
+onboard_repos_add() {
+  local current="$1" url="$2" branch="${3:-}"
+  local entry="$url"
+  [[ -n "$branch" ]] && entry="${url}#${branch}"
+
+  local existing entry_url
+  local -a entries
+  IFS=',' read -ra entries <<< "$current"
+  for existing in "${entries[@]}"; do
+    [[ -z "$existing" ]] && continue
+    entry_url="${existing%%#*}"
+    if [[ "$entry_url" == "$url" ]]; then
+      printf '%s' "$current"
+      return 0
+    fi
+  done
+
+  if [[ -z "$current" ]]; then
+    printf '%s' "$entry"
+  else
+    printf '%s,%s' "$current" "$entry"
+  fi
+}
+
+# Compute the new OUTPOST_REPOS value after removing one app repo.
+#   onboard_repos_remove <current-value> <clone-url>
+# Removes every entry whose clone-url (the part before an optional
+# `#<branch>`) matches <clone-url> exactly. Prints the new value (may be
+# empty) to stdout. A no-op (returns <current-value> unchanged) when no entry
+# matches.
+onboard_repos_remove() {
+  local current="$1" url="$2"
+  local existing entry_url out=""
+  local -a entries
+  IFS=',' read -ra entries <<< "$current"
+  for existing in "${entries[@]}"; do
+    [[ -z "$existing" ]] && continue
+    entry_url="${existing%%#*}"
+    if [[ "$entry_url" != "$url" ]]; then
+      if [[ -z "$out" ]]; then
+        out="$existing"
+      else
+        out="${out},${existing}"
+      fi
+    fi
+  done
+  printf '%s' "$out"
+}
+
+# Print onboarding next-step instructions for wiring an app repo into the
+# GitHub Actions CI trigger surface: workflow-template copy + dual-push
+# (or gitee push-mirror) reminder. Pure output helper — the caller (the
+# outpost CLI's `onboard` command) decides whether/how to show this.
+#   onboard_ci_instructions <clone-url> <outpost-home>
+onboard_ci_instructions() {
+  local url="$1" home="$2"
+  cat <<EOF
+Next steps to wire CI for ${url}:
+
+  1. Make sure a github.com copy of this repo exists — GitHub Actions is the
+     CI trigger surface; gitee stays the primary push target.
+  2. Copy the workflow template into the app repo:
+       mkdir -p .github/workflows
+       cp ${home}/templates/github/outpost-build.yml .github/workflows/outpost-build.yml
+  3. Wire push delivery to BOTH remotes — pick ONE:
+       (a) dual-push (recommended):
+             git remote set-url --add --push origin <gitee-clone-url>
+             git remote set-url --add --push origin <github-clone-url>
+           (a single 'git push' now delivers to both; a failed push is
+           visible in the terminal immediately, not silently dropped)
+       (b) gitee's official one-way push-mirror to github (see
+           plugins/git-provider/gitee/README.md)
+  4. Register the self-hosted runner if not already done (see
+     templates/github/README.md and plugins/git-provider/github/README.md).
+EOF
+}
+
+# Print off-boarding cleanup instructions — inverse of onboard_ci_instructions.
+#   onboard_ci_offboard_instructions <clone-url>
+onboard_ci_offboard_instructions() {
+  local url="$1"
+  cat <<EOF
+Repo ${url} removed from OUTPOST_REPOS — verify.sh reconciliation and
+git-provider preflight.sh will stop tracking it. Optional manual cleanup:
+  - remove .github/workflows/outpost-build.yml from the app repo
+  - drop the dual-push --push remote if one was configured
+  - the GitHub self-hosted runner registration is org-level and shared
+    across repos — no per-repo de-registration is needed.
+EOF
+}
+
+# =============================================================================
 # outpost.app.yaml helpers — v0.5 `outpost onboard <repo-or-path>` support.
 # All require yq (mikefarah, v4+); the project already requires it for
 # read-build-config and the kaniko task.

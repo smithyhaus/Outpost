@@ -1,6 +1,10 @@
 #!/usr/bin/env bats
 # =============================================================================
 # Tests for plugins/rollout/argo-rollouts
+#
+# v0.3: controller-only, default OFF (ROLLOUT_PLUGIN=none). No dashboard, no
+# ingressroute.yaml, no ROLLOUTS_DASHBOARD_HOST — those retired with
+# ArgoCD/Tekton's shared BasicAuth dashboard tier.
 # =============================================================================
 
 setup() {
@@ -22,10 +26,13 @@ teardown() {
   [ -f "${PLUGIN_DIR}/manifest.yaml" ]
   [ -f "${PLUGIN_DIR}/analysistemplate-default.yaml" ]
   [ -f "${PLUGIN_DIR}/analysistemplate-smoke.yaml" ]
-  [ -f "${PLUGIN_DIR}/ingressroute.yaml" ]
   [ -x "${PLUGIN_DIR}/preflight.sh" ]
   [ -f "${PLUGIN_DIR}/README.md" ]
   grep -q '^kind: rollout' "${PLUGIN_DIR}/plugin.yaml"
+}
+
+@test "ingressroute.yaml was removed (dashboard retired in v0.3)" {
+  [ ! -f "${PLUGIN_DIR}/ingressroute.yaml" ]
 }
 
 @test "preflight passes with no env" {
@@ -33,10 +40,15 @@ teardown() {
   [ "$status" -eq 0 ]
 }
 
-@test "manifest renders cleanly" {
+@test "manifest renders cleanly with no env (controller-only, no placeholders)" {
   out="${TMP}/manifest.yaml"
   render_template "${PLUGIN_DIR}/manifest.yaml" "$out"
   ! grep -qE '\$\{[A-Za-z_][A-Za-z0-9_]*\}' "$out"
+}
+
+@test "manifest's ConfigMap targets the argo-rollouts namespace (tekton-pipelines is gone in v0.3)" {
+  grep -q 'namespace: argo-rollouts' "${PLUGIN_DIR}/manifest.yaml"
+  ! grep -qE '^\s*namespace:\s*tekton-pipelines' "${PLUGIN_DIR}/manifest.yaml"
 }
 
 @test "analysistemplate-default uses locked thresholds (failureLimit=2, consecutiveErrorLimit=3)" {
@@ -50,14 +62,10 @@ teardown() {
   grep -q 'kubeshop/testkube-cli' "${PLUGIN_DIR}/analysistemplate-smoke.yaml"
 }
 
-@test "ingressroute uses ROLLOUTS_DASHBOARD_HOST" {
-  grep -q 'ROLLOUTS_DASHBOARD_HOST' "${PLUGIN_DIR}/ingressroute.yaml"
+@test "plugin.yaml documents default OFF (ROLLOUT_PLUGIN=none)" {
+  grep -q 'Default OFF' "${PLUGIN_DIR}/plugin.yaml"
 }
 
-@test "ingressroute renders cleanly with sample env" {
-  export ROOT_DOMAIN="smoke.example.test"
-  export ROLLOUTS_DASHBOARD_HOST="rollouts.smoke.example.test"
-  out="${TMP}/ingressroute.yaml"
-  render_template "${PLUGIN_DIR}/ingressroute.yaml" "$out"
-  ! grep -qE '\$\{[A-Za-z_][A-Za-z0-9_]*\}' "$out"
+@test "plugin.yaml no longer declares ROLLOUTS_DASHBOARD_HOST as optional_env (removed var)" {
+  ! grep -q 'ROLLOUTS_DASHBOARD_HOST' "${PLUGIN_DIR}/plugin.yaml"
 }

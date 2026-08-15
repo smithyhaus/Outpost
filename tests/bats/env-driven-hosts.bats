@@ -16,30 +16,43 @@
 
 setup() {
   INFRA_ROOT="$(cd "${BATS_TEST_DIRNAME}/../.." && pwd)"
-  ARGOCD_ING="${INFRA_ROOT}/core/k8s/04-argocd/ingress.yaml"
-  TEKTON_EL="${INFRA_ROOT}/core/k8s/05-tekton/eventlistener-base.yaml"
+  # ArgoCD (core/k8s/04-argocd/) and Tekton (core/k8s/05-tekton/) were fully
+  # removed in v0.3.0 — ARGOCD_HOST/HOOKS_HOST no longer exist as concepts,
+  # not just relocated files. See the CI/CD dispatcher-engine plan.
   REGISTRY_MANIFEST="${INFRA_ROOT}/plugins/registry/self-hosted/manifest.yaml"
   REGISTRY_CFG="${INFRA_ROOT}/platform/lib/registry-config.sh"
   CONFIG_PHASE="${INFRA_ROOT}/bootstrap.d/02-config.sh"
+  COMPOSE_PHASE="${INFRA_ROOT}/bootstrap.d/04-compose.sh"
+  INGRESSROUTES="${INFRA_ROOT}/core/k8s/06-bridges/ingressroutes.template.yaml"
   CLOUDFLARED_REF="${INFRA_ROOT}/core/compose/cloudflared/config.template.yml"
   ENV_EXAMPLE="${INFRA_ROOT}/.env.example"
 }
 
-@test "argocd ingress: Host() uses \${ARGOCD_HOST}, not literal 'argocd'" {
-  [ -r "$ARGOCD_ING" ]
-  run grep -E 'Host\(`\$\{ARGOCD_HOST\}\.\$\{ROOT_DOMAIN\}`\)' "$ARGOCD_ING"
+@test "bridges ingressroutes: Host() uses \${SEARCH_HOST}/\${MQ_HOST}, not literal 'search'/'mq'" {
+  # search/mq moved off Caddy in v0.3.0 (data layer now in-cluster); this
+  # Traefik IngressRoute is their new home. Same env-driven contract as
+  # argocd/hooks below, just a different rendering mechanism (render_template
+  # via bootstrap.d/04-compose.sh's export, not bootstrap.d/02-config.sh —
+  # see the comment in ingressroutes.template.yaml for why).
+  [ -r "$INGRESSROUTES" ]
+  run grep -E 'Host\(`\$\{SEARCH_HOST\}\.\$\{ROOT_DOMAIN\}`\)' "$INGRESSROUTES"
   [ "$status" -eq 0 ]
-  # Belt-and-suspenders: literal `argocd.${ROOT_DOMAIN}` must be gone.
-  run grep -E 'Host\(`argocd\.\$\{ROOT_DOMAIN\}`\)' "$ARGOCD_ING"
+  run grep -E 'Host\(`\$\{MQ_HOST\}\.\$\{ROOT_DOMAIN\}`\)' "$INGRESSROUTES"
+  [ "$status" -eq 0 ]
+  run grep -E 'Host\(`search\.\$\{ROOT_DOMAIN\}`\)' "$INGRESSROUTES"
+  [ "$status" -ne 0 ]
+  run grep -E 'Host\(`mq\.\$\{ROOT_DOMAIN\}`\)' "$INGRESSROUTES"
   [ "$status" -ne 0 ]
 }
 
-@test "tekton eventlistener: Host() uses \${HOOKS_HOST}, not literal 'hooks'" {
-  [ -r "$TEKTON_EL" ]
-  run grep -E 'Host\(`\$\{HOOKS_HOST\}\.\$\{ROOT_DOMAIN\}`\)' "$TEKTON_EL"
+@test "bootstrap 04-compose: exports defaults for SEARCH_HOST / MQ_HOST" {
+  # Defaults must be set (and exported, so later-sourced phases inherit them)
+  # before render_template renders ingressroutes.template.yaml — its strict
+  # \${VAR} residue check would otherwise reject an unset SEARCH_HOST/MQ_HOST.
+  run grep -E 'export SEARCH_HOST="\$\{SEARCH_HOST:-search\}"' "$COMPOSE_PHASE"
   [ "$status" -eq 0 ]
-  run grep -E 'Host\(`hooks\.\$\{ROOT_DOMAIN\}`\)' "$TEKTON_EL"
-  [ "$status" -ne 0 ]
+  run grep -E 'export MQ_HOST="\$\{MQ_HOST:-mq\}"' "$COMPOSE_PHASE"
+  [ "$status" -eq 0 ]
 }
 
 @test "registry plugin manifest: Host() uses computed \${REGISTRY_HOST}" {
@@ -58,31 +71,25 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-@test "bootstrap 02-config: exports defaults for ARGOCD_HOST / HOOKS_HOST / REGISTRY_SUBDOMAIN" {
-  # Defaults must be set before render_template runs (its strict ${VAR}
-  # residue check would otherwise reject the new template references).
-  run grep -E 'ARGOCD_HOST="\$\{ARGOCD_HOST:-argocd\}"' "$CONFIG_PHASE"
-  [ "$status" -eq 0 ]
-  run grep -E 'HOOKS_HOST="\$\{HOOKS_HOST:-hooks\}"' "$CONFIG_PHASE"
-  [ "$status" -eq 0 ]
+@test "bootstrap 02-config: exports default for REGISTRY_SUBDOMAIN" {
+  # ARGOCD_HOST / HOOKS_HOST retired with ArgoCD/Tekton in v0.3.0 — no
+  # ingress references them anymore (see the setup() comment above).
+  # Default must be set before render_template runs (its strict ${VAR}
+  # residue check would otherwise reject the template references).
   run grep -E 'REGISTRY_SUBDOMAIN="\$\{REGISTRY_SUBDOMAIN:-registry\}"' "$CONFIG_PHASE"
   [ "$status" -eq 0 ]
 }
 
-@test "bootstrap 02-config: persists ARGOCD_HOST / HOOKS_HOST / REGISTRY_SUBDOMAIN to .env" {
-  # Re-bootstrap should see the same values via .env source — without
-  # these echo lines, a second run would re-default but break any
-  # operator override set in the first run.
-  run grep -E '^\s*echo "ARGOCD_HOST=\$\{ARGOCD_HOST\}"' "$CONFIG_PHASE"
-  [ "$status" -eq 0 ]
-  run grep -E '^\s*echo "HOOKS_HOST=\$\{HOOKS_HOST\}"' "$CONFIG_PHASE"
-  [ "$status" -eq 0 ]
+@test "bootstrap 02-config: persists REGISTRY_SUBDOMAIN to .env" {
+  # Re-bootstrap should see the same value via .env source — without this
+  # echo line, a second run would re-default but break any operator
+  # override set in the first run.
   run grep -E '^\s*echo "REGISTRY_SUBDOMAIN=\$\{REGISTRY_SUBDOMAIN\}"' "$CONFIG_PHASE"
   [ "$status" -eq 0 ]
 }
 
 @test ".env.example: documents the new overrides (commented, with default)" {
-  for v in ARGOCD_HOST HOOKS_HOST REGISTRY_SUBDOMAIN; do
+  for v in REGISTRY_SUBDOMAIN; do
     run grep -E "^#\s*${v}=" "$ENV_EXAMPLE"
     [ "$status" -eq 0 ] || { echo "missing # ${v}= in .env.example"; return 1; }
   done
@@ -91,12 +98,32 @@ setup() {
 @test "cloudflared reference doc: uses templated hostnames (no .example.com literals)" {
   # The doc tells operators what to wire in the Cloudflare Dashboard. Using
   # template form makes the relationship to .env explicit.
-  run grep -E 'hostname:\s+\$\{ARGOCD_HOST\}\.\$\{ROOT_DOMAIN\}' "$CLOUDFLARED_REF"
+  run grep -E 'hostname:\s+\$\{SEARCH_HOST\}\.\$\{ROOT_DOMAIN\}' "$CLOUDFLARED_REF"
   [ "$status" -eq 0 ]
-  run grep -E 'hostname:\s+\$\{HOOKS_HOST\}\.\$\{ROOT_DOMAIN\}' "$CLOUDFLARED_REF"
+  run grep -E 'hostname:\s+\$\{MQ_HOST\}\.\$\{ROOT_DOMAIN\}' "$CLOUDFLARED_REF"
   [ "$status" -eq 0 ]
   # And the literal example.com hostnames should all be gone.
   run grep -E 'hostname:\s+(argocd|hooks|registry|search|mq)\.example\.com' "$CLOUDFLARED_REF"
+  [ "$status" -ne 0 ]
+}
+
+@test "cloudflared reference doc: retired v0.2 routes (argocd/hooks/tekton/rollouts) are ABSENT" {
+  # v0.3 removed ArgoCD, the webhook receiver and both dashboards. A route
+  # entry teaching operators to wire them again is a doc-code lie — assert
+  # the live-route form never comes back (the retirement NOTE may mention
+  # the names, so match the yaml `- hostname:` route form specifically).
+  run grep -E '^\s*-\s+hostname:\s+.*(ARGOCD_HOST|HOOKS_HOST|tekton\.|rollouts\.)' "$CLOUDFLARED_REF"
+  [ "$status" -ne 0 ]
+}
+
+@test "cloudflared reference doc: search/mq route to k3s Traefik NodePort, not caddy" {
+  # v0.3.0: search/mq are in-cluster now (core/k8s/06-bridges/), reached the
+  # same way every other k3s route is — not proxied through caddy anymore.
+  run grep -E 'hostname:\s+\$\{SEARCH_HOST\}\.\$\{ROOT_DOMAIN\}' "$CLOUDFLARED_REF"
+  [ "$status" -eq 0 ]
+  run grep -E 'hostname:\s+\$\{MQ_HOST\}\.\$\{ROOT_DOMAIN\}' "$CLOUDFLARED_REF"
+  [ "$status" -eq 0 ]
+  run grep -E 'service:\s+http://caddy:80' "$CLOUDFLARED_REF"
   [ "$status" -ne 0 ]
 }
 

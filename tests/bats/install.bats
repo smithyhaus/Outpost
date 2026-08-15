@@ -66,6 +66,7 @@ teardown() {
     CF_TUNNEL_TOKEN=tok \
     GIT_USER=u GIT_TOKEN=t \
     MANIFEST_REPO_URL=https://example.com/m \
+    OUTPOST_REPOS=https://gitee.com/org/app.git \
     bash "$INSTALLER"
   [ "$status" -eq 0 ]
   [[ "$output" =~ "mode: full" ]]
@@ -89,6 +90,8 @@ teardown() {
   [[ "$output" =~ "GIT_USER" ]]
   [[ "$output" =~ "GIT_TOKEN" ]]
   [[ "$output" =~ "MANIFEST_REPO_URL" ]]
+  # v0.3: OUTPOST_REPOS is full-mode required (reconciliation basis)
+  [[ "$output" =~ "OUTPOST_REPOS" ]]
 }
 
 @test "install.sh: preserves existing .env unless OUTPOST_FORCE_ENV=1" {
@@ -124,6 +127,14 @@ teardown() {
   # And the un-set var still carries the template default.
   run grep -E '^OUTPOST_MODE=' "$TEST_TMPDIR/outpost/.env"
   [ "$status" -eq 0 ]
+}
+
+@test "install.sh: clone path carries the ghfast.top + gitee mirror fallback" {
+  # Static lock (the real network fallback is exercised by integration runs):
+  # a github.com clone failure must retry via ghfast.top and honor
+  # OUTPOST_GIT_MIRROR_URL — the CN-egress precedent from 06-sealed-secrets.sh.
+  grep -q 'ghfast.top' "$INSTALLER"
+  grep -q 'OUTPOST_GIT_MIRROR_URL' "$INSTALLER"
 }
 
 @test "install.sh: refuses non-git OUTPOST_DIR collision" {

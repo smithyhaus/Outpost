@@ -95,10 +95,14 @@ bats tests/schema/
 | `test-matrix` | every push + PR | bats unit + regression on `ubuntu-latest` |
 | `e2e` | nightly cron + manual dispatch (Actions tab → Run workflow) | fresh `bash bootstrap.sh` (full mode) on `ubuntu-latest` via k3d-in-Docker, asserts every resilience layer is present in the resulting cluster |
 
-The `e2e` job is the only one that catches runtime bugs (Tekton param
-coercion, kaniko CLI typos, .env corruption on re-source, etc.) — the
-class of bugs that bit the project repeatedly before this CI tier was
-added. It runs ~15 min, so we cron it daily instead of per-push.
+The `e2e` job is the only one that catches runtime bugs (buildctl CLI
+typos, manifest-sync CronJob wiring, .env corruption on re-source, etc.)
+— the class of bugs that bit the project repeatedly before this CI tier
+was added. Since v0.3.0 it runs in "runner skip" mode when
+`GITHUB_RUNNER_PAT` isn't set (CI can't self-register a self-hosted
+runner) — exercises every phase except the actual runner registration,
+loudly WARNing instead of silently skipping. It runs ~15 min, so we cron
+it daily instead of per-push.
 Maintainer can opt in to e2e for a specific push by adding `[e2e]` to
 the commit subject line.
 
@@ -121,8 +125,8 @@ We use conventional-commits-ish prefixes:
 - `test(<area>):` test only
 - `plugin(<kind>/<name>):` plugin-scoped change
 
-`<area>` examples: `compose`, `k8s`, `bootstrap`, `verify`, `tekton`,
-`argocd`, `i18n-zh-CN`, `tests`.
+`<area>` examples: `compose`, `k8s`, `bootstrap`, `verify`, `ci`, `sync`,
+`i18n-zh-CN`, `tests`.
 
 ## Reporting bugs
 

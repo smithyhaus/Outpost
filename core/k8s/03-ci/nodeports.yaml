@@ -1,0 +1,49 @@
+# =============================================================================
+# CI NodePorts — host-side runner access into the cluster (v0.3.0).
+# -----------------------------------------------------------------------------
+# The GitHub Actions runner lives ON THE HOST and drives two in-cluster
+# services:
+#   127.0.0.1:30750 → buildkitd gRPC (scripts/ci/build-image.sh buildctl)
+#   127.0.0.1:30500 → registry HTTP API (outpost rollback tag listing; ad-hoc
+#                     host pushes). Image PUSHES from builds do NOT go through
+#                     this port — buildkitd pushes in-cluster to the
+#                     REGISTRY_PUSH_HOST Service name directly.
+#
+# NEW Services on purpose: core/k8s/08-buildkit/** and the registry plugin
+# manifests are quenched and MUST NOT be modified — selectors below are
+# matched to their actual labels (buildkit: app=buildkitd, registry:
+# app=docker-registry).
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: buildkitd-nodeport
+  namespace: buildkit
+  labels:
+    app: buildkitd
+spec:
+  type: NodePort
+  selector:
+    app: buildkitd
+  ports:
+    - name: grpc
+      port: 1234
+      targetPort: 1234
+      nodePort: 30750
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: registry-nodeport
+  namespace: registry
+  labels:
+    app: docker-registry
+spec:
+  type: NodePort
+  selector:
+    app: docker-registry
+  ports:
+    - name: http
+      port: 5000
+      targetPort: 5000
+      nodePort: 30500

@@ -14,7 +14,8 @@ the **smallest thing that proves your CI/CD pipeline works**:
 
 ## Manifest layout — two supported modes
 
-The `update-manifest` Tekton task auto-detects how to bump the image tag:
+`scripts/update-manifest.sh` (run by the GitHub Actions workflow's final
+step, on the host runner) auto-detects how to bump the image tag:
 
 | Mode | Trigger | What gets rewritten on each push |
 |------|---------|----------------------------------|
@@ -25,8 +26,8 @@ Five of the examples (`react`, `vue`, `csharp`, `python`, `java`) ship the
 **legacy** layout (`manifest/deployment.yaml` + `service.yaml` + `ingress.yaml`).
 The **`go`** example additionally ships `manifest/kustomization.yaml` to
 demonstrate the kustomize path; copy that whole `manifest/` directory into
-your manifest repo as `apps/hello-go/` and the Tekton task will pick the
-kustomize mode automatically.
+your manifest repo as `apps/hello-go/` and `update-manifest.sh` will pick
+the kustomize mode automatically.
 
 ## Common contract
 
@@ -36,12 +37,12 @@ Every example, identical from the platform's perspective:
 - `GET /`        → `200`, plain text body `Hello from <Lang>!`
 - `GET /healthz` → `200`, plain text body `ok`
 - Container `EXPOSE 8080`
-- Multi-stage Dockerfile so kaniko builds cleanly with no
-  Docker-in-Docker tricks
+- Multi-stage Dockerfile so `scripts/ci/build-image.sh` (buildctl) builds
+  cleanly with no Docker-in-Docker tricks
 - **`outpost.test.yaml`** at the repo root — declares the test command
-  Tekton runs at Gate A (between build and manifest update). The MVP
-  shipped command is a placeholder echo; the `tests/` directory holds
-  the *real* unit tests that Phase 2 will wire in. Repos without
+  `scripts/ci/run-tests.sh` runs at Gate A (between build and manifest
+  update). The MVP shipped command is a placeholder echo; the `tests/`
+  directory holds the *real* unit tests. Repos without
   `outpost.test.yaml` skip Gate A cleanly, so this is purely opt-in.
 
 ## Phase J — auto-rollback demo (go only, for now)
@@ -61,10 +62,10 @@ canary analysis abort the rollout automatically. See
 
 ## Smoke-test walkthrough
 
-> Prereqs: full-mode bootstrap is done (`bash verify.sh` is all PASS),
-> manifest repo has empty `apps/` and `argocd-apps/` dirs, webhook
-> hostname `hooks.<root>` is reachable. See `i18n/<lang>/docs/00-quickstart.md`
-> Phases A–F.
+> Prereqs: full-mode bootstrap is done (`bash verify.sh` is all PASS —
+> including the `ci.runner.*` checks), manifest repo has an empty `apps/`
+> dir, `GITHUB_RUNNER_URL`/`GITHUB_RUNNER_PAT` are set and the runner is
+> registered. See `i18n/<lang>/docs/00-quickstart.md` Phases A–F.
 
 Example for `go` — substitute any other language directory the same way.
 
@@ -73,55 +74,53 @@ Example for `go` — substitute any other language directory the same way.
 ```bash
 cd examples/hello-world/go
 
-# Create an empty private repo on Gitee/GitHub/GitLab named e.g. hello-go
+# Create an empty private repo on Gitee (primary) — and a github copy for
+# the CI trigger surface, e.g. hello-go on both.
 git init
 git checkout -b main
 git add .
 git commit -m "init: hello-go smoke test"
 git remote add origin https://gitee.com/<you>/hello-go.git
-git push -u origin main
+git remote set-url --add --push origin https://gitee.com/<you>/hello-go.git
+git remote set-url --add --push origin https://github.com/<you>/hello-go.git
+git push -u origin main   # pushes to both remotes
 ```
 
-### 2. Drop the manifests into your manifest repo
+### 2. Register it with Outpost and copy the CI workflow
+
+```bash
+cd ~/outpost   # this repo
+outpost onboard https://gitee.com/<you>/hello-go.git
+```
+
+This appends the repo to `OUTPOST_REPOS` (the reconciliation basis
+`verify.sh` watches) and offers to copy
+`templates/github/outpost-build.yml` into `hello-go`'s
+`.github/workflows/` — accept it, then commit + push that file from the
+`hello-go` repo.
+
+### 3. Drop the manifests into your manifest repo
 
 ```bash
 cd <your-manifest-repo>
-mkdir -p apps/hello-go argocd-apps
+mkdir -p apps/hello-go
 cp <outpost>/examples/hello-world/go/manifest/*.yaml apps/hello-go/
-cp <outpost>/examples/hello-world/go/argocd-application.yaml argocd-apps/hello-go.yaml
 ```
 
-Then edit the four files to fill in your real values:
+Then edit the files to fill in your real values:
 
 - `apps/hello-go/deployment.yaml` — change `registry.example.com` to `registry.<your-root-domain>`
 - `apps/hello-go/ingress.yaml`    — change `hello-go-apps.example.com` to `hello-go-apps.<your-root-domain>`
-- `argocd-apps/hello-go.yaml`     — change `repoURL` to your manifest repo URL
 
 ```bash
-git add apps/hello-go argocd-apps/hello-go.yaml
+git add apps/hello-go
 git commit -m "feat: onboard hello-go"
 git push
 ```
 
-ArgoCD picks up the new Application within ~30s. The Deployment will
-initially fail to pull the image (the registry has nothing yet) — fine,
-that resolves itself in the next step.
-
-### 3. Configure the webhook on the application repo
-
-**Preferred:** `bash scripts/outpost register-webhooks --dry-run` (preview),
-then `bash scripts/outpost register-webhooks` to register the hook on the
-`hello-go` repo directly via the provider API. See
-`i18n/en/docs/05-onboard-project.md` step 5 for prerequisites, including the
-`WEBHOOK_REPO_WHITELIST` caveat — until `hello-go` is in that list and
-`bash bootstrap.sh` has re-run, pushes are silently dropped by CEL even
-though the provider shows the webhook delivery as 200 OK.
-
-**Fallback: manual UI.** In Gitee / GitHub / GitLab, on the `hello-go` repo:
-
-- URL: `https://hooks.<your-root-domain>`
-- Secret: `GIT_WEBHOOK_SECRET` from `INFRA.md`
-- Trigger: Push event only
+The `manifest-sync` CronJob applies this within `MANIFEST_SYNC_INTERVAL`
+minutes. The Deployment will initially fail to pull the image (the
+registry has nothing yet) — fine, that resolves itself in the next step.
 
 ### 4. Push a commit; watch the magic
 
@@ -129,19 +128,23 @@ though the provider shows the webhook delivery as 200 OK.
 cd <hello-go-app-repo>
 echo "" >> README.md   # or any change
 git commit -am "trigger: pipeline smoke test"
-git push
+git push   # dual-push fires both remotes; github dispatches the workflow
 ```
 
-Within ~30s:
+Watch it build:
 
 ```bash
-kubectl get pipelinerun -n tekton-pipelines --sort-by=.metadata.creationTimestamp | tail -3
-# Watch SUCCEEDED transition Unknown → True
+# GitHub Actions UI on the hello-go repo, or:
+journalctl -u 'actions.runner.*' -f
 ```
 
 When that completes, the manifest repo gets a new commit
-(`chore(hello-go): bump image to <sha>`); ArgoCD picks it up within
-~30s and rolls the Deployment.
+(`chore(hello-go): bump image to <sha>`); `manifest-sync` picks it up
+within `MANIFEST_SYNC_INTERVAL` minutes and rolls the Deployment.
+
+```bash
+outpost logs sync
+```
 
 ### 5. Verify
 
@@ -154,17 +157,18 @@ curl https://hello-go-apps.<your-root-domain>/healthz
 ```
 
 If those two `curl`s succeed, **the whole pipeline works** —
-git → Tekton → registry → ArgoCD → ingress → app.
+git → GitHub Actions runner → registry → manifest-sync → ingress → app.
 
 ## Troubleshooting
 
 | Symptom | Most likely cause |
 |---------|------------------|
-| Pipeline never starts | Webhook misconfigured; check Gitee/GitHub/GitLab "Recent deliveries" |
-| `git-clone` task fails | `git-credentials` Secret has wrong PAT; `kubectl get secret -n tekton-pipelines git-credentials` |
-| `build-and-push` fails | Look at the Dockerfile path / kaniko logs (`kubectl logs -n tekton-pipelines -l tekton.dev/pipelineRun=<run> -c step-build-and-push`) |
-| `update-manifest` fails | manifest repo missing `apps/hello-<lang>/deployment.yaml`, or the PAT can't push |
-| ArgoCD stuck OutOfSync | `kubectl get app -n argocd hello-<lang> -o yaml` and read `.status.conditions` |
+| Workflow never starts | Repo missing `.github/workflows/outpost-build.yml`, or dual-push/mirror to github isn't actually landing commits there |
+| Runner never picks it up | `systemctl status 'actions.runner.*'` — not registered or not running; check `GITHUB_RUNNER_PAT` scope |
+| `build-image.sh` fails | Look at the workflow step log — buildkitd NodePort (127.0.0.1:30750) unreachable, or Dockerfile path wrong |
+| `update-manifest.sh` fails | manifest repo missing `apps/hello-<lang>/deployment.yaml`, or `GIT_TOKEN` can't push |
+| `manifest-sync` not converging | `outpost logs sync`; check `sync-heartbeat` age with `outpost status` |
+| Reconciliation FAIL for this repo | `bash verify.sh --json` — is it in `OUTPOST_REPOS`? Did the mirror/dual-push actually land on github? |
 | 502 from `https://hello-<lang>-apps.<root>` | Pod not ready yet, or readinessProbe path mismatch |
 
 Detailed diagnosis: `i18n/<lang>/docs/06-troubleshooting.md`.

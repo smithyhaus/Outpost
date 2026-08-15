@@ -38,6 +38,11 @@ if [[ "$OUTPOST_MODE" == "full" ]]; then
   prompt_required GIT_USER          "Git username (Gitee/GitHub/GitLab)"
   prompt_required GIT_TOKEN         "Git personal access token"
   prompt_required MANIFEST_REPO_URL "Manifest repo HTTPS URL (ends with .git)"
+  # OUTPOST_REPOS is required in full mode: it is the reconciliation basis
+  # (verify.sh's "ultimate judge") AND the git-provider preflight probe list.
+  # An empty registry would make the anti-silence layer blind — the exact
+  # self-deception v0.3 exists to kill.
+  prompt_required OUTPOST_REPOS     "App repos, comma list of <clone-url>[#branch]"
 else
   # Local mode: every value gets a usable default. Zero prompts.
   ROOT_DOMAIN="${ROOT_DOMAIN:-outpost.local}"
@@ -45,11 +50,29 @@ else
   GIT_USER="${GIT_USER:-}"
   GIT_TOKEN="${GIT_TOKEN:-}"
   MANIFEST_REPO_URL="${MANIFEST_REPO_URL:-}"
+  OUTPOST_REPOS="${OUTPOST_REPOS:-}"
 fi
 
+# OUTPOST_REPOS entry shape: "<url>[#<branch>]" where url is https://… or
+# git@…, branch optional (empty → OUTPOST_DEPLOY_BRANCH at consume time).
+# Validated in BOTH modes (a malformed entry in local mode would still bite
+# on the eventual full-mode upgrade). Fail loud now, not at reconcile time.
+IFS=',' read -ra _repos <<< "${OUTPOST_REPOS:-}"
+for _r in "${_repos[@]:-}"; do
+  _r="${_r// /}"
+  [[ -z "$_r" ]] && continue
+  if ! [[ "$_r" =~ ^(https://[^#[:space:]]+|git@[^#[:space:]]+)(#[A-Za-z0-9._/-]+)?$ ]]; then
+    err "OUTPOST_REPOS entry malformed: '$_r'"
+    err "Expected '<https-or-ssh-clone-url>[#branch]', e.g. https://gitee.com/org/svc.git#release"
+    exit 1
+  fi
+done
+unset _repos _r
+
 # Derive GIT_HOST from MANIFEST_REPO_URL (e.g. https://gitee.com/u/r.git → gitee.com).
-# Used by Tekton's git credentials Secret + .git-credentials file.
-# In local mode we leave it blank — Tekton phase doesn't run.
+# Used by verify.sh's reconciliation credential lookup and the manifest-sync /
+# update-manifest env-shaped credential fallback (GIT_USER/GIT_TOKEN@GIT_HOST).
+# In local mode we leave it blank — no CI/CD phases run.
 if [[ -n "${MANIFEST_REPO_URL:-}" ]]; then
   GIT_HOST="$(printf '%s\n' "$MANIFEST_REPO_URL" | awk -F/ '{print $3}')"
   if [[ -z "$GIT_HOST" ]]; then
@@ -64,32 +87,31 @@ export GIT_HOST
 
 # Defaults shared by both modes
 REGISTRY_PLUGIN="${REGISTRY_PLUGIN:-self-hosted}"
-# Derived (not persisted): buildkit push transport, rendered into
-# task-buildkit.yaml's REGISTRY_INSECURE default (08-argocd-tekton.sh).
-# The in-cluster self-hosted registry is plain HTTP; aliyun-acr is
-# HTTPS-only and refuses plain HTTP outright. Overridable for exotic setups.
+# Derived (not persisted): buildkit push transport, consumed by
+# scripts/ci/build-image.sh (buildctl push flags). The in-cluster self-hosted
+# registry is plain HTTP; aliyun-acr is HTTPS-only and refuses plain HTTP
+# outright. Overridable for exotic setups.
 case "$REGISTRY_PLUGIN" in
   aliyun-acr) REGISTRY_INSECURE="${REGISTRY_INSECURE:-false}" ;;
   *)          REGISTRY_INSECURE="${REGISTRY_INSECURE:-true}"  ;;
 esac
 GIT_PROVIDER_PLUGIN="${GIT_PROVIDER_PLUGIN:-gitee}"
-# Build engine: which Tekton Task the pipeline's build-and-push step references.
-#   buildkit — DEFAULT. The buildkitd daemon (core/k8s/08-buildkit) with a
-#              persistent RUN --mount=type=cache pnpm store: pilot-measured
-#              9m41s(kaniko) -> 2m15s warm on fst-procurement-service. App
-#              Dockerfiles opt in via `# syntax=docker/dockerfile:1` +
-#              `RUN --mount=type=cache`; a plain Dockerfile still builds (just
-#              layer-cache, no store win).
-#   kaniko   — one-word rollback (vendored, no daemon, root-in-pod, no cache
-#              win). NOTE: kaniko v1.5.1 CANNOT parse `RUN --mount` — do not
-#              roll back to kaniko while app Dockerfiles carry cache mounts.
-# Both Tasks are applied every bootstrap, so flipping this + re-render Phase 8
-# cuts over (or rolls back) with no infra change. envsubst'd into
-# pipeline-build.yaml's taskRef; render_template's strict check requires it set.
+# Build engine gate (v0.3):
+#   buildkit — DEFAULT and the only supported engine. The buildkitd daemon
+#              (core/k8s/08-buildkit) with a persistent RUN --mount=type=cache
+#              pnpm store; the CLIENT is scripts/ci/build-image.sh (buildctl
+#              over the 30750 NodePort, run by the GitHub Actions runner).
+#              Phase 8 blocks on the daemon being Ready when this is set.
+#   kaniko   — DEPRECATED. The Tekton kaniko Task was removed with the Tekton
+#              engine; this value now only skips the buildkitd readiness gate
+#              (nothing installs or runs kaniko anymore). Kept as a recognized
+#              value so old .env files don't hard-fail — but builds require
+#              buildkit.
 BUILD_ENGINE_TASK="${BUILD_ENGINE_TASK:-buildkit}"
 # Optional extra clone credentials for private app repos on hosts OTHER than
 # MANIFEST_REPO_URL's. Comma-separated `host|user|token`; empty = single-host.
-# Consumed by platform/lib/git-credentials.sh in Phase 8 (full mode only).
+# Consumed by the git-provider preflight probes (Phase 2) and verify.sh's
+# reconciliation ls-remote (per-host credential lookup).
 GIT_CREDENTIALS_EXTRA="${GIT_CREDENTIALS_EXTRA:-}"
 MANIFEST_REPO_BRANCH="${MANIFEST_REPO_BRANCH:-main}"
 
@@ -98,16 +120,48 @@ MANIFEST_REPO_BRANCH="${MANIFEST_REPO_BRANCH:-main}"
 # strict residue check requires every ${VAR} placeholder in a template to
 # be set in the environment, so these defaults guarantee no silent failure
 # even when the operator left .env at its commented defaults.
-ARGOCD_HOST="${ARGOCD_HOST:-argocd}"
-HOOKS_HOST="${HOOKS_HOST:-hooks}"
+# (v0.3 removed ARGOCD_HOST / HOOKS_HOST — no ArgoCD UI, no inbound webhook
+# receiver. Only the registry prefix remains a bootstrap-time input.)
 # REGISTRY_SUBDOMAIN feeds registry-config.sh's REGISTRY_HOST computation for
 # the self-hosted plugin only. aliyun-acr sets REGISTRY_HOST directly to the
 # ACR endpoint and ignores this var.
 REGISTRY_SUBDOMAIN="${REGISTRY_SUBDOMAIN:-registry}"
-# Branch of an APP repo whose pushes trigger the CI/CD pipeline. The EventListener
-# CEL ref filter pins to refs/heads/${OUTPOST_DEPLOY_BRANCH}; pushes to any other
-# branch are ignored. Distinct from MANIFEST_REPO_BRANCH (the manifests repo).
+# Branch of an APP repo whose pushes trigger the CI workflow. The workflow
+# template's `on: push: branches:` pins this; an OUTPOST_REPOS entry without
+# an explicit #branch also reconciles against it. Distinct from
+# MANIFEST_REPO_BRANCH (the manifests repo the sync job watches).
 OUTPOST_DEPLOY_BRANCH="${OUTPOST_DEPLOY_BRANCH:-main}"
+
+# ---- GitHub Actions runner + manifest-sync + reconciliation (v0.3) ----------
+GITHUB_RUNNER_URL="${GITHUB_RUNNER_URL:-}"
+GITHUB_RUNNER_PAT="${GITHUB_RUNNER_PAT:-}"
+GITHUB_RUNNER_LABELS="${GITHUB_RUNNER_LABELS:-outpost}"
+GITHUB_RUNNER_NAME="${GITHUB_RUNNER_NAME:-}"   # empty → outpost-<hostname> at install
+# When a PAT is present the URL must be a github.com org or single-repo URL —
+# anything else would fail deep inside Phase 8's token mint with an opaque
+# API error. PAT empty = runner install skipped (loud WARN in Phase 8).
+if [[ -n "$GITHUB_RUNNER_PAT" ]]; then
+  if ! [[ "$GITHUB_RUNNER_URL" =~ ^https://github\.com/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)?/?$ ]]; then
+    err "GITHUB_RUNNER_URL must be https://github.com/<org> or https://github.com/<owner>/<repo>"
+    err "(got '${GITHUB_RUNNER_URL}') — required because GITHUB_RUNNER_PAT is set"
+    exit 1
+  fi
+fi
+# Minutes between manifest-sync CronJob runs. Must be a cron-safe integer
+# (schedule renders as */N in the minute field).
+MANIFEST_SYNC_INTERVAL="${MANIFEST_SYNC_INTERVAL:-2}"
+if ! [[ "$MANIFEST_SYNC_INTERVAL" =~ ^[0-9]+$ ]] \
+   || [[ "$MANIFEST_SYNC_INTERVAL" -lt 1 || "$MANIFEST_SYNC_INTERVAL" -gt 59 ]]; then
+  err "MANIFEST_SYNC_INTERVAL must be an integer 1-59 (minutes), got '${MANIFEST_SYNC_INTERVAL}'"
+  exit 1
+fi
+# Seconds a live-HEAD/deployed-tag mismatch may persist before verify.sh's
+# reconciliation reports FAIL (naming the repo).
+OUTPOST_STALENESS_THRESHOLD="${OUTPOST_STALENESS_THRESHOLD:-1800}"
+if ! [[ "$OUTPOST_STALENESS_THRESHOLD" =~ ^[0-9]+$ ]]; then
+  err "OUTPOST_STALENESS_THRESHOLD must be an integer (seconds), got '${OUTPOST_STALENESS_THRESHOLD}'"
+  exit 1
+fi
 POSTGRES_USER="${POSTGRES_USER:-postgres}"
 POSTGRES_DB="${POSTGRES_DB:-postgres}"
 RABBITMQ_USER="${RABBITMQ_USER:-admin}"
@@ -120,8 +174,9 @@ TEST_RUNNER="${TEST_RUNNER:-testkube}"
 # out from CN and wasted ~5min per bootstrap. Set oss/cloud when Phase 2
 # actually adopts Testkube TestWorkflows.
 TESTKUBE_MODE="${TESTKUBE_MODE:-skip}"
-ROLLOUT_PLUGIN="${ROLLOUT_PLUGIN:-argo-rollouts}"
-ROLLOUTS_DASHBOARD_HOST="${ROLLOUTS_DASHBOARD_HOST:-rollouts.${ROOT_DOMAIN}}"
+# Rollout plugin: default `none` in v0.3 (canary is opt-in, controller-only —
+# apps adopt the Rollout CRD themselves; manifest-sync is Rollout-kind aware).
+ROLLOUT_PLUGIN="${ROLLOUT_PLUGIN:-none}"
 NOTIFICATION_PROVIDERS="${NOTIFICATION_PROVIDERS:-}"
 
 # Apps namespace ResourceQuota + LimitRange — dynamic per host capacity.
@@ -154,34 +209,18 @@ OUTPOST_APPS_DEFAULT_LIMIT_MEMORY="${OUTPOST_APPS_DEFAULT_LIMIT_MEMORY:-512Mi}"
 OUTPOST_APPS_MAX_CPU="${OUTPOST_APPS_MAX_CPU:-4}"
 OUTPOST_APPS_MAX_MEMORY="${OUTPOST_APPS_MAX_MEMORY:-8Gi}"
 
-# Tekton PipelineRun auto-pruner (CronJob in tekton-pipelines ns).
-# Without these defaults Tekton never GCs finished PipelineRuns; their
-# kaniko build pods accumulate ~1 GB ephemeral-storage each and after
-# ~50 builds the node hits DiskPressure → mid-build Evicted. See
-# core/k8s/05-tekton/pruner.yaml for full rationale + RBAC scope.
-OUTPOST_TEKTON_RETENTION_HOURS="${OUTPOST_TEKTON_RETENTION_HOURS:-24}"
-# Schedule: every 15 minutes by default. Active CI can stack 4–5 build pods
-# (each ~0.5–2 GB ephemeral) within 30 min on a single-node k3d host;
-# hourly sweep was too slow to keep the node out of DiskPressure.
-OUTPOST_TEKTON_PRUNE_SCHEDULE="${OUTPOST_TEKTON_PRUNE_SCHEDULE:-*/15 * * * *}"
-# Hard cap on PR count regardless of age — even fresh PRs get pruned if the
-# count exceeds this. Belt for the retention-by-age suspenders: a rapid CI
-# burst can produce 30 PRs in an hour, all within the retention window,
-# all holding ephemeral. Keep-last-N keeps the ceiling bounded.
-OUTPOST_TEKTON_KEEP_LAST_N="${OUTPOST_TEKTON_KEEP_LAST_N:-20}"
-# Direct ref, NOT daocloud-prefixed: daocloud allowlists docker.io per-org
-# (bitnami/kubectl 403'd; alpine/* unverified there) — the direct ref has
-# weeks of successful pulls on this cluster.
-OUTPOST_TEKTON_PRUNER_IMAGE="${OUTPOST_TEKTON_PRUNER_IMAGE:-alpine/k8s:1.31.0}"
-
 # Registry GC — periodic tag prune + blob garbage-collect for self-hosted
 # registry plugin only. The docker-registry has no built-in GC; without
 # this CronJob, every CI push leaks blobs forever and the 50Gi PVC fills.
-# Schedule defaults to every 6h (GC is heavier than Tekton's pod pruner).
-# Keep 5 most-recent tags per repo by default — adequate for active CI +
-# easy rollback window. Override via .env for unusual workloads.
+# Schedule defaults to every 6h.
+# Tag retention = rollback depth (`outpost rollback` can only reach kept
+# tags). v0.3 default bumped 5 → 10: OUTPOST_REGISTRY_KEEP_TAGS is the
+# documented .env knob; OUTPOST_REGISTRY_KEEP_TAGS_PER_REPO is the legacy
+# name gc.yaml + registry-gc.sh still consume, kept as an alias (explicit
+# legacy value wins for old .env files, then the new knob, then 10).
 OUTPOST_REGISTRY_GC_SCHEDULE="${OUTPOST_REGISTRY_GC_SCHEDULE:-0 */6 * * *}"
-OUTPOST_REGISTRY_KEEP_TAGS_PER_REPO="${OUTPOST_REGISTRY_KEEP_TAGS_PER_REPO:-5}"
+OUTPOST_REGISTRY_KEEP_TAGS="${OUTPOST_REGISTRY_KEEP_TAGS:-10}"
+OUTPOST_REGISTRY_KEEP_TAGS_PER_REPO="${OUTPOST_REGISTRY_KEEP_TAGS_PER_REPO:-${OUTPOST_REGISTRY_KEEP_TAGS}}"
 DINGTALK_WEBHOOK_URL="${DINGTALK_WEBHOOK_URL:-}"
 DINGTALK_SIGN_SECRET="${DINGTALK_SIGN_SECRET:-}"
 FEISHU_WEBHOOK_URL="${FEISHU_WEBHOOK_URL:-}"
@@ -191,20 +230,12 @@ GENERIC_WEBHOOK_URL="${GENERIC_WEBHOOK_URL:-}"
 GENERIC_WEBHOOK_BEARER="${GENERIC_WEBHOOK_BEARER:-}"
 TESTKUBE_CLOUD_API_KEY="${TESTKUBE_CLOUD_API_KEY:-}"
 
-# Auto-generate any blank passwords (both modes)
+# Auto-generate any blank passwords (both modes).
+# v0.3 removed GIT_WEBHOOK_SECRET / ARGOCD_WEBHOOK_SECRET (no inbound webhook
+# path exists) and OUTPOST_DASHBOARD_USER/PASSWORD (no dashboards to seal).
 [[ -z "${POSTGRES_PASSWORD:-}" ]]      && POSTGRES_PASSWORD=$(gen_password)
 [[ -z "${REDIS_PASSWORD:-}" ]]         && REDIS_PASSWORD=$(gen_password)
 [[ -z "${RABBITMQ_PASSWORD:-}" ]]      && RABBITMQ_PASSWORD=$(gen_password)
-[[ -z "${GIT_WEBHOOK_SECRET:-}" ]]     && GIT_WEBHOOK_SECRET=$(gen_password)
-# Independent from GIT_WEBHOOK_SECRET (which Tekton uses for app-repo pushes).
-# Manifest-repo webhook hits argocd-server /api/webhook — different secret
-# = different blast radius if either leaks.
-[[ -z "${ARGOCD_WEBHOOK_SECRET:-}" ]]  && ARGOCD_WEBHOOK_SECRET=$(gen_password)
-# Dashboard BasicAuth — protects Tekton Dashboard + Argo Rollouts UI.
-# Both ship without built-in auth and grant write access (cancel/delete
-# PipelineRuns, abort/promote rollouts). Auto-generated in full mode.
-[[ -z "${OUTPOST_DASHBOARD_USER:-}" ]]     && OUTPOST_DASHBOARD_USER="outpost"
-[[ -z "${OUTPOST_DASHBOARD_PASSWORD:-}" ]] && OUTPOST_DASHBOARD_PASSWORD=$(gen_password)
 
 # Plugin selection only matters in full mode (existence check is cheap, do it first)
 if [[ "$OUTPOST_MODE" == "full" ]]; then
@@ -214,9 +245,10 @@ if [[ "$OUTPOST_MODE" == "full" ]]; then
     exit 1
   fi
   # GIT_PROVIDER_PLUGIN accepts a comma-separated list (mirror of
-  # NOTIFICATION_PROVIDERS). Every selected provider's trigger is spliced into
-  # the one EventListener, so gitee + github + gitlab webhooks can all trigger
-  # builds on the same el-build-listener. Validate each entry exists.
+  # NOTIFICATION_PROVIDERS). Each selected provider's preflight runs an
+  # authenticated ls-remote against its OUTPOST_REPOS hosts (credentials +
+  # host-matching contract — the webhook-receiver role is gone in v0.3).
+  # Validate each entry exists.
   IFS=',' read -ra _gp <<< "${GIT_PROVIDER_PLUGIN}"
   _found=0
   for _p in "${_gp[@]}"; do
@@ -229,9 +261,8 @@ if [[ "$OUTPOST_MODE" == "full" ]]; then
     fi
     _found=$((_found + 1))
   done
-  # Unlike NOTIFICATION_PROVIDERS, git-provider is NOT optional — an empty or
-  # all-blank list (GIT_PROVIDER_PLUGIN= or ,,) would pass here and only fail
-  # late in Phase 8's assembler with an opaque usage error. Fail loud now.
+  # git-provider is NOT optional — an empty or all-blank list (,,) would only
+  # fail late in a preflight with an opaque error. Fail loud now.
   if [[ "$_found" -eq 0 ]]; then
     err "GIT_PROVIDER_PLUGIN must list at least one provider (got '${GIT_PROVIDER_PLUGIN}')"
     err "Available: $(ls plugins/git-provider)"
@@ -239,20 +270,22 @@ if [[ "$OUTPOST_MODE" == "full" ]]; then
   fi
   unset _gp _p _found
 
-  # Resolve registry-plugin-aware Pipeline params + webhook repo whitelist.
-  # All actual logic lives in platform/lib/{registry-config,cel-helpers}.sh
-  # so it has bats coverage. bootstrap.sh just orchestrates.
+  # Resolve registry-plugin-aware push/pull hosts (REGISTRY_HOST /
+  # REGISTRY_PUSH_HOST). Logic lives in platform/lib/registry-config.sh so it
+  # has bats coverage. (v0.3: the CEL webhook whitelist builder is gone with
+  # the EventListener.)
   resolve_registry_config || exit 1
-  build_cel_whitelist
 
   if [[ ! -d "plugins/test-runner/${TEST_RUNNER}" ]]; then
     err "Unknown TEST_RUNNER: ${TEST_RUNNER}"
     err "Available: $(ls plugins/test-runner)"
     exit 1
   fi
-  if [[ ! -d "plugins/rollout/${ROLLOUT_PLUGIN}" ]]; then
+  # ROLLOUT_PLUGIN=none is a first-class value (v0.3 default) — only validate
+  # a plugin dir when one is actually selected.
+  if [[ "${ROLLOUT_PLUGIN}" != "none" && ! -d "plugins/rollout/${ROLLOUT_PLUGIN}" ]]; then
     err "Unknown ROLLOUT_PLUGIN: ${ROLLOUT_PLUGIN}"
-    err "Available: $(ls plugins/rollout)"
+    err "Available: none $(ls plugins/rollout)"
     exit 1
   fi
   # Validate each enabled notification plugin exists.
@@ -279,7 +312,7 @@ fi
 
 # Persist .env (canonical form). MUST happen before plugin preflight runs:
 # the preflight subshell does `source .env`, so any auto-generated value
-# (e.g. GIT_WEBHOOK_SECRET) needs to be on disk first or the subshell sees
+# (e.g. POSTGRES_PASSWORD) needs to be on disk first or the subshell sees
 # the stale empty value.
 {
   echo "OUTPOST_MODE=${OUTPOST_MODE}"
@@ -299,14 +332,20 @@ fi
   # Contains `|` and `,` field/entry separators (and a PAT) — env_kv printf %q
   # so it round-trips through `source .env` intact.
   env_kv GIT_CREDENTIALS_EXTRA "${GIT_CREDENTIALS_EXTRA:-}"
-  echo "GIT_WEBHOOK_SECRET=${GIT_WEBHOOK_SECRET}"
-  echo "ARGOCD_WEBHOOK_SECRET=${ARGOCD_WEBHOOK_SECRET}"
-  echo "OUTPOST_DASHBOARD_USER=${OUTPOST_DASHBOARD_USER}"
-  echo "OUTPOST_DASHBOARD_PASSWORD=${OUTPOST_DASHBOARD_PASSWORD}"
   echo "MANIFEST_REPO_URL=${MANIFEST_REPO_URL}"
   echo "MANIFEST_REPO_BRANCH=${MANIFEST_REPO_BRANCH}"
   echo "OUTPOST_DEPLOY_BRANCH=${OUTPOST_DEPLOY_BRANCH}"
   echo "GIT_HOST=${GIT_HOST}"
+  # v0.3 CI/CD engine — app-repo registry + runner + sync + reconciliation.
+  # OUTPOST_REPOS carries `#` and `,`; the PAT is a secret with arbitrary
+  # chars — env_kv both so `source .env` round-trips safely.
+  env_kv OUTPOST_REPOS "${OUTPOST_REPOS:-}"
+  echo "GITHUB_RUNNER_URL=${GITHUB_RUNNER_URL}"
+  env_kv GITHUB_RUNNER_PAT "${GITHUB_RUNNER_PAT:-}"
+  echo "GITHUB_RUNNER_LABELS=${GITHUB_RUNNER_LABELS}"
+  echo "GITHUB_RUNNER_NAME=${GITHUB_RUNNER_NAME}"
+  echo "MANIFEST_SYNC_INTERVAL=${MANIFEST_SYNC_INTERVAL}"
+  echo "OUTPOST_STALENESS_THRESHOLD=${OUTPOST_STALENESS_THRESHOLD}"
   # Registry-plugin-derived Pipeline defaults (re-derived on each bootstrap,
   # but persisted so status.sh / verify.sh can show what's active).
   echo "REGISTRY_HOST=${REGISTRY_HOST:-}"
@@ -314,15 +353,13 @@ fi
   # Built-in service subdomain prefix overrides (joined with .${ROOT_DOMAIN} by
   # the relevant template/computation). Persisted so subsequent rebuilds, the
   # registry plugin's REGISTRY_HOST computation, and verify.sh all agree.
-  echo "ARGOCD_HOST=${ARGOCD_HOST}"
-  echo "HOOKS_HOST=${HOOKS_HOST}"
   echo "REGISTRY_SUBDOMAIN=${REGISTRY_SUBDOMAIN}"
   # Values that may contain shell metacharacters (spaces, &, =, [, ", etc).
   # env_kv runs printf '%q' so round-trip through `source` is safe. See
   # platform/lib/portable.sh for the why + concrete failure modes.
+  # (KANIKO_EXTRA_ARGS name kept: read-build-config.sh's merged extra-args
+  # contract still consumes it, even though kaniko itself is retired.)
   env_kv KANIKO_EXTRA_ARGS       "${KANIKO_EXTRA_ARGS:-}"
-  env_kv WEBHOOK_REPO_WHITELIST  "${WEBHOOK_REPO_WHITELIST:-}"
-  env_kv CEL_WHITELIST_LIST      "${CEL_WHITELIST_LIST:-[]}"
   # ACR specifics carried through if set
   [[ -n "${ALIYUN_ACR_REGISTRY:-}" ]]  && echo "ALIYUN_ACR_REGISTRY=${ALIYUN_ACR_REGISTRY}"
   [[ -n "${ALIYUN_ACR_NAMESPACE:-}" ]] && echo "ALIYUN_ACR_NAMESPACE=${ALIYUN_ACR_NAMESPACE}"
@@ -333,7 +370,6 @@ fi
   echo "TESTKUBE_MODE=${TESTKUBE_MODE}"
   [[ -n "${TESTKUBE_CLOUD_API_KEY:-}" ]] && echo "TESTKUBE_CLOUD_API_KEY=${TESTKUBE_CLOUD_API_KEY}"
   echo "ROLLOUT_PLUGIN=${ROLLOUT_PLUGIN}"
-  echo "ROLLOUTS_DASHBOARD_HOST=${ROLLOUTS_DASHBOARD_HOST}"
   echo "NOTIFICATION_PROVIDERS=${NOTIFICATION_PROVIDERS}"
   # Apps ns ResourceQuota — dynamic-per-host, but persisted so subsequent
   # bootstraps + status.sh + verify.sh agree on what's installed.
@@ -348,11 +384,8 @@ fi
   echo "OUTPOST_APPS_DEFAULT_LIMIT_MEMORY=${OUTPOST_APPS_DEFAULT_LIMIT_MEMORY}"
   echo "OUTPOST_APPS_MAX_CPU=${OUTPOST_APPS_MAX_CPU}"
   echo "OUTPOST_APPS_MAX_MEMORY=${OUTPOST_APPS_MAX_MEMORY}"
-  echo "OUTPOST_TEKTON_RETENTION_HOURS=${OUTPOST_TEKTON_RETENTION_HOURS}"
-  echo "OUTPOST_TEKTON_KEEP_LAST_N=${OUTPOST_TEKTON_KEEP_LAST_N}"
-  env_kv OUTPOST_TEKTON_PRUNE_SCHEDULE "${OUTPOST_TEKTON_PRUNE_SCHEDULE}"
-  echo "OUTPOST_TEKTON_PRUNER_IMAGE=${OUTPOST_TEKTON_PRUNER_IMAGE}"
   env_kv OUTPOST_REGISTRY_GC_SCHEDULE "${OUTPOST_REGISTRY_GC_SCHEDULE}"
+  echo "OUTPOST_REGISTRY_KEEP_TAGS=${OUTPOST_REGISTRY_KEEP_TAGS}"
   echo "OUTPOST_REGISTRY_KEEP_TAGS_PER_REPO=${OUTPOST_REGISTRY_KEEP_TAGS_PER_REPO}"
   # Webhook URLs commonly contain `&` (e.g. ?access_token=x&sign=y) — unquoted
   # those would re-source as two commands. env_kv guards every URL field.
@@ -383,7 +416,9 @@ if [[ "$OUTPOST_MODE" == "full" ]]; then
   done
   unset _gp _p
   ( set -a; source .env; set +a; bash "plugins/test-runner/${TEST_RUNNER}/preflight.sh" )
-  ( set -a; source .env; set +a; bash "plugins/rollout/${ROLLOUT_PLUGIN}/preflight.sh" )
+  if [[ "${ROLLOUT_PLUGIN}" != "none" ]]; then
+    ( set -a; source .env; set +a; bash "plugins/rollout/${ROLLOUT_PLUGIN}/preflight.sh" )
+  fi
   if [[ -n "${NOTIFICATION_PROVIDERS}" ]]; then
     IFS=',' read -ra _np <<< "${NOTIFICATION_PROVIDERS}"
     for _p in "${_np[@]}"; do

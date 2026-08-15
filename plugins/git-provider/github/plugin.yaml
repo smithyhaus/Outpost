@@ -1,15 +1,27 @@
 kind: git-provider
 name: github
 description: |
-  GitHub webhook -> Tekton EventListener trigger.
-  Validates X-Hub-Signature-256 (HMAC-SHA256) using GIT_WEBHOOK_SECRET.
+  GitHub — the CI trigger surface (self-hosted Actions runner). v0.3 retires
+  the inbound webhook path entirely; GitHub Actions polls its queue over an
+  outbound long-poll connection instead, so there is no inbound endpoint or
+  shared signing secret to manage. This plugin is a credential + host-
+  matching contract: preflight.sh runs a real authenticated `git ls-remote`
+  against every OUTPOST_REPOS entry whose host is github.com, AND (when
+  GITHUB_RUNNER_URL/GITHUB_RUNNER_PAT are set) validates the runner PAT can
+  authenticate against the GitHub API, masking the token in all output.
 required_env:
   - GIT_USER
   - GIT_TOKEN
-  - GIT_WEBHOOK_SECRET
+optional_env:
+  - GITHUB_RUNNER_URL   # org URL (recommended) or single-repo URL
+  - GITHUB_RUNNER_PAT   # mints runner registration tokens; empty = skip w/ WARN
 provides:
-  - webhook-url: https://hooks.${ROOT_DOMAIN}
-  - signature-mode: HMAC-SHA256 (X-Hub-Signature-256)
+  - host: github.com
+  - preflight: authenticated `git ls-remote` probe + GitHub API PAT check
+  - role: CI trigger surface (self-hosted Actions runner, org-level recommended)
 caveats:
-  - Uses Tekton's GitHub interceptor (built-in) for signature verification.
-  - Only push events are routed; PR events are out of scope (TODO v0.2).
+  - No cluster objects are applied by this plugin (v0.3) — it is a host +
+    credential contract only, consumed by preflight.sh and verify.sh.
+  - GITHUB_RUNNER_URL/GITHUB_RUNNER_PAT empty is a SUPPORTED state (CI/e2e
+    mode) — preflight WARNs loudly instead of failing.
+  - Only public + private GitHub.com. GitHub Enterprise Server is untested.

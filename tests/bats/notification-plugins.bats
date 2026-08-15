@@ -5,8 +5,13 @@
 #   - Each plugin satisfies the plugin-contract (already covered by
 #     plugin-contract.bats; here we verify shape specific to notification kind)
 #   - manifest.yaml renders cleanly with sample env (no unresolved ${VAR})
-#   - argocd-cm-fragment.yaml + argocd-secret-fragment.yaml exist
 #   - preflight behavior matches required_env
+#
+# v0.3: ArgoCD is gone, so argocd-cm-fragment.yaml / argocd-secret-fragment.yaml
+# are RETIRED (see tests/bats/plugin-contract-per-kind.bats for the repo-wide
+# assertion that they never reappear). manifest.yaml's Secret/ConfigMap now
+# target ns outpost-ci (the manifest-sync CronJob), consumed there via
+# volume mount and by host callers via scripts/notify-fanout.sh --env-file.
 # =============================================================================
 
 setup() {
@@ -27,11 +32,24 @@ teardown() {
   for p in dingtalk feishu wecom webhook-generic; do
     [ -f "${PLUGIN_DIR}/${p}/plugin.yaml" ] || fail "${p}: plugin.yaml missing"
     [ -f "${PLUGIN_DIR}/${p}/manifest.yaml" ] || fail "${p}: manifest.yaml missing"
-    [ -f "${PLUGIN_DIR}/${p}/argocd-cm-fragment.yaml" ] || fail "${p}: argocd-cm-fragment.yaml missing"
-    [ -f "${PLUGIN_DIR}/${p}/argocd-secret-fragment.yaml" ] || fail "${p}: argocd-secret-fragment.yaml missing"
     [ -x "${PLUGIN_DIR}/${p}/preflight.sh" ] || fail "${p}: preflight.sh missing/not executable"
     [ -f "${PLUGIN_DIR}/${p}/README.md" ] || fail "${p}: README.md missing"
     grep -q '^kind: notification' "${PLUGIN_DIR}/${p}/plugin.yaml" || fail "${p}: plugin.yaml kind is not 'notification'"
+  done
+}
+
+@test "no notification plugin ships the retired argocd-*-fragment.yaml files" {
+  for p in dingtalk feishu wecom webhook-generic; do
+    [ ! -f "${PLUGIN_DIR}/${p}/argocd-cm-fragment.yaml" ] || fail "${p}: argocd-cm-fragment.yaml should be retired in v0.3"
+    [ ! -f "${PLUGIN_DIR}/${p}/argocd-secret-fragment.yaml" ] || fail "${p}: argocd-secret-fragment.yaml should be retired in v0.3"
+  done
+}
+
+@test "every notification manifest targets the outpost-ci namespace (tekton-pipelines is gone in v0.3)" {
+  for p in dingtalk feishu wecom webhook-generic; do
+    f="${PLUGIN_DIR}/${p}/manifest.yaml"
+    grep -q 'namespace: outpost-ci' "$f" || fail "${p}: manifest.yaml should target ns outpost-ci"
+    ! grep -qE '^\s*namespace:\s*tekton-pipelines' "$f" || fail "${p}: manifest.yaml still references tekton-pipelines"
   done
 }
 
@@ -68,7 +86,7 @@ teardown() {
 @test "all notification manifests render cleanly with sample env (targeted subst)" {
   # Notification body.tmpl mixes install-time vars (e.g. ${DINGTALK_WEBHOOK_URL})
   # with runtime ${NOTIFY_*} placeholders. We use render_template_only so the
-  # runtime placeholders survive into the ConfigMap for the notify-task to
+  # runtime placeholders survive into the ConfigMap for notify-fanout.sh to
   # render at fanout time.
   export DINGTALK_WEBHOOK_URL="https://example.dingtalk/test"
   export DINGTALK_SIGN_SECRET="SECsmoke"
@@ -94,31 +112,5 @@ teardown() {
       wecom)           grep -qF "https://example.wecom/test"    "$out" || fail "wecom: webhook URL not substituted" ;;
       webhook-generic) grep -qF "https://example.generic/test"  "$out" || fail "generic: webhook URL not substituted" ;;
     esac
-  done
-}
-
-@test "argocd-cm-fragment is properly indented (2 spaces)" {
-  # Each fragment must contribute lines that fit under `data:` (2-space indent).
-  for p in dingtalk feishu wecom webhook-generic; do
-    f="${PLUGIN_DIR}/${p}/argocd-cm-fragment.yaml"
-    # Ignore comment lines and blank lines.
-    while IFS= read -r line; do
-      # Skip comments and blanks
-      case "$line" in '#'*|'') continue ;; esac
-      # First non-comment line must start with exactly 2 spaces.
-      [[ "$line" =~ ^"  " ]] || fail "${p}: argocd-cm-fragment.yaml not 2-space indented: $line"
-      break
-    done < "$f"
-  done
-}
-
-@test "argocd-secret-fragment is properly indented" {
-  for p in dingtalk feishu wecom webhook-generic; do
-    f="${PLUGIN_DIR}/${p}/argocd-secret-fragment.yaml"
-    while IFS= read -r line; do
-      case "$line" in '#'*|'') continue ;; esac
-      [[ "$line" =~ ^"  " ]] || fail "${p}: argocd-secret-fragment.yaml not 2-space indented"
-      break
-    done < "$f"
   done
 }

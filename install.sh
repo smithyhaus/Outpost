@@ -37,7 +37,8 @@
 #   APP_REPO                optional git URL of an app to onboard after bootstrap
 #
 #   ROOT_DOMAIN, CF_TUNNEL_TOKEN, GIT_USER, GIT_TOKEN, MANIFEST_REPO_URL,
-#   GIT_WEBHOOK_SECRET, REGISTRY_PLUGIN, GIT_PROVIDER_PLUGIN, ...
+#   OUTPOST_REPOS, GITHUB_RUNNER_URL, GITHUB_RUNNER_PAT, REGISTRY_PLUGIN,
+#   GIT_PROVIDER_PLUGIN, ...
 #       — any standard outpost var is passed through verbatim into .env.
 # =============================================================================
 set -euo pipefail
@@ -167,8 +168,29 @@ fetch_repo() {
     die "$OUTPOST_DIR exists but is not a git checkout — remove it or set OUTPOST_DIR= to a different path"
   else
     log "cloning $OUTPOST_GIT_URL → $OUTPOST_DIR (ref: $OUTPOST_GIT_REF)"
-    git clone --branch "$OUTPOST_GIT_REF" --depth 1 --quiet "$OUTPOST_GIT_URL" "$OUTPOST_DIR" \
-      || die "git clone failed: $OUTPOST_GIT_URL @ $OUTPOST_GIT_REF"
+    # github.com is intermittently throttled/blocked from CN. Try the direct
+    # URL first (fast path when egress is fine), then the ghfast.top release
+    # accelerator (same fallback precedent as the kubeseal download in
+    # bootstrap.d/06-sealed-secrets.sh), then an optional gitee mirror
+    # (OUTPOST_GIT_MIRROR_URL — set it to your gitee mirror of this repo).
+    _clone_ok=0
+    _candidates="$OUTPOST_GIT_URL"
+    case "$OUTPOST_GIT_URL" in
+      https://github.com/*) _candidates="$_candidates https://ghfast.top/$OUTPOST_GIT_URL" ;;
+    esac
+    [[ -n "${OUTPOST_GIT_MIRROR_URL:-}" ]] && _candidates="$_candidates $OUTPOST_GIT_MIRROR_URL"
+    for _u in $_candidates; do
+      if git clone --branch "$OUTPOST_GIT_REF" --depth 1 --quiet "$_u" "$OUTPOST_DIR"; then
+        _clone_ok=1
+        [[ "$_u" != "$OUTPOST_GIT_URL" ]] && warn "cloned via fallback mirror: $_u"
+        break
+      fi
+      warn "clone failed from $_u — trying next mirror"
+      rm -rf "$OUTPOST_DIR"
+    done
+    [[ "$_clone_ok" -eq 1 ]] || die "git clone failed from all mirrors: $_candidates @ $OUTPOST_GIT_REF
+  (set OUTPOST_GIT_MIRROR_URL=https://gitee.com/<you>/<mirror>.git to add a domestic mirror)"
+    unset _clone_ok _candidates _u
     ok "cloned"
   fi
 }
@@ -192,10 +214,13 @@ render_env() {
     [[ -z "${GIT_USER:-}" ]]           && missing+=(GIT_USER)
     [[ -z "${GIT_TOKEN:-}" ]]          && missing+=(GIT_TOKEN)
     [[ -z "${MANIFEST_REPO_URL:-}" ]]  && missing+=(MANIFEST_REPO_URL)
+    # v0.3: the app-repo registry is a full-mode required — bootstrap prompts
+    # for it interactively, and `curl | bash` has no stdin to prompt on.
+    [[ -z "${OUTPOST_REPOS:-}" ]]      && missing+=(OUTPOST_REPOS)
     if (( ${#missing[@]} > 0 )); then
       die "full mode requires: ${missing[*]}
   Pass them as env vars, e.g.:
-    curl -fsSL ... | ROOT_DOMAIN=... CF_TUNNEL_TOKEN=... GIT_USER=... GIT_TOKEN=... MANIFEST_REPO_URL=... bash"
+    curl -fsSL ... | ROOT_DOMAIN=... CF_TUNNEL_TOKEN=... GIT_USER=... GIT_TOKEN=... MANIFEST_REPO_URL=... OUTPOST_REPOS=... bash"
     fi
   fi
 

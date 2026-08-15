@@ -73,7 +73,12 @@ _roundtrip() {
 }
 
 @test "env_kv: JSON array string with embedded \" round-trips" {
-  v="$(_roundtrip CEL_WHITELIST_LIST '["org/repo-a","org/repo-b"]')"
+  # SOME_JSON_ARRAY_VAR is a stand-in key name for this unit test only — it
+  # does not correspond to any real .env var (the CEL-whitelist JSON array
+  # this test originally modeled was retired with Tekton's EventListener in
+  # v0.3.0; the risky-value class — JSON with embedded quotes — still needs
+  # coverage regardless of which production var carries it next).
+  v="$(_roundtrip SOME_JSON_ARRAY_VAR '["org/repo-a","org/repo-b"]')"
   [ "$v" = '["org/repo-a","org/repo-b"]' ]
 }
 
@@ -121,6 +126,10 @@ _roundtrip() {
   done
 }
 
-@test "phase 2 routes CEL_WHITELIST_LIST through env_kv (JSON array)" {
-  grep -qE 'env_kv CEL_WHITELIST_LIST' "${INFRA_ROOT}/bootstrap.d/02-config.sh"
-}
+
+# NOTE: the CEL_WHITELIST_LIST regression guard that used to live here was
+# removed — CEL_WHITELIST_LIST and the whole EventListener/CEL-whitelist
+# concept were retired with Tekton in v0.3.0 (see
+# platform/lib/cel-helpers.sh, deleted). No replacement var currently
+# carries JSON through env_kv in bootstrap.d/02-config.sh; the risky-value
+# class itself is still covered by the generic round-trip test above.

@@ -5,7 +5,9 @@
 # Testkube agent itself installed by bootstrap.sh via `helm install` (helm
 # is auto-downloaded if absent — matching the kubeseal pattern); the default
 # TESTKUBE_MODE=skip installs no agent at all. This file:
-#   - Records which test-runner is active (used by the run-tests Task).
+#   - Records which test-runner is active (v0.3: read by
+#     scripts/ci/run-tests.sh, invoked as a workflow step on the GitHub
+#     Actions runner — replaces the retired Tekton run-tests Task).
 #   - Sets a tight ResourceQuota on the testkube namespace so a runaway
 #     TestWorkflow can't OOM the cluster.
 # =============================================================================
@@ -13,13 +15,13 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: outpost-test-runner
-  namespace: tekton-pipelines
+  namespace: testkube
   labels:
     outpost.io/plugin-kind: test-runner
 data:
   runner: "testkube"
   mode: "${TESTKUBE_MODE}"
-  # The run-tests Task reads `cli-image` to invoke `testkube run testworkflow`.
+  # scripts/ci/run-tests.sh reads `cli-image` to invoke `testkube run testworkflow`.
   cli-image: "kubeshop/testkube-cli:latest"
 ---
 apiVersion: v1

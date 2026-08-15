@@ -55,9 +55,11 @@ setup() {
 @test "doctor.sh --egress with no value terminates (no arg-parser loop)" {
   # Regression lock: `--egress` as the last arg once hung forever — `shift 2`
   # was a no-op when only one positional remained, so the parse loop spun.
+  # v0.3: a bare --egress now probes the 4 default hosts (up to 8 curl
+  # attempts × 8s max-time), so allow up to 90s before declaring a hang.
   bash "$DOCTOR" --quiet --egress >/dev/null 2>&1 &
   local pid=$! waited=0
-  while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 30 ]; do
+  while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 90 ]; do
     sleep 1
     waited=$((waited + 1))
   done
@@ -66,6 +68,21 @@ setup() {
     echo "doctor.sh --egress (no value) did not terminate within ${waited}s"
     return 1
   fi
+}
+
+@test "doctor.sh --egress with no value probes the v0.3 default host set" {
+  command -v jq >/dev/null || skip "jq not available"
+  out=$(cd "$INFRA_ROOT" && bash doctor.sh --json --egress 2>/dev/null || true)
+  # All four engine-critical hosts must appear as egress.* checks (status may
+  # be PASS or FAIL depending on the test machine's connectivity).
+  for h in egress.gitee.com egress.github.com egress.api.github.com egress.m.daocloud.io; do
+    echo "$out" | jq -e --arg id "$h" '.checks[] | select(.id == $id)' >/dev/null
+  done
+}
+
+@test "doctor.sh dropped the retired kaniko/gcr.io and host.docker.internal gates" {
+  ! grep -q 'gcr.io/kaniko-project' "$DOCTOR"
+  ! grep -qE 'record (PASS|WARN|FAIL) "net.host_docker_internal"' "$DOCTOR"
 }
 
 @test "outpost CLI: doctor subcommand is wired and runs" {

@@ -1,6 +1,10 @@
 # test-runner / testkube
 
-Kubernetes-native test orchestration. Used by both Gate A (pre-deploy, in Tekton pipeline) and Gate B (post-deploy, in Argo Rollouts analysis) — **the same test definition serves both gates**.
+Kubernetes-native test orchestration. Used by both Gate A (pre-deploy,
+`scripts/ci/run-tests.sh` — a GitHub Actions workflow step on the
+self-hosted runner) and Gate B (post-deploy, in Argo Rollouts analysis, when
+`ROLLOUT_PLUGIN=argo-rollouts`) — **the same test definition serves both
+gates**.
 
 ## What gets installed
 
@@ -12,7 +16,7 @@ helm install testkube oci://registry-1.docker.io/kubeshop/testkube \
 ```
 
 Then this plugin's `manifest.yaml`:
-- `ConfigMap/outpost-test-runner` in `tekton-pipelines` — tells the run-tests Task to invoke `testkube run testworkflow ...`.
+- `ConfigMap/outpost-test-runner` in `testkube` — tells `scripts/ci/run-tests.sh` to invoke `testkube run testworkflow ...`.
 - `ResourceQuota/testkube-quota` in `testkube` — keeps a runaway test from OOM'ing the cluster.
 
 ## How tests are wired
@@ -37,7 +41,11 @@ gates:
     timeout: 5m
 ```
 
-The Tekton `run-tests` Task converts this into a `TestWorkflow` CRD on the fly and invokes `testkube run testworkflow <repo>-pre-deploy --watch`. Failure code → pipeline aborts → notify-task fires → manifest never updated.
+`scripts/ci/run-tests.sh` (a workflow step on the GitHub Actions runner)
+converts this into a `TestWorkflow` CRD on the fly and invokes
+`testkube run testworkflow <repo>-pre-deploy --watch`. Non-zero exit → the
+workflow step fails → `scripts/update-manifest.sh` never runs →
+`notify-fanout.sh build-failed` fires → manifest never updated.
 
 ## How to enable
 

@@ -1,24 +1,32 @@
 # =============================================================================
 # Plugin: rollout / argo-rollouts
 # -----------------------------------------------------------------------------
-# This plugin's manifest.yaml is a marker. The actual Rollouts controller is
-# applied by bootstrap.d/09-test-gate.sh from the vendored, version-pinned
-# manifests (not curl'd from upstream's floating `latest` path):
+# v0.3: controller-only. ROLLOUT_PLUGIN defaults to `none` — this plugin is
+# opt-in. When enabled, bootstrap applies the vendored, version-pinned
+# controller manifest (not curl'd from upstream's floating `latest` path):
 #   core/k8s/vendor/argo-rollouts-install-v1.9.0.yaml
-#   core/k8s/vendor/argo-rollouts-dashboard-install-v1.9.0.yaml
-# See each vendor file's header for the upgrade process (fetch a newer
-# release, save under a new `-vX.Y.Z.yaml` name, update the reference above).
+# See that vendor file's header for the upgrade process. The dashboard
+# (argo-rollouts-dashboard-install) and its IngressRoute are RETIRED — there
+# is no ArgoCD/Tekton dashboard tier left to share a BasicAuth middleware
+# with, and the manifest-sync CronJob (not a UI) drives deploys. Operators
+# who want the UI can `kubectl apply -f` the dashboard manifest by hand and
+# port-forward it; it's no longer part of the default install surface.
 #
-# This file:
-#   - Records which rollout strategy is active.
-#   - Triggers application of analysistemplate-*.yaml + ingressroute.yaml
-#     in the same namespace.
+# This ConfigMap is a marker + strategy record (consumed by verify.sh /
+# doctor.sh to confirm the plugin was applied and to record the locked
+# threshold defaults documented in analysistemplate-default.yaml). It lives
+# in `argo-rollouts` — its own namespace — now that tekton-pipelines is gone.
+#
+# Apps that want canary + auto-rollback adopt the `Rollout` CRD instead of
+# `Deployment` in their own manifests; the manifest-sync CronJob is
+# Rollout-kind aware (waits on Rollout status the same way it waits on a
+# plain Deployment rollout) — see README.md.
 # =============================================================================
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: outpost-rollout
-  namespace: tekton-pipelines
+  namespace: argo-rollouts
   labels:
     outpost.io/plugin-kind: rollout
 data:

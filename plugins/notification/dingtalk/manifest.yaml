@@ -1,15 +1,21 @@
 # =============================================================================
 # Plugin: notification / dingtalk
 # -----------------------------------------------------------------------------
-# Per-provider Secret + template ConfigMap living in tekton-pipelines.
-# The shared `outpost-notify` Tekton Task mounts every notification plugin's
-# Secret + ConfigMap, then iterates NOTIFICATION_PROVIDERS to fan out.
+# v0.3: ArgoCD + Tekton are gone, so this no longer feeds an
+# argocd-notifications-cm/secret merge or a Tekton Task mount. Consumers now:
+#   - manifest-sync CronJob (ns outpost-ci) — volume-mounts this Secret +
+#     ConfigMap so scripts/notify-fanout.sh's existing /secrets/<p>/* and
+#     /templates/<p>/body.tmpl file contract keeps working unchanged.
+#   - GitHub Actions workflow step (build-failed) and the host verify.sh
+#     systemd timer (verify-failed) run OUTSIDE the cluster; they invoke
+#     notify-fanout.sh with `--env-file $OUTPOST_ROOT/.env` instead of a
+#     volume mount (see scripts/notify-fanout.sh header for the flag).
 # =============================================================================
 apiVersion: v1
 kind: Secret
 metadata:
   name: dingtalk-webhook
-  namespace: tekton-pipelines
+  namespace: outpost-ci
   labels:
     outpost.io/notification-provider: dingtalk
 type: Opaque
@@ -21,12 +27,12 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: dingtalk-template
-  namespace: tekton-pipelines
+  namespace: outpost-ci
   labels:
     outpost.io/notification-provider: dingtalk
 data:
-  # The outpost-notify Task reads `body.tmpl` and pipes it through `envsubst`
-  # at run time with NOTIFY_* env vars derived from the unified payload.
+  # notify-fanout.sh reads `body.tmpl` and pipes it through `envsubst` at run
+  # time with NOTIFY_* env vars derived from the unified payload.
   body.tmpl: |
     {
       "msgtype": "markdown",
