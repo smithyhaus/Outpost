@@ -13,6 +13,13 @@ Applies to: accepting a full WSL2 distro wipe and rebuilding Outpost from
 zero on a fresh install, OR standing up a brand-new WSL2 box as a
 replacement for an existing one.
 
+> **Upgrading an existing, working box instead? Use
+> [`wsl2-inplace-upgrade-0.3.1.md`](wsl2-inplace-upgrade-0.3.1.md).**
+> If `docker ps` shows postgres/redis/rabbitmq/manticore healthy, the box
+> already has v0.3.1's data-layer shape and a wipe buys you nothing —
+> it just costs a dump/restore round-trip plus a full rebuild of every
+> app image. This runbook is for the from-zero case only.
+
 ---
 
 ## 0. Old-box data snapshot (before touching anything)

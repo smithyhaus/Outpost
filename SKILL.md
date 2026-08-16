@@ -189,7 +189,10 @@ code stays unchanged either way.
   down -v`, which deletes the postgres/redis/rabbitmq/manticore named
   volumes. Neither the default mode nor `--hard` preserves them —
   dump-first discipline is the only restore path; see
-  `docs/prp/runbooks/wsl2-redeploy-0.3.md` §0.
+  `docs/prp/runbooks/wsl2-redeploy-0.3.md` §0. **A box whose four data
+  containers are healthy almost never needs a wipe** — upgrade it in
+  place with `docs/prp/runbooks/wsl2-inplace-upgrade-0.3.1.md`, which
+  keeps the volumes and the in-cluster registry.
 - **Never** delete the namespaces `infra-bridges`, `outpost-ci`, `buildkit`,
   `registry`, `kube-system`. They are load-bearing.
 
