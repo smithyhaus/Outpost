@@ -30,6 +30,29 @@ log "Cleaning orphans from earlier bootstrap versions (narrow, no wildcards)..."
 #     removes controllers, CRD workloads, dashboards, EL, pruner in one shot.
 #     CRDs themselves are cluster-scoped and left behind (harmless, and a
 #     wipe-redo install never has them); remove by hand if desired.
+#     ⚠️ ArgoCD Applications created by a v0.2 install carry
+#     `resources-finalizer.argocd.argoproj.io`. That finalizer means "when
+#     this Application is deleted, CASCADE-DELETE everything it manages" —
+#     i.e. every Deployment/Service/IngressRoute the app owns in ns `apps`.
+#     Deleting the argocd namespace deletes the Application objects, so on
+#     a live v0.2 box the naive `delete ns argocd` can take the entire
+#     running application fleet down with it. Strip the finalizers FIRST so
+#     the Applications are removed WITHOUT pruning their workloads; those
+#     workloads keep running untouched until manifest-sync adopts them.
+if kubectl get ns argocd >/dev/null 2>&1 \
+   && kubectl get crd applications.argoproj.io >/dev/null 2>&1; then
+  _apps=$(kubectl -n argocd get applications -o name 2>/dev/null || true)
+  if [[ -n "$_apps" ]]; then
+    log "  stripping ArgoCD cascade finalizers (keeps ns/apps workloads alive)"
+    while IFS= read -r _app; do
+      [[ -n "$_app" ]] || continue
+      kubectl -n argocd patch "$_app" --type merge \
+        -p '{"metadata":{"finalizers":null}}' >/dev/null 2>&1 || true
+    done <<< "$_apps"
+  fi
+  unset _apps _app
+fi
+
 for _ns in argocd tekton-pipelines; do
   if kubectl get ns "$_ns" >/dev/null 2>&1; then
     log "  removing namespace/$_ns (ArgoCD/Tekton retired in v0.3)"

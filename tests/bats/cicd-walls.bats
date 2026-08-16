@@ -120,3 +120,21 @@ setup() {
   # the secret apply is silenced (no rendered secret ever hits stdout)
   grep -A3 'kubectl create secret generic notify-secrets' "$PHASE8" | grep -qF '>/dev/null'
 }
+
+# ---- W11: the argocd namespace teardown must not prune ns/apps ---------------
+# A v0.2 box's ArgoCD Applications carry
+# `resources-finalizer.argocd.argoproj.io`, which cascade-deletes every
+# resource the Application manages. `kubectl delete ns argocd` deletes those
+# Application objects, so without stripping the finalizers first the upgrade
+# can take the entire running app fleet down with it. Verified live on the
+# WSL2 box: all 21 Applications carried the finalizer.
+@test "W11: phase 8 strips ArgoCD cascade finalizers BEFORE deleting ns/argocd" {
+  grep -qF '"finalizers":null' "$PHASE8"
+
+  strip_line=$(grep -n '"finalizers":null' "$PHASE8" | head -1 | cut -d: -f1)
+  del_line=$(grep -n 'for _ns in argocd tekton-pipelines' "$PHASE8" | head -1 | cut -d: -f1)
+  [ -n "$strip_line" ]
+  [ -n "$del_line" ]
+  # Ordering is the whole point: stripping after the delete is useless.
+  [ "$strip_line" -lt "$del_line" ]
+}
