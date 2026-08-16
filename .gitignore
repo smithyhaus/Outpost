@@ -9,6 +9,12 @@ sealed-secrets-key.pem
 *.pem
 *.key
 secrets-backup/
+# Data dumps. reset.sh's banner and runbook §0 tell you to write these to
+# ~/outpost-carry/ (outside the repo), but a stray run inside the checkout
+# must not be committable: a pg_dumpall is business data and a RabbitMQ
+# definitions export contains user password hashes.
+pg-*.sql
+rabbitmq-definitions-*.json
 
 # Local state
 volumes/

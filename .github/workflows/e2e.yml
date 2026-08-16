@@ -245,13 +245,18 @@ jobs:
               || fail "infra-bridges/svc/$svc missing"
             [[ "$t" == "ExternalName" ]] \
               || fail "infra-bridges/svc/$svc type=$t (expected ExternalName)"
-            en=$(kubectl -n infra-bridges get svc "$svc" -o jsonpath='{.spec.externalName}')
+            en=$(kubectl -n infra-bridges get svc "$svc" -o jsonpath='{.spec.externalName}' 2>/dev/null) \
+              || fail "infra-bridges/svc/$svc externalName unreadable"
             [[ "$en" == "host.docker.internal" ]] \
               || fail "infra-bridges/svc/$svc externalName=$en (expected host.docker.internal)"
           done
-          if kubectl -n infra-bridges get statefulset,deployment -o name 2>/dev/null | grep -q .; then
-            fail "infra-bridges holds workloads — v0.3.1's data layer must be host Compose only"
-          fi
+          # Capture first, THEN test: a piped `kubectl ... | grep -q .` cannot
+          # tell "query failed" from "zero workloads" — both give empty stdout,
+          # so a broken query would read as the healthy case and pass silently.
+          workloads=$(kubectl -n infra-bridges get statefulset,deployment -o name 2>/dev/null) \
+            || fail "could not query infra-bridges workloads (kubectl/RBAC problem, not a clean namespace)"
+          [[ -z "$workloads" ]] \
+            || fail "infra-bridges holds workloads — v0.3.1's data layer must be host Compose only: $workloads"
 
           echo "═══ CoreDNS host.docker.internal bridge + self-heal reconciler ═══"
           node_ip=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
@@ -264,8 +269,13 @@ jobs:
 
           echo "═══ data services healthy in host Compose (local-data profile) ═══"
           for c in postgres redis rabbitmq manticore; do
-            h=$(docker inspect -f '{{.State.Health.Status}}' "$c" 2>/dev/null) \
+            docker inspect "$c" >/dev/null 2>&1 \
               || fail "compose container $c not found — the local-data profile did not come up"
+            # Separate probe: the template errors (not just returns empty) when
+            # a container has no healthcheck, which is a different defect from
+            # the container being absent.
+            h=$(docker inspect -f '{{.State.Health.Status}}' "$c" 2>/dev/null) \
+              || fail "compose container $c defines no healthcheck — bootstrap's health gate is blind to it"
             [[ "$h" == "healthy" ]] || fail "compose container $c health=$h (expected healthy)"
           done
 

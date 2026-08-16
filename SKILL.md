@@ -2,11 +2,11 @@
 name: outpost
 description: |
   Operating skill for the Outpost dev backend project. Two-layer
-  architecture: Docker Compose for the public-ingress edge + k3s for
-  stateful data services, applications, and CI/CD (GitHub Actions
-  self-hosted runner + manifest-sync CronJob), fronted by a single
-  Cloudflare Tunnel. Plugin-driven (registry, git-provider, test-runner,
-  rollout, notification). Targets macOS / Linux / WSL2.
+  architecture: Docker Compose for the stateful data services (both
+  modes) plus the public-ingress edge + k3s for applications and CI/CD
+  (GitHub Actions self-hosted runner + manifest-sync CronJob), fronted by
+  a single Cloudflare Tunnel. Plugin-driven (registry, git-provider,
+  test-runner, rollout, notification). Targets macOS / Linux / WSL2.
 when_to_use: |
   Any operation inside an Outpost checkout — verifying health,
   diagnosing failures, onboarding a new project, modifying configuration,
@@ -18,9 +18,9 @@ when_to_use: |
 ## 1. Identity
 
 - **Type:** single-machine self-hosted dev backend.
-- **Carriers:** Docker Compose (edge: cloudflared + caddy; `local` mode
-  also carries the data layer) + k3s (`full`-mode data layer, apps,
-  CI/CD glue).
+- **Carriers:** Docker Compose (the data layer in BOTH modes, plus the
+  `full`-mode edge: cloudflared + caddy) + k3s (apps + CI/CD glue only —
+  never the data layer, see ADR-0005).
 - **CI:** GitHub Actions self-hosted runner (host systemd service, pure
   outbound long-poll — no inbound webhook anywhere).
 - **CD:** `manifest-sync` CronJob (ns `outpost-ci`) — pulls the manifest
@@ -33,7 +33,8 @@ when_to_use: |
 - **Two modes** (`OUTPOST_MODE` in `.env`):
   - `local` *(default)* — Compose data services on `localhost` only. No CF
     Tunnel, no k3s, no CI/CD. Zero required input.
-  - `full` — k3s data layer + Cloudflare Tunnel + GitHub Actions
+  - `full` — everything in `local` (the Compose data layer is unchanged)
+    + Cloudflare Tunnel + k3s apps + GitHub Actions
     self-hosted runner + manifest-sync CD. Requires `ROOT_DOMAIN`,
     `CF_TUNNEL_TOKEN`, `GIT_USER`, `GIT_TOKEN`, `MANIFEST_REPO_URL`,
     `GITHUB_RUNNER_URL`, `GITHUB_RUNNER_PAT`, `OUTPOST_REPOS`.

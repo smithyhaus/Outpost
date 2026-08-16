@@ -23,9 +23,12 @@ If anything below contradicts `SKILL.md`, `SKILL.md` wins.
 
 1. **Two modes.** `OUTPOST_MODE=local` runs Compose data services only (PG /
    Redis / RabbitMQ / Manticore on `localhost`, zero required input).
-   `OUTPOST_MODE=full` moves the data layer into k3s and adds Cloudflare
-   Tunnel + a GitHub Actions self-hosted runner (CI) + a manifest-sync
-   CronJob (CD) — requires `ROOT_DOMAIN`, `CF_TUNNEL_TOKEN`, `GIT_USER`,
+   `OUTPOST_MODE=full` keeps that exact same Compose data layer and adds
+   Cloudflare Tunnel + k3s apps + a GitHub Actions self-hosted runner (CI)
+   + a manifest-sync CronJob (CD). The data layer is **never** in k3s
+   ([ADR-0005](docs/decisions/0005-data-layer-back-to-host.md)); pods
+   reach it through the `infra-bridges` ExternalName Services. Requires
+   `ROOT_DOMAIN`, `CF_TUNNEL_TOKEN`, `GIT_USER`,
    `GIT_TOKEN`, `MANIFEST_REPO_URL`, `GITHUB_RUNNER_URL`,
    `GITHUB_RUNNER_PAT`, `OUTPOST_REPOS`. Don't break the local-mode
    zero-prompt path.

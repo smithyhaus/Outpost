@@ -9,8 +9,9 @@
 Generated: at bootstrap time
 Mode: `local` (Compose data services only — no public hosts, no GitOps)
 
-To upgrade to `full` mode (k3s data layer + Cloudflare Tunnel + GitHub
-Actions self-hosted runner + manifest-sync CD):
+To upgrade to `full` mode (these same Compose data services stay exactly
+as they are, plus Cloudflare Tunnel + k3s apps + GitHub Actions
+self-hosted runner + manifest-sync CD):
 
 1. set `OUTPOST_MODE=full` in `.env`
 2. fill `ROOT_DOMAIN`, `CF_TUNNEL_TOKEN`, `GIT_USER`, `GIT_TOKEN`,

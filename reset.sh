@@ -41,10 +41,15 @@ WARNING — this will:
 ★ DUMP FIRST. The only reliable restore is a dump taken BEFORE the reset.
   The data layer is host Compose (ADR-0005), so dump through docker. The
   single quotes make \$POSTGRES_USER expand INSIDE the container, keeping the
-  credential off your shell history and off the host command line:
-    docker exec postgres sh -c 'pg_dumpall -U "\$POSTGRES_USER"' > pg-\$(date +%F).sql
+  credential off your shell history and off the host command line. Note the
+  dumps land OUTSIDE this git repo on purpose — a PG dump is business data
+  and the RabbitMQ export contains password hashes:
+    mkdir -p ~/outpost-carry
+    docker exec postgres sh -c 'pg_dumpall -U "\$POSTGRES_USER"' \\
+      > ~/outpost-carry/pg-\$(date +%F).sql
     docker exec rabbitmq rabbitmqctl export_definitions /tmp/definitions.json
-    docker cp rabbitmq:/tmp/definitions.json ./rabbitmq-definitions-\$(date +%F).json
+    docker cp rabbitmq:/tmp/definitions.json \\
+      ~/outpost-carry/rabbitmq-definitions-\$(date +%F).json
   Do it now if you have not.
 EOF
 if [[ $HARD -eq 1 ]]; then

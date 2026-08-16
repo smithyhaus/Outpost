@@ -46,13 +46,21 @@ setup() {
   # which probes http://127.0.0.1:2019/config/. The probe can never pass,
   # so caddy is permanently `unhealthy` — and bootstrap.d/04-compose.sh
   # hard-gates on health (exit 1), so `bash bootstrap.sh` dies at Phase 4.
-  # These two files must agree; assert the coupling, not just each side.
-  if grep -qE 'test:.*127\.0\.0\.1:2019' "$COMPOSE"; then
-    run grep -qE '^\s*admin\s+off\s*$' "$CADDYFILE"
-    [ "$status" -ne 0 ]                       # `admin off` would break it
-    run grep -E '^\s*admin\s+localhost:2019\s*$' "$CADDYFILE"
-    [ "$status" -eq 0 ]                       # explicit, loopback-only
-  fi
+  # Asserted UNCONDITIONALLY on purpose. An earlier version gated this on
+  # `if grep -qE 'test:.*127\.0\.0\.1:2019' "$COMPOSE"; then ... fi`, but a
+  # bats @test body ending in a false `if` with no `else` exits 0 — so
+  # merely reformatting the healthcheck onto two lines made the whole test
+  # pass vacuously while `admin off` was back in place. The invariant does
+  # not depend on how the healthcheck is formatted: this repo's caddy admin
+  # API is always on and always loopback-only.
+  run grep -qE '^\s*admin\s+off\s*$' "$CADDYFILE"
+  [ "$status" -ne 0 ]                         # `admin off` breaks the probe
+  run grep -E '^\s*admin\s+localhost:2019\s*$' "$CADDYFILE"
+  [ "$status" -eq 0 ]                         # explicit, loopback-only
+
+  # And the probe it must stay in step with is still the admin endpoint.
+  run grep -E '127\.0\.0\.1:2019' "$COMPOSE"
+  [ "$status" -eq 0 ]
 }
 
 @test "06-bridges: ExternalName bridge Services only (no in-cluster data workloads)" {
