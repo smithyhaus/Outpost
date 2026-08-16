@@ -10,7 +10,7 @@
 | Mode | What you get | Required input | When to use |
 |------|--------------|----------------|-------------|
 | **`local`** *(default)* | Compose data services on `localhost` (PG / Redis / RabbitMQ / Manticore Search) | none | personal dev backend on this box, no public hosting, no CI/CD |
-| **`full`** | k3s data layer + Cloudflare Tunnel + GitHub Actions self-hosted runner + `manifest-sync` CD | `ROOT_DOMAIN`, `CF_TUNNEL_TOKEN`, `GIT_USER`, `GIT_TOKEN`, `MANIFEST_REPO_URL`, `GITHUB_RUNNER_URL`, `GITHUB_RUNNER_PAT`, `OUTPOST_REPOS` | want a public domain + push-to-deploy CI/CD |
+| **`full`** | everything in `local` (same Compose data layer) + Cloudflare Tunnel + k3s apps + GitHub Actions self-hosted runner + `manifest-sync` CD | `ROOT_DOMAIN`, `CF_TUNNEL_TOKEN`, `GIT_USER`, `GIT_TOKEN`, `MANIFEST_REPO_URL`, `GITHUB_RUNNER_URL`, `GITHUB_RUNNER_PAT`, `OUTPOST_REPOS` | want a public domain + push-to-deploy CI/CD |
 
 > You can switch modes at any time. Start in `local`; once comfortable,
 > set `OUTPOST_MODE=full` in `.env` and re-run `bootstrap.sh`. Existing
@@ -257,9 +257,10 @@ systemd inside WSL is enabled, but **the WSL distro itself doesn't auto-start wi
 
 HTTP services (RabbitMQ UI / Manticore HTTP API / Registry) work in the browser via `https://...` — they do NOT need this phase. Note: Manticore's HTTP endpoint is a JSON API, not a UI — opening it in the browser returns API responses, not a dashboard.
 
-Full instructions in `04-client-access.md`, **including the v0.3
-prerequisite**: the data services are now ClusterIP-only inside k3s, so a
-CF TCP row needs an origin you expose on the host first. Short version:
+Full instructions in `04-client-access.md`. Since v0.3.1 there is **no
+host-side prerequisite** — the data services are Compose containers, so a
+CF TCP row points straight at `tcp://postgres:5432` and friends. Short
+version:
 
 - **macOS workstation**: `brew install cloudflared` → `cloudflared login` → write a launchd plist
 - **Linux workstation**: download the binary → write a systemd-user unit

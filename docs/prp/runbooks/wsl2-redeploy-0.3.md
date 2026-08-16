@@ -1,4 +1,4 @@
-# WSL2 redeploy runbook — v0.3.0 (CI/CD engine swap + data-in-k3s)
+# WSL2 redeploy runbook — v0.3.1 (CI/CD engine swap; data stays in host Compose)
 
 > Supersedes [`wsl-wipe-rebootstrap.md`](wsl-wipe-rebootstrap.md) (deprecated,
 > kept for historical record). Use this runbook for any full WSL2

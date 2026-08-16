@@ -55,7 +55,7 @@ Outpost ships in two modes; pick the one that matches what you need today.
 | Mode | What runs | Required input | Use when |
 |------|-----------|----------------|----------|
 | **`local`** *(default)* | Compose data services on `localhost`: PG, Redis, RabbitMQ, Manticore Search | nothing — every value defaults or auto-generates | You want a personal dev backend on this box, no public hosting, no CI/CD |
-| **`full`** | k3s data layer + Cloudflare Tunnel + GitHub Actions self-hosted runner + manifest-sync CD | `ROOT_DOMAIN`, `CF_TUNNEL_TOKEN`, `GIT_USER`, `GIT_TOKEN`, `MANIFEST_REPO_URL`, `GITHUB_RUNNER_URL`, `GITHUB_RUNNER_PAT` | You want public access on your domain + push-to-deploy CI/CD |
+| **`full`** | everything in `local` (the Compose data layer is unchanged) + Cloudflare Tunnel + k3s apps + GitHub Actions self-hosted runner + manifest-sync CD | `ROOT_DOMAIN`, `CF_TUNNEL_TOKEN`, `GIT_USER`, `GIT_TOKEN`, `MANIFEST_REPO_URL`, `GITHUB_RUNNER_URL`, `GITHUB_RUNNER_PAT` | You want public access on your domain + push-to-deploy CI/CD |
 
 Switch by editing `OUTPOST_MODE` in `.env`. Re-running `bash bootstrap.sh` is idempotent; passwords already in `.env` are reused.
 
@@ -253,12 +253,13 @@ Drop Outpost into a Claude Code session and ask "is the stack healthy?" — it w
 
 ## Status
 
-Outpost is **v0.3.0** — see [`CHANGELOG.md`](CHANGELOG.md) for what landed:
+Outpost is **v0.3.1** — see [`CHANGELOG.md`](CHANGELOG.md) for what landed:
 the CI/CD engine swap (Tekton + ArgoCD → GitHub Actions self-hosted runner
-+ manifest-sync CronJob), the retired inbound-webhook path, and the data
-layer moving into k3s for `full` mode. Rationale in
-[ADR-0003](docs/decisions/0003-github-actions-engine-swap.md) /
-[ADR-0004](docs/decisions/0004-data-layer-in-k3s.md).
++ manifest-sync CronJob) and the retired inbound-webhook path. The data
+layer **stays in host Compose in both modes** — v0.3.0 briefly moved it
+into k3s and v0.3.1 reverted that before any deployment ran it. Rationale
+in [ADR-0003](docs/decisions/0003-github-actions-engine-swap.md) /
+[ADR-0005](docs/decisions/0005-data-layer-back-to-host.md).
 
 End-to-end verification on macOS / Linux / WSL2 is ongoing; roadmap items
 live in [`TODOS.md`](TODOS.md).

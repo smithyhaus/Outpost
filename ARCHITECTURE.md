@@ -73,8 +73,10 @@ This split has three concrete benefits:
 
 1. **You can blow away k3s entirely and rebuild it without losing data.**
    Apps are defined declaratively in the manifest repo; `manifest-sync`
-   recreates them. The data volumes are Compose-managed on the host —
-   `reset.sh`, k3s reinstalls and CRD surgery cannot touch them.
+   recreates them. The data volumes are Compose-managed on the host, so
+   k3s reinstalls and CRD surgery cannot touch them. **`reset.sh` is the
+   exception** — it tears Compose down with `down -v` and *does* delete
+   those volumes, in both modes; dump first (runbook §0).
 2. **Production migration is easy.** Point a bridge Service's
    `externalName` at managed Postgres / Redis / RabbitMQ instead of
    `host.docker.internal`; application connection strings are unchanged.
@@ -351,8 +353,9 @@ This is invariant #10 in [`SKILL.md`](SKILL.md).
 
 The core invariants — never break these:
 
-- Compose (`edge` profile) exposes only `cloudflared` + `caddy`; app data
-  no longer lives in Compose in `full` mode.
+- Compose carries the data layer (`local-data` profile) in BOTH modes; in
+  `full` mode it additionally runs the `edge` profile (`cloudflared` +
+  `caddy`). ADR-0005 — never move the data layer back into k3s.
 - Traefik exposes `NodePort 30080`; cloudflared depends on it.
 - TLS terminates at the Cloudflare edge — internal traffic is plain HTTP.
 - Bridge services live in `infra-bridges`; renaming pollutes app configs.

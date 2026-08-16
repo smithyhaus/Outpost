@@ -53,7 +53,7 @@ Outpost 提供两种模式，按当前需求挑一个。
 | 模式 | 跑什么 | 必填项 | 适用场景 |
 |------|--------|--------|----------|
 | **`local`** *(默认)* | Compose 数据服务跑在 `localhost`：PG、Redis、RabbitMQ、Manticore Search | 无 —— 全部默认值或自动生成 | 本机当个人开发后端，不需要公网，不需要 CI/CD |
-| **`full`** | k3s 数据层 + Cloudflare Tunnel + GitHub Actions 自托管 runner + manifest-sync CD | `ROOT_DOMAIN`、`CF_TUNNEL_TOKEN`、`GIT_USER`、`GIT_TOKEN`、`MANIFEST_REPO_URL`、`GITHUB_RUNNER_URL`、`GITHUB_RUNNER_PAT` | 需要把服务挂到自己域名上 + push 即部署的 CI/CD |
+| **`full`** | `local` 的全部内容（Compose 数据层原样不变）+ Cloudflare Tunnel + k3s 应用层 + GitHub Actions 自托管 runner + manifest-sync CD | `ROOT_DOMAIN`、`CF_TUNNEL_TOKEN`、`GIT_USER`、`GIT_TOKEN`、`MANIFEST_REPO_URL`、`GITHUB_RUNNER_URL`、`GITHUB_RUNNER_PAT` | 需要把服务挂到自己域名上 + push 即部署的 CI/CD |
 
 通过修改 `.env` 里的 `OUTPOST_MODE` 切换。重跑 `bash bootstrap.sh` 是幂等的；`.env` 里已有的密码会被复用。
 
@@ -209,11 +209,12 @@ make uninstall                        # 只移除指向本仓库的 symlink
 
 ## 项目状态
 
-Outpost 当前为 **v0.3.0** —— 详见 [`CHANGELOG.md`](CHANGELOG.md)：CI/CD
+Outpost 当前为 **v0.3.1** —— 详见 [`CHANGELOG.md`](CHANGELOG.md)：CI/CD
 引擎替换（Tekton + ArgoCD → GitHub Actions 自托管 runner + manifest-sync
-CronJob）、入站 webhook 路径整体退役、数据层在 `full` 模式下迁入 k3s。
+CronJob）、入站 webhook 路径整体退役。数据层**两种模式下都留在宿主 Compose**
+—— v0.3.0 曾短暂把它迁入 k3s，v0.3.1 在任何环境实际部署之前已回退。
 决策依据见 [ADR-0003](docs/decisions/0003-github-actions-engine-swap.md) /
-[ADR-0004](docs/decisions/0004-data-layer-in-k3s.md)。
+[ADR-0005](docs/decisions/0005-data-layer-back-to-host.md)。
 
 macOS / Linux / WSL2 上的真机端到端验证仍在进行中；路线图见
 [`TODOS.md`](TODOS.md)。

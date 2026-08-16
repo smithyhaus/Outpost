@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
 # DANGEROUS — wipes all data and uninstalls k3s. Requires explicit confirmation.
 #
+# ⚠️ v0.3.1 — your DATABASES ARE NOT PRESERVED by ANY mode of this script.
+#    ADR-0005 put the data layer back in host Compose, so Postgres / Redis /
+#    RabbitMQ / Manticore live in Compose NAMED VOLUMES, and the
+#    `docker compose ... down -v` below deletes them. A logical dump taken
+#    BEFORE running this is the only restore path — see the banner.
+#
 # Default behaviour PRESERVES two things across the wipe:
 #   1. secrets-backup/sealed-secrets-master.key.yaml — so the next bootstrap
 #      restores the SAME RSA keypair and existing SealedSecrets still decrypt.
-#   2. the k3s local-path storage dir (Postgres/Redis/RabbitMQ/Manticore/
-#      registry PVC payloads) — moved aside to /var/lib/outpost-preserved-<ts>
-#      BEFORE k3s-uninstall.sh nukes /var/lib/rancher/k3s. v0.3 moved the
-#      data layer INTO k3s, so without this guardrail a reset is a total
-#      data-loss event, not an infra reset.
+#   2. the k3s local-path storage dir — moved aside to
+#      /var/lib/outpost-preserved-<ts> BEFORE k3s-uninstall.sh nukes
+#      /var/lib/rancher/k3s. In v0.3.1 that dir holds the registry PVC and
+#      buildkit cache, NOT the databases (see the warning above) — this
+#      guardrail saves you a rebuild, not your data.
 # Use `--hard` (or RESET_HARD=1) to wipe BOTH — every SealedSecret must then
-# be re-sealed and every database starts empty.
+# be re-sealed and the registry starts empty.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -26,21 +32,27 @@ PRESERVE_DIR="/var/lib/outpost-preserved-$(date +%Y%m%d-%H%M%S)"
 
 cat <<EOF
 WARNING — this will:
-  1. docker compose down -v (drops the local-data profile volumes + cloudflared + caddy)
-  2. uninstall k3s / delete the k3d cluster (drops registry/buildkit/manifest-sync
-     and — v0.3 — the IN-CLUSTER data layer: PG/Redis/RabbitMQ/Manticore)
+  1. docker compose down -v — DESTROYS the local-data volumes: every byte in
+     Postgres / Redis / RabbitMQ / Manticore, plus cloudflared + caddy
+  2. uninstall k3s / delete the k3d cluster (drops registry/buildkit/manifest-sync)
   3. unregister + remove the GitHub Actions runner service
   4. delete .env, INFRA.md, INFRA.zh-CN.md, ~/.kube/config
 
-★ DUMP FIRST. The only reliable restore is a dump taken BEFORE the reset:
-    kubectl -n infra-bridges exec sts/postgres -- pg_dumpall -U \$POSTGRES_USER > pg-\$(date +%F).sql
+★ DUMP FIRST. The only reliable restore is a dump taken BEFORE the reset.
+  The data layer is host Compose (ADR-0005), so dump through docker. The
+  single quotes make \$POSTGRES_USER expand INSIDE the container, keeping the
+  credential off your shell history and off the host command line:
+    docker exec postgres sh -c 'pg_dumpall -U "\$POSTGRES_USER"' > pg-\$(date +%F).sql
+    docker exec rabbitmq rabbitmqctl export_definitions /tmp/definitions.json
+    docker cp rabbitmq:/tmp/definitions.json ./rabbitmq-definitions-\$(date +%F).json
   Do it now if you have not.
 EOF
 if [[ $HARD -eq 1 ]]; then
   cat <<EOF
   5. delete secrets-backup/           ← --hard mode
   6. DELETE the local-path storage dir ($K3S_STORAGE_DIR) ← --hard mode
-       every database/registry volume is gone for good.
+       the registry PVC + buildkit cache are gone for good. (Your databases
+       are already gone via step 1 — that happens in BOTH modes.)
 EOF
 else
   cat <<EOF
@@ -49,8 +61,9 @@ else
         SealedSecrets still decrypt. --hard wipes it.)
   6. PRESERVE the local-path storage dir:
        $K3S_STORAGE_DIR → $PRESERVE_DIR
-       (raw PV payloads survive; a fresh cluster provisions NEW empty PVs —
-        restoring means copying data back per-volume or replaying a dump.
+       (in v0.3.1 this is the registry PVC + buildkit cache, NOT your
+        databases — those go with step 1. A fresh cluster provisions NEW
+        empty PVs; restoring means copying payloads back per-volume.
         --hard skips preservation and lets k3s-uninstall delete it.)
 EOF
 fi

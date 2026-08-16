@@ -88,14 +88,14 @@ with an auto-issued cert.
   settings → HTTP Settings → HTTP Host Header* and set it to
   `registry.<your-domain>`. Docker Registry is Host-header sensitive;
   without this, image pulls return 401.
-- **TCP rows (`pg` / `redis` / `rabbitmq`) are optional and need work.**
-  In `full` mode the data services are k3s StatefulSets behind ClusterIP
-  Services in `infra-bridges` — there is no Compose container for a TCP
-  row to target. If you want them, first expose the port on the Outpost
-  host (`kubectl -n infra-bridges port-forward --address 0.0.0.0
-  svc/postgres 5432:5432`) and point the row at
-  `host.docker.internal:5432`. See `04-client-access.md` for the
-  dev-workstation side and the `CF_TUNNEL_PROTOCOL=http2` caveat.
+- **TCP rows (`pg` / `redis` / `rabbitmq`) are optional but need no
+  host-side prep.** The data services are Compose containers on the same
+  docker network as cloudflared (ADR-0005), so a TCP row targets the
+  container directly: `tcp://postgres:5432`, `tcp://redis:6379`,
+  `tcp://rabbitmq:5672`. The one real constraint is transport — the
+  `cloudflared access tcp` client path requires QUIC, so it is unavailable
+  when you run the tunnel with `CF_TUNNEL_PROTOCOL=http2`. See
+  `04-client-access.md` for the dev-workstation side.
 
 Save each row.
 

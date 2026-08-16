@@ -40,6 +40,21 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+@test "Caddyfile: admin API matches what the compose healthcheck probes" {
+  # Regression guard for a real outage class: `admin off` (shipped since
+  # v1.0.0) silently contradicted the caddy healthcheck added in d779e10,
+  # which probes http://127.0.0.1:2019/config/. The probe can never pass,
+  # so caddy is permanently `unhealthy` — and bootstrap.d/04-compose.sh
+  # hard-gates on health (exit 1), so `bash bootstrap.sh` dies at Phase 4.
+  # These two files must agree; assert the coupling, not just each side.
+  if grep -qE 'test:.*127\.0\.0\.1:2019' "$COMPOSE"; then
+    run grep -qE '^\s*admin\s+off\s*$' "$CADDYFILE"
+    [ "$status" -ne 0 ]                       # `admin off` would break it
+    run grep -E '^\s*admin\s+localhost:2019\s*$' "$CADDYFILE"
+    [ "$status" -eq 0 ]                       # explicit, loopback-only
+  fi
+}
+
 @test "06-bridges: ExternalName bridge Services only (no in-cluster data workloads)" {
   # The k3s side of the data path is ExternalName → host.docker.internal.
   # StatefulSets/Deployments must not come back without a new owner decision

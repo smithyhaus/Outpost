@@ -13,7 +13,7 @@ Two flavors live here:
   copies `templates/github/outpost-build.yml` into
   `.github/workflows/`), set up dual-push (or a gitee→github push-mirror),
   copy the bundled manifests into your manifest repo, push a commit. If
-  `https://hello-<lang>.apps.<root>` returns "Hello from <Lang>" within
+  `https://hello-<lang>-apps.<root>` returns "Hello from <Lang>" within
   a few minutes, the entire pipeline (GitHub Actions runner build →
   push to registry → update manifest → manifest-sync apply → Traefik
   route) is working. No webhook to configure anywhere.

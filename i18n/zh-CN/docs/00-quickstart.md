@@ -9,7 +9,7 @@
 | 模式 | 你能拿到什么 | 必填项 | 适用 |
 |------|--------------|--------|------|
 | **`local`** *(默认)* | Compose 数据服务跑在 `localhost`(PG / Redis / RabbitMQ / Manticore Search) | 无 | 个人本机开发后端,不需要公网 / CI/CD |
-| **`full`** | k3s 数据层 + Cloudflare Tunnel + GitHub Actions self-hosted runner + `manifest-sync` 部署 | `ROOT_DOMAIN`、`CF_TUNNEL_TOKEN`、`GIT_USER`、`GIT_TOKEN`、`MANIFEST_REPO_URL`、`GITHUB_RUNNER_URL`、`GITHUB_RUNNER_PAT`、`OUTPOST_REPOS` | 想挂自己域名 + push 即部署 |
+| **`full`** | `local` 的全部内容(Compose 数据层不变)+ Cloudflare Tunnel + k3s 应用层 + GitHub Actions self-hosted runner + `manifest-sync` 部署 | `ROOT_DOMAIN`、`CF_TUNNEL_TOKEN`、`GIT_USER`、`GIT_TOKEN`、`MANIFEST_REPO_URL`、`GITHUB_RUNNER_URL`、`GITHUB_RUNNER_PAT`、`OUTPOST_REPOS` | 想挂自己域名 + push 即部署 |
 
 > 两种模式可随时切换。先 `local`,熟悉后改 `.env` 的 `OUTPOST_MODE=full` 重跑 `bootstrap.sh`,数据卷与已生成的密码会被复用。
 
@@ -240,8 +240,8 @@ WSL2 内的 systemd 已由 bootstrap 启用,但 **distro 自身不会随 Win 启
 
 HTTP 服务(RabbitMQ UI / Manticore HTTP API / Registry)直接浏览器开 `https://...`,**不需要本节**。注意:Manticore 的 HTTP 端点是 JSON API,不是 UI —— 浏览器打开返回的是 API 响应,不是控制面板。
 
-完整步骤见 `04-client-access.md`,**特别注意里面的 v0.3 前置条件**:数据服务现在
-是 k3s 里的 ClusterIP Service,CF 的 TCP 行需要你先在主机上把端口暴露出来。简版:
+完整步骤见 `04-client-access.md`。v0.3.1 起**不需要任何主机侧前置准备**——数据
+服务就是 Compose 容器,CF 的 TCP 行直接填 `tcp://postgres:5432` 之类即可。简版:
 
 - **macOS 开发机**:`brew install cloudflared` → `cloudflared login` → 写 launchd plist
 - **Linux 开发机**:下载二进制 → 写 systemd-user unit

@@ -862,10 +862,12 @@ top-level subdomains via Caddy. Per-app tier check in
      --manifests-dir ~/code/scm-manifests \
      --lang go
    ```
-   Then commit + push the manifests repo; ArgoCD picks up the new app.
+   Then commit + push the manifests repo; `manifest-sync` picks up the
+   new app on its next tick (default 2 min).
 
-4. Wait for ArgoCD to Sync + verify Healthy. Public URL becomes
-   `https://mcp.apps.<ROOT_DOMAIN>` automatically (CF wildcard).
+4. Confirm it applied — `outpost status` (`last_result=ok`) and
+   `kubectl get pods -n apps`. Public URL becomes
+   `https://mcp-apps.<ROOT_DOMAIN>` automatically (CF wildcard).
 
 5. Once traffic is confirmed on the new path:
    - Remove the manual `mcp.<ROOT_DOMAIN>` Public Hostname from

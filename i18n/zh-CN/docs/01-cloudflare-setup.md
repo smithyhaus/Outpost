@@ -64,12 +64,12 @@ GitHub Actions UI,部署状态看 `outpost status`。见
 - 那条 `*` 兜底通配会接住所有没单独列出的子域。更具体的条目(比如 `registry.<域名>`)
   自动覆盖通配 — CF Tunnel 是 most-specific-wins 匹配,顺序无关
 - **`registry` 行额外配置**:展开 *Additional application settings → HTTP Settings → HTTP Host Header*,填 `registry.<你的根域名>`。Docker Registry 对 Host 头敏感,不写会拉镜像 401
-- **TCP 行(`pg` / `redis` / `rabbitmq`)是可选的,而且要自己搭桥**:`full` 模式下
-  数据服务是 k3s 里 `infra-bridges` 的 StatefulSet,只有 ClusterIP Service,
-  Compose 里没有容器可供 TCP 行指向。真要用,先在 Outpost 主机上把端口暴露出来
-  (`kubectl -n infra-bridges port-forward --address 0.0.0.0 svc/postgres 5432:5432`),
-  再把那一行填 `host.docker.internal:5432`。开发机侧的用法和
-  `CF_TUNNEL_PROTOCOL=http2` 的坑见 `04-client-access.md`。
+- **TCP 行(`pg` / `redis` / `rabbitmq`)是可选的,但不需要任何主机侧准备**:
+  数据服务就是 Compose 容器,和 cloudflared 同处一个 docker 网络(ADR-0005),
+  所以 TCP 行直接指向容器即可:`tcp://postgres:5432`、`tcp://redis:6379`、
+  `tcp://rabbitmq:5672`。唯一的真实约束是传输层——`cloudflared access tcp`
+  这条客户端路径要求 QUIC,所以隧道跑在 `CF_TUNNEL_PROTOCOL=http2` 时它不可用。
+  开发机侧的用法见 `04-client-access.md`。
 
 每条添加完点 Save。
 

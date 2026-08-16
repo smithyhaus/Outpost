@@ -60,10 +60,14 @@ Concrete artifacts:
 **Easier:**
 
 - Blow away k3s and rebuild it without losing data. Apps are declarative
-  in the manifest repo; ArgoCD recreates them. Data volumes are untouched.
-  This is the #1 operational win — Sealed-Secrets bankruptcies, Tekton
-  CRD reshuffles, ArgoCD upgrades are all routine `reset.sh` + `bootstrap.sh`
-  cycles.
+  in the manifest repo; the CD engine recreates them (ArgoCD as written in
+  2026-05; `manifest-sync` since [ADR-0003](0003-github-actions-engine-swap.md)).
+  Data volumes sit outside the cluster lifecycle, so k3s reinstalls and CRD
+  surgery are routine. This is the #1 operational win.
+  > **Correction (v0.3.1):** `reset.sh` is NOT in that safe set. It runs
+  > `docker compose --profile edge --profile local-data down -v`, which
+  > deletes the data volumes in both modes. Take a logical dump first —
+  > see `docs/prp/runbooks/wsl2-redeploy-0.3.md` §0.
 - **Production migration is a one-line change.** Repoint the bridge's
   `spec.externalName` from `host.docker.internal` to managed
   Postgres / Redis / RabbitMQ. App connection strings are unchanged.

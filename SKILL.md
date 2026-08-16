@@ -45,10 +45,13 @@ Cloudflare edge (HTTPS / TLS)
     │
     ▼
 cloudflared (Compose container, `edge` profile)
-    ├─→ caddy:80 ─→ per-app routes (tier=compose apps, via `outpost onboard`)
+    ├─→ caddy:80 ─→ search.*  → manticore:9308  (Compose container)
+    │               mq.*      → rabbitmq:15672  (Compose container)
+    │               per-app routes (tier=compose apps, via `outpost onboard`)
+    ├─→ tcp://postgres:5432 / redis:6379 / rabbitmq:5672
+    │      raw-TCP route class — `cloudflared access tcp` on the client;
+    │      needs QUIC (CF_TUNNEL_PROTOCOL=http2 disables it)
     └─→ host.docker.internal:30080 ─→ k3s Traefik
-                                         ├─ search.*       → manticore (IngressRoute)
-                                         ├─ mq.*           → rabbitmq mgmt (IngressRoute)
                                          ├─ registry.*     → docker-registry
                                          └─ *.<root>       → user apps (catch-all)
                                             (apps named `<x>-apps.<root>`,
@@ -179,9 +182,13 @@ code stays unchanged either way.
 - Mutating operations (`kubectl apply`, `docker compose down`, edits to
   `.env`) require explicit user assent unless instructed otherwise.
 - **Never** run `reset.sh` unless the user said "reset" or "wipe everything".
-  In `full` mode this now touches live application data (data layer moved
-  into k3s, ADR-0004) — dump-first discipline applies; see
-  `docs/prp/runbooks/wsl2-redeploy-0.3.md`.
+  It destroys live data in BOTH modes: the data layer is host Compose
+  ([ADR-0005](docs/decisions/0005-data-layer-back-to-host.md)) and
+  `reset.sh` runs `docker compose --profile edge --profile local-data
+  down -v`, which deletes the postgres/redis/rabbitmq/manticore named
+  volumes. Neither the default mode nor `--hard` preserves them —
+  dump-first discipline is the only restore path; see
+  `docs/prp/runbooks/wsl2-redeploy-0.3.md` §0.
 - **Never** delete the namespaces `infra-bridges`, `outpost-ci`, `buildkit`,
   `registry`, `kube-system`. They are load-bearing.
 
@@ -216,19 +223,20 @@ code stays unchanged either way.
 +-----+--------------------------+--------------------------+
       |                          |                          |
       v                          v                          v
-*.<ROOT_DOMAIN>           <prefix>.<ROOT_DOMAIN>      search/mq/registry.<ROOT_DOMAIN>
-broad CF wildcard         top-level (per-svc CF rule) top-level (per-svc CF rule)
-(catches everything)
+*.<ROOT_DOMAIN>           <prefix>.<ROOT_DOMAIN>      registry.<ROOT_DOMAIN>
+broad CF wildcard         + search/mq.<ROOT_DOMAIN>   top-level (per-svc CF rule)
+(catches everything)      top-level (per-svc CF rule)
       |                          |                          |
       v                          v                          v
   k3s Traefik                Caddy :80                  k3s Traefik
       |                          |                          |
       v                          v                          v
-  STATELESS APPS             STATEFUL INFRA            BUILT-IN SERVICES
-  named `<x>-apps.<root>`    SIDECARS (tier=compose)   (manticore / rabbitmq /
-  (tier=k3s)                 (app-onboarded services)   registry — IngressRoute,
-                                                          core/k8s/06-bridges/,
-                                                          NOT Caddy)
+  STATELESS APPS             STATEFUL INFRA UIs        BUILT-IN SERVICE
+  named `<x>-apps.<root>`    search → manticore:9308   (docker-registry —
+  (tier=k3s)                 mq     → rabbitmq:15672    IngressRoute, k3s)
+                             + app SIDECARS (tier=compose)
+                             All are Compose containers
+                             reached by Caddy — NOT Traefik.
 ```
 
 **SSL constraint behind the naming convention:** Cloudflare Universal SSL

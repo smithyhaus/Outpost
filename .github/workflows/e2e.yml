@@ -236,11 +236,38 @@ jobs:
           kubectl -n buildkit wait --for=condition=Available deployment/buildkitd --timeout=60s \
             || fail "buildkitd not Available"
 
-          echo "═══ infra-bridges data layer (4 workloads) ═══"
-          kubectl -n infra-bridges rollout status statefulset/postgres   --timeout=180s || fail "postgres StatefulSet not Ready"
-          kubectl -n infra-bridges rollout status deployment/redis       --timeout=180s || fail "redis Deployment not Ready"
-          kubectl -n infra-bridges rollout status statefulset/rabbitmq   --timeout=180s || fail "rabbitmq StatefulSet not Ready"
-          kubectl -n infra-bridges rollout status statefulset/manticore  --timeout=180s || fail "manticore StatefulSet not Ready"
+          echo "═══ infra-bridges data bridge (v0.3.1: ExternalName → host Compose) ═══"
+          # ADR-0005 put the data layer back in host Compose, so infra-bridges
+          # holds 4 ExternalName Services and NO workloads. Asserting the
+          # bridge SHAPE is what catches a regression back to in-cluster.
+          for svc in postgres redis rabbitmq manticore; do
+            t=$(kubectl -n infra-bridges get svc "$svc" -o jsonpath='{.spec.type}' 2>/dev/null) \
+              || fail "infra-bridges/svc/$svc missing"
+            [[ "$t" == "ExternalName" ]] \
+              || fail "infra-bridges/svc/$svc type=$t (expected ExternalName)"
+            en=$(kubectl -n infra-bridges get svc "$svc" -o jsonpath='{.spec.externalName}')
+            [[ "$en" == "host.docker.internal" ]] \
+              || fail "infra-bridges/svc/$svc externalName=$en (expected host.docker.internal)"
+          done
+          if kubectl -n infra-bridges get statefulset,deployment -o name 2>/dev/null | grep -q .; then
+            fail "infra-bridges holds workloads — v0.3.1's data layer must be host Compose only"
+          fi
+
+          echo "═══ CoreDNS host.docker.internal bridge + self-heal reconciler ═══"
+          node_ip=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+          [[ -n "$node_ip" ]] || fail "node InternalIP not found"
+          kubectl -n kube-system get configmap coredns-custom \
+            -o jsonpath='{.data.hostdockerinternal\.server}' 2>/dev/null | grep -q "$node_ip" \
+            || fail "coredns-custom does not map host.docker.internal to node InternalIP $node_ip"
+          kubectl -n kube-system get cronjob coredns-hosts-reconciler >/dev/null \
+            || fail "coredns-hosts-reconciler CronJob missing — bridge IP drift would never self-heal"
+
+          echo "═══ data services healthy in host Compose (local-data profile) ═══"
+          for c in postgres redis rabbitmq manticore; do
+            h=$(docker inspect -f '{{.State.Health.Status}}' "$c" 2>/dev/null) \
+              || fail "compose container $c not found — the local-data profile did not come up"
+            [[ "$h" == "healthy" ]] || fail "compose container $c health=$h (expected healthy)"
+          done
 
           echo "═══ GitHub runner correctly SKIPPED (GITHUB_RUNNER_PAT empty) ═══"
           [[ ! -d "$HOME/actions-runner" ]] \

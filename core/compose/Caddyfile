@@ -13,7 +13,13 @@
 
 {
     auto_https off
-    admin off
+    # Admin API stays ON, bound to the container's loopback only. It is what
+    # the compose healthcheck probes (`wget http://127.0.0.1:2019/config/`);
+    # `admin off` makes caddy permanently `unhealthy`, and since
+    # bootstrap.d/04-compose.sh hard-gates on health, bootstrap then aborts
+    # at Phase 4. Loopback binding means other containers on the `infra`
+    # network cannot reach it, and 2019 is EXPOSEd but never published.
+    admin localhost:2019
     servers {
         trusted_proxies static private_ranges
     }
